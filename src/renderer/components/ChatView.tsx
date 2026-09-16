@@ -83,6 +83,8 @@ export function ChatView(p: Props) {
   const [previews, setPreviews] = useState<Record<string, string>>({})
   // 本轮开发任务清单（todo.write / todo.updated 事件驱动，完成项中划线）
   const [todos, setTodos] = useState<TodoItem[]>([])
+  // 内核自动重试提示（session.status retry 事件驱动，恢复出结果即清除）
+  const [retryNote, setRetryNote] = useState('')
 
   dirRef.current = p.project?.path
   sidRef.current = p.sessionId
@@ -132,6 +134,7 @@ export function ChatView(p: Props) {
     setPreviews({})
     setQueue([])
     setTodos([])
+    setRetryNote('')
     if (!p.sessionId) {
       setMsgs([])
       setInput('')
@@ -185,11 +188,46 @@ export function ChatView(p: Props) {
         const isCurrent = idleSid === sidRef.current
         if (!isCurrent) return
         setTodos([])
+        setRetryNote('')
         oc.messages(sidRef.current, dirRef.current)
           .then((list) => hydrate(list, shown.current, texts.current))
           .then((hydrated) => setMsgs(hydrated))
           .catch(() => { /* 事件流已展示内容 */ })
         p.onRefreshSessions()
+      } else if (e.type === 'session.status') {
+        // 内核自动重试（限流/断网）：只给当前会话一行可见提示，不吞 busy（本轮还在跑）
+        const pr = e.properties as { sessionID?: string; status?: { type: string; message?: string } }
+        if (pr.sessionID === sidRef.current && pr.status?.type === 'retry')
+          setRetryNote(pr.status.message ? humanizeError(pr.status.message) : '连接模型失败，自动重试中…')
+        else if (pr.sessionID && busySetRef.current[pr.sessionID]) setRetryNote('')
+      } else if (e.type === 'qingniao.sse.reconnected') {
+        // SSE 桥断线重连：断开期间可能漏掉 session.idle，busy 会话做一次轻量重同步
+        for (const s of Object.keys(busySetRef.current)) {
+          if (!s) continue
+          oc.messages(s, s === sidRef.current ? dirRef.current : undefined)
+            .then((list) => {
+              // 该会话最后一条助手消息已有完整文本 → 视为已完成，清 busy
+              const last = [...list].reverse().find((m) => m.info.role === 'assistant' && (m.parts.some((x) => x.type === 'text' && x.text)))
+              if (last) markBusy(s, false)
+            })
+            .catch(() => {})
+          if (s === sidRef.current) {
+            setTodos([])
+            oc.messages(s, dirRef.current)
+              .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
+              .catch(() => {})
+          }
+        }
+      } else if (e.type === 'qingniao.kernel.unhealthy') {
+        // 主进程自动重启内核后，本地 busy 状态全部失效，做一次整体重同步
+        setError('内核连接异常，正在自动恢复…')
+        for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
+        if (sidRef.current) {
+          setTodos([])
+          oc.messages(sidRef.current, dirRef.current)
+            .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
+            .catch(() => {})
+        }
       } else if (e.type === 'session.error') {
         const pr = e.properties as { sessionID?: string; error?: { message?: string } }
         if (pr.sessionID && busySetRef.current[pr.sessionID]) markBusy(pr.sessionID, false)
@@ -324,8 +362,9 @@ export function ChatView(p: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用）
-      if (busySetRef.current[sid]) markBusy(sid, false)
+      // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用；仅当前仍停在本轮会话时清——
+      // 队列插队已在本会话开新轮时不能误清新轮）
+      if (sidRef.current === sid && busySetRef.current[sid]) markBusy(sid, false)
       // 已切走（新任务草稿/别的会话）：界面缓冲归切走时加载的新会话所有，绝不清理，避免盖掉正在流式的新任务
       if (sidRef.current !== sid) return
       toolRaw.current.clear()
@@ -393,6 +432,16 @@ export function ChatView(p: Props) {
             <div className="amsg busyline">
               <LoaderCircle size={13} className="spin" />
               正在思考，已用时 {fmtElapsed(elapsed)}
+            </div>
+          )}
+          {busy && (
+            <div className="busychip">
+              <LoaderCircle size={11} className="spin" />
+              <span>任务执行中 · {fmtElapsed(elapsed)}</span>
+              {retryNote && <span className="retry-note">{retryNote}</span>}
+              <button className="icon-btn" title="停止本轮" onClick={() => sidRef.current && oc.abort(sidRef.current).catch(() => {})}>
+                <Square size={11} fill="currentColor" strokeWidth={0} />
+              </button>
             </div>
           )}
           {todos.length > 0 && <TodoCard todos={todos} />}
@@ -634,7 +683,13 @@ function UserBubble({ text }: { text: string }) {
   )
 }
 
-/** 开发任务清单卡：todo.updated 驱动，完成项打勾 + 中划线，进行项转圈 */
+/** 开发任务清单卡：todo.updated 驱动，完成项打勾 + 中划线，进行项转圈，序号 + 优先级标签 */
+const PRIORITY_META: Record<string, { label: string; cls: string }> = {
+  high: { label: '高', cls: 'high' },
+  medium: { label: '中', cls: 'medium' },
+  low: { label: '低', cls: 'low' },
+}
+
 function TodoCard({ todos }: { todos: TodoItem[] }) {
   const done = todos.filter((t) => t.status === 'completed').length
   return (
@@ -644,20 +699,25 @@ function TodoCard({ todos }: { todos: TodoItem[] }) {
         任务清单
         <span className="todo-prog">{done}/{todos.length}</span>
       </div>
-      {todos.map((t, i) => (
-        <div key={i} className={'todo-item ' + t.status}>
-          <span className="todo-box">
-            {t.status === 'completed' ? (
-              <Check size={13} />
-            ) : t.status === 'in_progress' ? (
-              <LoaderCircle size={13} className="spin" />
-            ) : (
-              <span className="todo-dot" />
-            )}
-          </span>
-          <span className="todo-text">{t.content}</span>
-        </div>
-      ))}
+      {todos.map((t, i) => {
+        const p = PRIORITY_META[t.priority ?? 'medium']
+        return (
+          <div key={i} className={'todo-item ' + t.status}>
+            <span className="todo-idx">{i + 1}</span>
+            <span className="todo-box">
+              {t.status === 'completed' ? (
+                <Check size={13} />
+              ) : t.status === 'in_progress' ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : (
+                <span className="todo-dot" />
+              )}
+            </span>
+            <span className="todo-text">{t.content}</span>
+            <span className={'todo-pri ' + p.cls}>{p.label}</span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -741,16 +801,34 @@ function parseTaskOutput(raw: string): string | null {
   return m ? m[1].trim() : null
 }
 
-/** 解析 read 工具输出：只取代码本体，剥掉 path/type 包装与行号前缀 */
-function parseReadOutput(raw: string): { code: string; file?: string } | null {
+/** 解析 read 工具输出：文件取 <content> 剥行号；目录取 <entries> 只列条目，剥掉 path/type 包装 */
+function parseReadOutput(raw: string): { code: string; file?: string; list?: string[] } | null {
+  const p = /<path>([^<]*)<\/path>/.exec(raw)
+  const e = /<entries>\n?([\s\S]*?)\n?<[^\n]*entries>/i.exec(raw)
+  if (e && !/<content>/i.test(raw)) {
+    const lines = e[1].trim().split('\n').filter(Boolean)
+    const list = lines.filter((l) => !/^\((\d+) entries?\)$/.test(l))
+    return { code: '', file: p?.[1], list }
+  }
   const c = /<content>\n?([\s\S]*?)<\/content>/.exec(raw)
   if (!c) return null
-  const p = /<path>([^<]*)<\/path>/.exec(raw)
   const code = c[1]
     .split('\n')
     .map((l) => l.replace(/^\s*\d{1,6}:(?=\s)\s?/, ''))
     .join('\n')
   return { code: code.trimEnd(), file: p?.[1] }
+}
+
+/** 目录条目视图：文件列表 + 数量 */
+function DirList({ list, file }: { list: string[]; file?: string }) {
+  return (
+    <div className="step-list">
+      <div className="step-list-head" title={file ?? ''}>{file ? relTarget(file) : '目录'} · {list.length} 项</div>
+      {list.map((f) => (
+        <div key={f} className="step-list-item" title={f}>{f}</div>
+      ))}
+    </div>
+  )
 }
 
 function escapeHtml(s: string): string {
@@ -759,7 +837,11 @@ function escapeHtml(s: string): string {
 
 function toolTarget(part: Part, projPath?: string): string {
   const inp = part.state?.input ?? {}
-  const raw = str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url) || str(inp.description) || str(part.state?.title)
+  // 子任务用 description，其余工具用各自的目标字段
+  let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
+  // 兜底内核生成的英文摘要（如 "5 todos"）→ 中文化
+  const t = str(part.state?.title)
+  if (!raw) raw = /todos?/i.test(t) ? `${t.replace(/\s*todos?\.?/i, '条任务').trim()} 任务` : t
   const cut = raw.length > 90 ? raw.slice(0, 90) + '…' : raw
   return relTarget(cut, projPath)
 }
@@ -793,7 +875,7 @@ function PartView({ part, projectPath, preview }: { part: Part; projectPath?: st
     let body: ReactNode
     if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
-      body = parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
+      body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
     } else if (rawOut && (tool === 'write' || tool === 'edit' || tool === 'patch' || tool === 'apply_patch')) {
       body = <CodeBlock text={rawOut} diff />
     } else if (rawOut && tool === 'task') {

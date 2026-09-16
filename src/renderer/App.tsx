@@ -100,6 +100,34 @@ export default function App() {
     if (proj && expanded[proj.id] && !(proj.path in sessionsMap)) loadProjectSessions(proj)
   }, [projects, expanded, activeId])
 
+  // 启动 / 项目数据变化时，对账"正在处理中"的会话：
+  // 内核里还有工具 part 处于 running = 真在跑，补记 busy（右侧与侧栏同步显示）；
+  // 否则一律清掉——"发完消息就关应用、助手还没吐字"的会话按已结束处理，
+  // 避免误判成在跑导致图标常驻。真正在跑的内核重启后也会发 session.idle 兜住
+  useEffect(() => {
+    const busyRef: Record<string, boolean> = {}
+    for (const [path, list] of Object.entries(sessionsMap)) {
+      for (const s of list) {
+        ;(async () => {
+          try {
+            const msgs = await oc.messages(s.id, path)
+            busyRef[s.id] = msgs.some((m) => m.parts.some((pt) => pt.state?.status === 'running'))
+            setBusyIds((m) => {
+              const next = { ...m }
+              for (const [sid, b] of Object.entries(busyRef)) {
+                if (b) next[sid] = true
+                else delete next[sid]
+              }
+              return next
+            })
+          } catch { /* 单个会话拉取失败不影响其他 */ }
+        })()
+      }
+    }
+    // 仅依赖列表与项目集合，避免每次渲染重发对账请求
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, sessionsMap])
+
   const activeProject = projects.find((x) => x.id === activeId)
 
   /**

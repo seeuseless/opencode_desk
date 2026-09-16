@@ -41,6 +41,23 @@ class Adapter {
   bin = ''
   workspace = ''
 
+  /** 内核退出/健康探测失败时回调（index.ts 注入：推送渲染层提示 + 自动重启） */
+  onUnhealthy: (() => void) | null = null
+
+  /** 主动探活（渲染层可轮询）：进程在 + /global/health 通，才算健康 */
+  async isHealthy(): Promise<boolean> {
+    if (!this.proc) return false
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 3000)
+      const r = await fetch(this.base + '/global/health', { signal: ctrl.signal })
+      clearTimeout(t)
+      return r.ok
+    } catch {
+      return false
+    }
+  }
+
   // ---------- 生命周期 ----------
 
   async start(): Promise<void> {
@@ -71,7 +88,10 @@ class Adapter {
     })
     this.proc.on('exit', (code) => {
       this.proc = null
-      if (!this.stopping) console.error('[opencode] 内核意外退出 code=' + String(code))
+      if (!this.stopping) {
+        console.error('[opencode] 内核意外退出 code=' + String(code))
+        this.onUnhealthy?.()
+      }
     })
     await this.waitHealthy()
     this.openEventBridge()
@@ -96,6 +116,7 @@ class Adapter {
     this.sseAbort = new AbortController()
     const signal = this.sseAbort.signal
     ;(async () => {
+      let backoff = 1000
       while (!this.stopping && !signal.aborted) {
         try {
           const res = await fetch(this.base + '/event', { signal, headers: { accept: 'text/event-stream' } })
@@ -122,11 +143,18 @@ class Adapter {
               }
             }
           }
+          backoff = 1000
         } catch {
           /* 连接断开走重连 */
+          // 断开期间错过的 kernel 事件（如 session.idle）无法补收，
+          // 通知渲染层做一次轻量重同步，兜住 busy 残留等状态
+          this.pushEvent({ type: 'qingniao.sse.reconnected', properties: {} })
+          // 若内核已死（非瞬时断连），健康探测会返回 false，触发自动重启
+          if (!(await this.isHealthy())) this.onUnhealthy?.()
         }
         if (this.stopping || signal.aborted) return
-        await new Promise((r) => setTimeout(r, 1000))
+        await new Promise((r) => setTimeout(r, backoff))
+        backoff = Math.min(backoff * 2, 8000)
       }
     })()
   }
@@ -196,7 +224,13 @@ class Adapter {
       }
       return { status: res.status, data }
     } catch (e) {
-      return { status: 502, data: '内核通信失败：' + String(e instanceof Error ? e.message : e) }
+      const detail = String(e instanceof Error ? e.message : e)
+      // 连接层故障（fetch failed / ECONNREFUSED）：内核进程可能已退出或端口已释放，
+      // 提示更友好的恢复话术，避免渲染层直接 dump "fetch failed"
+      if (/fetch failed|ECONNREFUSED|socket hang up|ECONNRESET/i.test(detail)) {
+        return { status: 502, data: '内核连接中断（进程可能已退出），请重试；若持续出现请重启应用' }
+      }
+      return { status: 502, data: '内核通信失败：' + detail }
     }
   }
 }

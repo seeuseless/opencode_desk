@@ -108,6 +108,16 @@ app.whenReady().then(async () => {
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
   adapter.pushEvent = (e) => mainWin?.webContents.send('opencode:event', e)
+  // 内核异常退出/断连：提示渲染层并自动重启内核
+  adapter.onUnhealthy = () => {
+    if (!mainWin || mainWin.isDestroyed()) return
+    mainWin.webContents.send('opencode:event', {
+      type: 'qingniao.kernel.unhealthy',
+      properties: {}
+    })
+    // 自动重启内核（失败则下一轮事件触发时再试）
+    adapter.restart().catch((e) => console.error('[opencode] 自动重启失败', e))
+  }
   try {
     await adapter.start()
   } catch (err) {
