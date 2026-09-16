@@ -38,6 +38,14 @@ class Adapter {
   private restartAgain = false
   private restartWaiters: Array<() => void> = []
   pushEvent: (e: { type: string; properties: Record<string, unknown> }) => void = () => {}
+  /** 事件桥内用：pushEvent 抛错（如窗口已销毁）不能中断 SSE 循环 */
+  private safePush(e: { type: string; properties: Record<string, unknown> }): void {
+    try {
+      this.pushEvent(e)
+    } catch {
+      /* 窗口已销毁等场景，忽略 */
+    }
+  }
   bin = ''
   workspace = ''
 
@@ -136,7 +144,7 @@ class Adapter {
               try {
                 const evt = JSON.parse(line.slice(5).trim()) as { type?: string; properties?: Record<string, unknown> }
                 if (evt && typeof evt.type === 'string') {
-                  this.pushEvent({ type: evt.type, properties: evt.properties ?? {} })
+                  this.safePush({ type: evt.type, properties: evt.properties ?? {} })
                 }
               } catch {
                 /* keepalive / 注释行 */
@@ -148,7 +156,7 @@ class Adapter {
           /* 连接断开走重连 */
           // 断开期间错过的 kernel 事件（如 session.idle）无法补收，
           // 通知渲染层做一次轻量重同步，兜住 busy 残留等状态
-          this.pushEvent({ type: 'qingniao.sse.reconnected', properties: {} })
+          this.safePush({ type: 'qingniao.sse.reconnected', properties: {} })
           // 若内核已死（非瞬时断连），健康探测会返回 false，触发自动重启
           if (!(await this.isHealthy())) this.onUnhealthy?.()
         }

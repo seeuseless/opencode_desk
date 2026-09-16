@@ -107,7 +107,10 @@ app.whenReady().then(async () => {
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
-  adapter.pushEvent = (e) => mainWin?.webContents.send('opencode:event', e)
+  // 事件桥统一走这里：窗口销毁后静默丢弃，避免 "Object has been destroyed" 未处理拒绝
+  adapter.pushEvent = (e) => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('opencode:event', e)
+  }
   // 内核异常退出/断连：提示渲染层并自动重启内核
   adapter.onUnhealthy = () => {
     if (!mainWin || mainWin.isDestroyed()) return
