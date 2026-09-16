@@ -1,0 +1,19 @@
+node_modules
+out
+dist
+*.local
+.DS_Store
+ #schema/  
+/schema/ 
+
+# 工作区记忆：只跟踪长期笔记，日期日志不入库
+.workbuddy/memory/*
+!.workbuddy/memory/MEMORY.md
+!.workbuddy/memory/memory.md
+
+# 临时探针产物
+.probe/
+/.qn-verify-config
+/.qn-verify-data
+/.workbuddy
+/.gitcheck.txt

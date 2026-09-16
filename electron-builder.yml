@@ -1,0 +1,23 @@
+# electron-builder 打包配置（win 安装包）
+appId: com.qingniao.desktop
+productName: 青鸟
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**
+  - resources/icon.png
+extraResources:
+  # OpenCode 内核原生二进制（主进程打包态从 resources/bin 读取）
+  - from: node_modules/opencode-ai/bin
+    to: bin
+  - from: resources/icon.png
+    to: icon.png
+win:
+  icon: resources/icon.ico
+  target:
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
