@@ -234,17 +234,29 @@ input, textarea { font: inherit; }
   background: var(--user); border-radius: 16px; padding: 8px 14px;
   max-width: 100%; white-space: pre-wrap; word-break: break-word; line-height: 1.55;
 }
-/* 气泡上方悬浮操作列：编辑 / 复制 */
+/* 气泡下方悬浮操作列：编辑 / 复制（hover 显示，随气泡纵向排在下面） */
 .uacts {
-  position: absolute; top: -20px; right: 2px; z-index: 2;
-  display: flex; gap: 2px;
-  background: var(--bg3); border-radius: 7px; padding: 1px;
-  box-shadow: 0 2px 8px var(--shadow);
+  display: inline-flex; gap: 2px;
+  background: transparent; border-radius: 7px; padding: 2px 4px;
   opacity: 0; pointer-events: none; transition: opacity 0.12s;
 }
 .umsg:hover .uacts { opacity: 1; pointer-events: auto; }
 .uacts .icon-btn { width: 20px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--fg2); cursor: pointer; }
 .uacts .icon-btn:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+
+/* 用户消息就地编辑：聊天窗样式的输入框 + 取消/发送 */
+.umsg.editing .ubox { max-width: 82%; }
+.uedit-wrap { width: 100%; }
+.uedit {
+  width: 100%; min-width: 0;
+  background: var(--field-bg); color: var(--fg); border: 1px solid var(--field-line);
+  border-radius: 14px; padding: 10px 13px; font: inherit; line-height: 1.5; outline: none;
+  resize: vertical; min-height: 62px;
+}
+.uedit:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.uedit-acts { display: flex; align-items: center; gap: 8px; margin-top: 9px; align-self: flex-end; }
+.uedit-hint { color: var(--fg2); font-size: 12px; margin-right: auto; }
+.uedit-acts .ghost, .uedit-acts .primary { padding: 6px 14px; font-size: 12.5px; border-radius: 8px; }
 
 /* ================= 通用折叠容器 ================= */
 .cbl { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; max-width: 100%; }

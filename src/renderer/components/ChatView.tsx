@@ -80,6 +80,35 @@ function matchedDiff(diffs: FileDiff[] | undefined, part: Part): FileDiff | unde
   return diffs.find((d) => files.includes(normPath(d.file)))
 }
 
+/** 从工具自身的 state.metadata 取该工具的差量：edit 存 filediff={file,patch,+,−}，
+ *  apply_patch/write 存 files[]=[{file|filePath|relativePath, patch, additions, deletions}]。
+ *  这是内核随工具一起给的结构化结果，最可靠，不依赖 session 的差量计算。 */
+function metaDiffs(part: Part): FileDiff[] {
+  const md = part.state?.metadata
+  if (!md) return []
+  const out: FileDiff[] = []
+  const fd = md.filediff as FileDiff | undefined
+  if (fd && typeof fd.file === 'string' && typeof fd.patch === 'string') out.push(fd)
+  if (Array.isArray(md.files)) {
+    for (const f of md.files) {
+      const o = f as Record<string, unknown>
+      const file =
+        typeof o.file === 'string' ? o.file
+        : typeof o.filePath === 'string' ? o.filePath
+        : typeof o.relativePath === 'string' ? o.relativePath
+        : ''
+      if (!file) continue
+      out.push({
+        file,
+        patch: typeof o.patch === 'string' ? o.patch : '',
+        additions: typeof o.additions === 'number' ? o.additions : 0,
+        deletions: typeof o.deletions === 'number' ? o.deletions : 0
+      })
+    }
+  }
+  return out
+}
+
 /** 助手消息 → 所属用户消息 id：内核把整轮差量挂在用户消息上，拉差量必须用用户消息 id */
 function turnOwners(list: MessageView[]): Map<string, string> {
   const m = new Map<string, string>()
@@ -303,6 +332,33 @@ export function ChatView(p: Props) {
     markBusy(sid, false)
     setError('')
     void runPrompt(text, sid, dir)
+  }
+
+  /** 编辑用户消息后重发：把会话撤回该条之前（移除旧回复），再用新文本触发 AI 重新回复 */
+  async function resendMessage(uid: string, newText: string) {
+    const sid = p.sessionId
+    if (!sid) return
+    const dir = busyDir.current[sid] ?? p.project?.path
+    cancelRetry(sid)
+    setError('')
+    try {
+      await oc.revert(sid, dir, uid)
+    } catch (e) {
+      const st = (e as Error & { status?: number }).status
+      // 502/503 主进程代抛传输层故障，内核可能仍在跑，交给状态收尾
+      if (st && st !== 502 && st !== 503) {
+        setError(('撤回失败：' + (e instanceof Error ? e.message : String(e))).slice(0, 120))
+        return
+      }
+    }
+    // 撤回后历史已不含被编辑的那条（若有残留本地也剔除，避免新旧重复），再重发新文本
+    try {
+      texts.current.clear()
+      shown.current.clear()
+      const list = await oc.messages(sid, dir)
+      setMsgs(hydrate(list.filter((m) => m.info.id !== uid), shown.current, texts.current))
+    } catch { /* 保留现状，由重发接续 */ }
+    void runPrompt(newText, sid, dir)
   }
 
   /** 停止全部任务：先清本地状态让界面立刻回落到可输入（不等内核回执），再向内核逐个中止 */
@@ -861,7 +917,7 @@ export function ChatView(p: Props) {
           )}
           {msgs.map((m) =>
             m.info.role === 'user' ? (
-              <UserBubble key={m.info.id} text={m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')} onEdit={(t) => { setInput(t); taRef.current?.focus() }} />
+              <UserBubble key={m.info.id} text={m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
             ) : (
               <div key={m.info.id} className="amsg">
                 {m.parts.map((part) => (
@@ -1249,30 +1305,78 @@ function Collapsible({
 }
 
 /** 用户消息气泡：超过 6 行自动折叠；悬浮显示 编辑（放回输入框）/复制，操作列在气泡上方 */
-function UserBubble({ text, onEdit }: { text: string; onEdit: (t: string) => void }) {
+/** 用户消息气泡：操作列（编辑/复制）在气泡下方；编辑时在该行展开聊天窗样式的输入框 + 取消/发送
+ * 发送只更新这条消息并让 AI 重新回复（见 ChatView.resendMessage） */
+function UserBubble({ text, editable, onSend }: { text: string; editable?: boolean; onSend: (t: string) => void }) {
   const [copied, setCopied] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(text)
+
+  function sendEdit() {
+    setEditing(false)
+    const v = draft.trim()
+    if (!v || v === text) return
+    onSend(v)
+  }
+
+  // 编辑态：该行展开一个聊天窗样式的输入框，下方是 取消/发送
+  if (editing) {
+    return (
+      <div className="umsg editing">
+        <div className="ubox uedit-wrap">
+          <textarea
+            className="uedit"
+            value={draft}
+            rows={2}
+            autoFocus
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                sendEdit()
+              }
+            }}
+          />
+          <div className="uedit-acts">
+            <span className="uedit-hint">更新这条消息，下方的 AI 回复会重新生成</span>
+            <button className="ghost" onClick={() => setEditing(false)}>
+              取消
+            </button>
+            <button className="primary" disabled={!draft.trim() || draft.trim() === text} onClick={sendEdit}>
+              发送
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="umsg">
-      <div className="uacts">
-        <button className="icon-btn" title="编辑（放回输入框）" onClick={() => onEdit(text)}>
-          <Pencil size={12} />
-        </button>
-        <button
-          className="icon-btn"
-          title={copied ? '已复制' : '复制'}
-          onClick={() => {
-            navigator.clipboard?.writeText(text).catch(() => {})
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1200)
-          }}
-        >
-          {copied ? <Check size={12} /> : <Copy size={12} />}
-        </button>
-      </div>
       <div className="ubox">
         <Collapsible maxPx={150} forceText={text}>
           <div className="ubub">{text}</div>
         </Collapsible>
+        {/* 操作列在气泡下方，hover 显示 */}
+        <div className="uacts">
+          {editable && (
+            <button className="icon-btn" title="编辑消息" onClick={() => { setDraft(text); setEditing(true) }}>
+              <Pencil size={12} />
+            </button>
+          )}
+          <button
+            className="icon-btn"
+            title={copied ? '已复制' : '复制'}
+            onClick={() => {
+              navigator.clipboard?.writeText(text).catch(() => {})
+              setCopied(true)
+              window.setTimeout(() => setCopied(false), 1200)
+            }}
+          >
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -1575,7 +1679,7 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     const tool = (part.tool ?? '').toLowerCase()
     const rawOut = cnOutput(st === 'error' ? str(part.state?.error) : str(part.state?.output))
     // 写入类工具：内核算好的整轮差量优先（带 +/- 行），工具自身输出仅作回退
-    const fd = isFileTool(tool) ? matchedDiff(diffs, part) : undefined
+    const fd = isFileTool(tool) ? (matchedDiff(metaDiffs(part), part) ?? matchedDiff(diffs, part)) : undefined
     let body: ReactNode
     if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)

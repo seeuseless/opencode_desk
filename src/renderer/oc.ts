@@ -29,6 +29,9 @@ export interface ToolState {
   error?: string
   /** running 起跳时刻 / 起止时刻（内核 ToolState 携带，超时判定用） */
   time?: { start?: number; end?: number }
+  /** 工具自身携带的结构化结果：edit 存 filediff，apply_patch/write 存 files[]
+   *  （均为 {file, patch, additions, deletions}，直接用于 +N/-M 与差量展开） */
+  metadata?: Record<string, unknown>
 }
 
 export interface Part {
@@ -116,6 +119,9 @@ export const oc = {
       }
     }),
   abort: (id: string, directory?: string) => call(`/session/${id}/abort${dirQ(directory)}`, { method: 'POST' }),
+  /** 撤回会话到指定「用户消息」之前：回滚文件快照并移除该条及其后的历史（编辑消息重发用） */
+  revert: (id: string, directory: string | undefined, messageID: string) =>
+    call<unknown>(`/session/${id}/revert${dirQ(directory)}`, { method: 'POST', body: { messageID } }),
   deleteSession: (id: string, directory?: string) =>
     call(`/session/${id}${dirQ(directory)}`, { method: 'DELETE' }),
   /** 内核全部待答问题（question 工具阻塞等待用户应答；事件可能漏收，轮询对账用） */
