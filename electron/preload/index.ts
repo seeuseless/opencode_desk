@@ -13,6 +13,8 @@ const api = {
   info: (): Promise<{ workspace: string }> => ipcRenderer.invoke('app:info'),
   pickDir: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDir'),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
+  /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */
+  kernelHealth: (): Promise<boolean> => ipcRenderer.invoke('kernel:health'),
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),
   fetchModels: (
     baseURL: string,

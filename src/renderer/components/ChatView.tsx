@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff, FilePlus, FileText,
+  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { Modal } from './Modal'
@@ -36,6 +36,70 @@ function parseModel(key: string): ModelSel | undefined {
   if (!key) return undefined
   const i = key.indexOf('/')
   return { providerID: key.slice(0, i), modelID: key.slice(i + 1) }
+}
+
+/** 任务被中断后的自动重试：间隔 10 秒，最多 10 次；耗尽后交给界面上的手动重试按钮 */
+const RETRY_INTERVAL_MS = 10000
+const RETRY_MAX = 10
+/** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
+const RETRY_CONTINUE = '继续'
+
+/** 会话中断的识别：助手消息自带错误，或回合结束时还残留 running/pending 的工具调用（半截截断） */
+function isAbortedAssistant(m: MessageView): boolean {
+  const err = (m.info as unknown as { error?: { name?: string } }).error
+  if (err) return err.name !== 'MessageAbortedError'
+  return m.parts.some((x) => x.type === 'tool' && (x.state?.status === 'running' || x.state?.status === 'pending'))
+}
+
+/** 内核工具名 → 是否会改文件（决定要不要拉差量展示 +N/-M） */
+function isFileTool(tool: string): boolean {
+  const t = tool.toLowerCase()
+  return t === 'write' || t === 'edit' || t === 'patch' || t === 'apply_patch'
+}
+
+/** 工具入参里的目标文件（write/edit 带 filePath，patch 带 files） */
+function toolFiles(part: Part): string[] {
+  const inp = part.state?.input ?? {}
+  const out: string[] = []
+  for (const k of ['filePath', 'path', 'file']) if (typeof inp[k] === 'string') out.push(inp[k] as string)
+  if (Array.isArray(inp.files)) for (const f of inp.files) if (typeof f === 'string') out.push(f as string)
+  return out
+}
+
+/** 路径归一化：统一分隔符与小写，用于差量与工具入参匹配 */
+function normPath(s: string): string {
+  return s.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase()
+}
+
+/** 从整轮差量里挑出这个工具改到的文件；只有一条差量时直接兜底，否则必须路径匹配得上 */
+function matchedDiff(diffs: FileDiff[] | undefined, part: Part): FileDiff | undefined {
+  if (!diffs || diffs.length === 0) return undefined
+  if (diffs.length === 1) return diffs[0]
+  const files = toolFiles(part).map(normPath)
+  if (!files.length) return undefined
+  return diffs.find((d) => files.includes(normPath(d.file)))
+}
+
+/** 助手消息 → 所属用户消息 id：内核把整轮差量挂在用户消息上，拉差量必须用用户消息 id */
+function turnOwners(list: MessageView[]): Map<string, string> {
+  const m = new Map<string, string>()
+  let cur = ''
+  for (const x of list) {
+    if (x.info.role === 'user') cur = x.info.id
+    else if (cur) m.set(x.info.id, cur)
+  }
+  return m
+}
+
+/** 重试时该发什么：上一轮没有任何产出就重发原文，有产出就发「继续」让模型从断点接着做 */
+function continuationText(list: MessageView[]): string {
+  const lastUser = [...list].reverse().find((m) => m.info.role === 'user')
+  const lastAsst = [...list].reverse().find((m) => m.info.role === 'assistant')
+  const text = lastUser
+    ? lastUser.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n').trim()
+    : ''
+  if (!text) return ''
+  return lastAsst && lastAsst.parts.length ? RETRY_CONTINUE : text
 }
 
 /** 内核 todo 清单项（opencode todo.updated 事件） */
@@ -102,19 +166,36 @@ export function ChatView(p: Props) {
   asksRef.current = asks
   /** 正在提交应答的请求 id：轮询对账时跳过，防止卡片闪回 */
   const replyingRef = useRef<Set<string>>(new Set())
-  // 20 秒无输出提醒：只提示不干预——处理中绝不主动停止任务（长命令、慢模型首包都是正常等待）
-  const stall = useRef({ since: 0 })
-  const stallNoted = useRef(false)
   // bash 类工具的起始计时：长跑超 30s 视为「终端运行中」，不算处理中
   const termStart = useRef<Record<string, number>>({})
   // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
   const pollFingerprint = useRef('')
+  // 各 busy 会话所属项目路径：多项目并行时停止/重试都要带 directory，否则内核找不到该会话
+  const busyDir = useRef<Record<string, string | undefined>>({})
+  // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
+  const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
+  const diffsBusy = useRef<Set<string>>(new Set())
+  // 中断自动重试登记表：sid → { 重试次数, 定时器 }；无定时器 = 次数耗尽，等用户手动点重试
+  const retries = useRef<Map<string, { count: number; timer?: number }>>(new Map())
+  // 重试状态在 ref 里，同步成 state 供渲染（pending=有定时器待执行；无定时器=次数耗尽）
+  const [retryView, setRetryView] = useState<Record<string, { count: number; pending: boolean }>>({})
+  function syncRetryView() {
+    const v: Record<string, { count: number; pending: boolean }> = {}
+    retries.current.forEach((r, k) => { v[k] = { count: r.count, pending: r.timer != null } })
+    setRetryView(v)
+  }
 
   dirRef.current = p.project?.path
   sidRef.current = p.sessionId
 
   /** 当前查看的会话是否在处理中——别的会话在跑时，这里必须是 false（不显示思考、不排队） */
   const busy = p.sessionId !== '' && !!busySet[p.sessionId]
+  /** 任意会话在处理中 → 显示停止按钮，可一键停掉所有并行任务（不只是当前会话） */
+  const anyBusy = Object.keys(busySet).some((s) => busySet[s])
+  /** 当前会话的自动重试状态（pending=等待下一次重试；无定时器=次数耗尽等手动重试） */
+  const retryState = p.sessionId ? retryView[p.sessionId] : undefined
+  /** 助手消息 → 所属用户消息 id（差量按用户消息拉，这里做渲染期的映射） */
+  const turnOwner = turnOwners(msgs)
   // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
   // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
   const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
@@ -138,14 +219,110 @@ export function ChatView(p: Props) {
   /** 同理，onBusy prop 取最新引用，防事件闭包用到旧函数 */
   const onBusyRef = useRef(p.onBusy)
   onBusyRef.current = p.onBusy
-  function markBusy(sid: string, running: boolean) {
+  function markBusy(sid: string, running: boolean, dir?: string) {
     if (!sid) return
     const next = { ...busySetRef.current }
-    if (running) next[sid] = true
-    else delete next[sid]
+    if (running) {
+      next[sid] = true
+      // 记录会话所属项目：多项目并行时停止/重试必须带同一 directory，否则内核找不到该会话
+      busyDir.current[sid] = dir ?? dirRef.current
+    } else {
+      delete next[sid]
+    }
     busySetRef.current = next
     setBusySet(next)
     onBusyRef.current(sid, running)
+  }
+  const busySids = () => Object.keys(busySetRef.current).filter((s) => busySetRef.current[s])
+
+  /** 取消某会话待执行的自动重试（用户自己发新消息/手动停止时，不再让旧任务续跑） */
+  function cancelRetry(sid: string) {
+    const r = retries.current.get(sid)
+    if (!r) return
+    if (r.timer != null) clearTimeout(r.timer)
+    retries.current.delete(sid)
+    syncRetryView()
+  }
+
+  /**
+   * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后自动续跑：
+   * 间隔 10 秒，最多 10 次；次数耗尽后不再自动重试，改由对话末尾的手动重试按钮交给用户。
+   * 上一轮没有产出就重发原文，有产出就发「继续」让模型从断点接着做。
+   */
+  function scheduleRetry(sid: string, msgs?: MessageView[]) {
+    if (!sid || navigator.onLine === false) return
+    if (retries.current.get(sid)?.timer != null) return
+    const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
+    const start = (list: MessageView[]) => {
+      const text = continuationText(list)
+      if (!text) {
+        retries.current.delete(sid)
+        syncRetryView()
+        return
+      }
+      if ((retries.current.get(sid)?.count ?? 0) >= RETRY_MAX) return
+      retries.current.set(sid, {
+        count: (retries.current.get(sid)?.count ?? 0) + 1,
+        timer: window.setTimeout(() => {
+          retries.current.delete(sid)
+          syncRetryView()
+          markBusy(sid, false)
+          setError('')
+          void runPrompt(text, sid, dir)
+        }, RETRY_INTERVAL_MS)
+      })
+      syncRetryView()
+    }
+    if (msgs) return start(msgs)
+    oc.messages(sid, dir).then(start).catch(() => {
+      retries.current.delete(sid)
+      syncRetryView()
+    })
+  }
+
+  /** 重试次数耗尽后的手动重试：读回会话历史后直接续跑上一轮 */
+  async function retryNow() {
+    const sid = p.sessionId
+    if (!sid) return
+    const dir = busyDir.current[sid]
+    let list = msgs
+    if (sid !== sidRef.current) {
+      try {
+        list = await oc.messages(sid, dir)
+      } catch {
+        return
+      }
+    }
+    const text = continuationText(list)
+    if (!text) {
+      setError('找不到可重试的内容')
+      return
+    }
+    retries.current.delete(sid)
+    syncRetryView()
+    markBusy(sid, false)
+    setError('')
+    void runPrompt(text, sid, dir)
+  }
+
+  /** 停止全部任务：先清本地状态让界面立刻回落到可输入（不等内核回执），再向内核逐个中止 */
+  async function stopAll() {
+    for (const sid of busySids()) {
+      const dir = busyDir.current[sid]
+      cancelRetry(sid)
+      markBusy(sid, false)
+      delete busyDir.current[sid]
+      oc.abort(sid, dir).catch((e) => {
+        const st = (e as Error & { status?: number }).status
+        // 502/503 是主进程代抛的传输层故障（内核仍在跑），不代表停止没送到
+        if (!st || st === 502 || st === 503) return
+        const msg = e instanceof Error ? e.message : String(e)
+        setError('停止失败：' + msg.slice(0, 120))
+      })
+    }
+    inflight.current = null
+    setQueue([])
+    setError('已停止全部任务')
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型
@@ -233,13 +410,17 @@ export function ChatView(p: Props) {
         // 处理中的会话空闲：无论用户是否切走都要清该会话的 busy（防切回时残留"正在思考"）
         markBusy(idleSid, false)
         const isCurrent = idleSid === sidRef.current
-        if (!isCurrent) return
-        setTodos([])
-        oc.messages(sidRef.current, dirRef.current)
-          .then((list) => hydrate(list, shown.current, texts.current))
-          .then((hydrated) => setMsgs(hydrated))
+        oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
+          .then((list) => {
+            // 回合结束但还残留半截工具调用（写入空转、断流截断）= 中断，自动续跑
+            const last = list[list.length - 1]
+            if (last && (last.info.role === 'user' || isAbortedAssistant(last))) scheduleRetry(idleSid, list)
+            if (!isCurrent) return
+            setTodos([])
+            setMsgs(hydrate(list, shown.current, texts.current))
+            p.onRefreshSessions()
+          })
           .catch(() => { /* 事件流已展示内容 */ })
-        p.onRefreshSessions()
       } else if (e.type === 'qingniao.sse.reconnected') {
         // SSE 桥断线重连：断开期间可能漏掉 session.idle，busy 会话做一次轻量重同步
         for (const s of Object.keys(busySetRef.current)) {
@@ -249,6 +430,8 @@ export function ChatView(p: Props) {
               // 该会话最后一条助手消息已有完整文本 → 视为已完成，清 busy
               const last = [...list].reverse().find((m) => m.info.role === 'assistant' && (m.parts.some((x) => x.type === 'text' && x.text)))
               if (last) markBusy(s, false)
+              // 重连前任务被中断（断流截断/残留半截工具调用）→ 自动续跑
+              if (isAbortedAssistant(list[list.length - 1])) scheduleRetry(s, list)
             })
             .catch(() => {})
           if (s === sidRef.current) {
@@ -261,11 +444,14 @@ export function ChatView(p: Props) {
       } else if (e.type === 'qingniao.kernel.started') {
         // 内核（重）启动：重启前在跑的回合已失效（任务为内存态），清本地 busy 与待重发记录；
         // 残留的 running tool part 由渲染层按"非 busy 即中断"处理，不再死转圈
-        for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
+        const wasBusy = busySids()
+        for (const s of wasBusy) markBusy(s, false)
         inflight.current = null
         setTodos([])
         setAsks([])
         setError('')
+        // 重启打断的任务自动续跑（会话记录在磁盘，重发原文即可接着做）
+        for (const s of wasBusy) scheduleRetry(s)
         if (sidRef.current) {
           oc.messages(sidRef.current, dirRef.current)
             .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
@@ -282,11 +468,23 @@ export function ChatView(p: Props) {
             .catch(() => {})
         }
       } else if (e.type === 'session.error') {
-        const pr = e.properties as { sessionID?: string; error?: { message?: string } }
-        if (pr.sessionID && busySetRef.current[pr.sessionID]) markBusy(pr.sessionID, false)
-        if (pr.sessionID !== sidRef.current) return
-        const msg = pr.error?.message ?? '未知错误'
-        setError(humanizeError(msg))
+        const pr = e.properties as { sessionID?: string; error?: { name?: string; message?: string } }
+        const sid = pr.sessionID
+        if (!sid) return
+        // 只对仍在处理中的会话自动续跑；用户已手动停止的会话出了报错事件，不得再自动拉起
+        const owned = !!busySetRef.current[sid]
+        if (owned) markBusy(sid, false)
+        const isCurrent = sid === sidRef.current
+        oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
+          .then((list) => {
+            const last = list[list.length - 1]
+            if (owned && last && last.info.role === 'assistant' && isAbortedAssistant(last)) scheduleRetry(sid, list)
+            if (!isCurrent) return
+            setMsgs(hydrate(list, shown.current, texts.current))
+            setError(humanizeError(pr.error?.message ?? '未知错误'))
+            p.onRefreshSessions()
+          })
+          .catch(() => { if (isCurrent) setError(humanizeError(pr.error?.message ?? '未知错误')) })
       }
     })
     return off
@@ -335,7 +533,7 @@ export function ChatView(p: Props) {
     }
     const item = queue[i]
     setQueue((q) => q.filter((_, k) => k !== i))
-    runPrompt(item.text, item.sid || undefined)
+    void runPrompt(item.text, item.sid || undefined, busyDir.current[item.sid])
   }, [busy, queue])
 
   // 点新任务/点任务：光标自动落进输入框
@@ -381,23 +579,6 @@ export function ChatView(p: Props) {
     if (!busy || !p.sessionId) return
     const sid = p.sessionId
     let alive = true
-    stall.current.since = Date.now()
-    stallNoted.current = false
-    /** 20 秒无输出提醒：只提示，绝不主动中止——长命令、慢模型首包都是正常等待 */
-    const maybeStall = (list: MessageView[]) => {
-      const now = Date.now()
-      // 工具还在跑（长命令是正常的）、或正等用户回答提问，都不算挂
-      if (list.some((m) => m.parts.some((x) => x.type === 'tool' && x.state?.status === 'running')) || asksRef.current.length > 0) {
-        stall.current.since = now
-        stallNoted.current = false
-        return
-      }
-      if (now - stall.current.since < 20000) return
-      if (!stallNoted.current) {
-        stallNoted.current = true
-        setError('AI 已 20 秒没有输出，仍在等待模型响应；若长时间无恢复，可点停止按钮后重发。')
-      }
-    }
     const sync = async () => {
       if (!alive) return
       // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准
@@ -412,13 +593,8 @@ export function ChatView(p: Props) {
         if (!alive || sid !== sidRef.current || sid !== p.sessionId) return
         // 指纹：消息数 + 各 part 长度。内容无变化直接跳过，避免无谓渲染
         const fp = list.map((m) => m.info.id + ':' + m.parts.map((x) => x.type + (x.text?.length ?? 0)).join(',')).join('|')
-        if (fp === pollFingerprint.current) {
-          maybeStall(list)
-          return
-        }
+        if (fp === pollFingerprint.current) return
         pollFingerprint.current = fp
-        stall.current.since = Date.now()
-        stallNoted.current = false
         setMsgs((prev) => mergePoll(list, prev, texts.current, shown.current, startTicker))
       } catch {
         /* 内核瞬时不可达，下一轮再试 */
@@ -432,6 +608,46 @@ export function ChatView(p: Props) {
     }
   }, [busy, p.sessionId])
 
+  // 整轮文件差量：内核把差量算在「用户消息」的 summary 上、回合结束才产出，
+  // 拉到空结果就隔 3 秒重试几次，保证写入/编辑行最终能显示 +N/-M
+  function fetchTurnDiffs(sid: string, dir: string | undefined, uid: string) {
+    if (diffs[uid] || diffsBusy.current.has(uid)) return
+    diffsBusy.current.add(uid)
+    const tryFetch = (n: number) => {
+      oc.diff(sid, dir, uid)
+        .then((list) => {
+          if (Array.isArray(list) && list.length) {
+            diffsBusy.current.delete(uid)
+            setDiffs((prev) => ({ ...prev, [uid]: list }))
+          } else if (n < 4) {
+            setTimeout(() => tryFetch(n + 1), 3000)
+          } else {
+            diffsBusy.current.delete(uid)
+          }
+        })
+        .catch(() => diffsBusy.current.delete(uid))
+    }
+    tryFetch(0)
+  }
+
+  // 出现已完成/出错的写入类工具时按需拉该轮差量（工具行据此显示增减行数与差量代码）
+  useEffect(() => {
+    if (!p.sessionId) return
+    const owners = turnOwners(msgs)
+    const todo = new Set<string>()
+    for (const m of msgs) {
+      const uid = owners.get(m.info.id)
+      if (!uid) continue
+      for (const part of m.parts) {
+        if (part.type === 'tool' && isFileTool(part.tool ?? '')) {
+          const st = part.state?.status
+          if (st === 'completed' || st === 'error') todo.add(uid)
+        }
+      }
+    }
+    for (const uid of todo) fetchTurnDiffs(p.sessionId, dirRef.current, uid)
+  }, [msgs, p.sessionId])
+
   /**
    * 断网自动暂停 / 恢复自动执行：
    * 内核是本地进程，断网只影响它到模型端点的链路。浏览器 offline 时把正在跑的
@@ -443,7 +659,9 @@ export function ChatView(p: Props) {
     const onOffline = () => {
       const cur = inflightRef.current
       if (!cur) return
-      oc.abort(cur.sid).catch(() => { /* 内核已停/无此任务 */ })
+      // 断网期间的中断不走自动重试（onLine=false 时不排期），恢复联网后由下面 onOnline 重发一遍
+      cancelRetry(cur.sid)
+      oc.abort(cur.sid, busyDir.current[cur.sid]).catch(() => { /* 内核已停/无此任务 */ })
       markBusy(cur.sid, false)
       setError('网络已断开，任务自动暂停，恢复后自动执行。')
     }
@@ -452,7 +670,7 @@ export function ChatView(p: Props) {
       if (!cur) return
       inflightRef.current = null
       setError('')
-      runPrompt(cur.text, cur.sid)
+      void runPrompt(cur.text, cur.sid, busyDir.current[cur.sid])
     }
     window.addEventListener('offline', onOffline)
     window.addEventListener('online', onOnline)
@@ -498,12 +716,14 @@ export function ChatView(p: Props) {
     setError('')
     hist.current.push(text)
     histPos.current = hist.current.length
+    // 用户自己发新消息 = 不用自动重试来续跑了
+    if (p.sessionId) cancelRetry(p.sessionId)
     if (busy) {
       // 终端长跑卡住本轮：发送新消息 = 用户主动接管（中止当前轮后立即执行，不进队列）
       if (terminalBlocked && sidRef.current) {
         const sid = sidRef.current
-        oc.abort(sid).catch(() => { /* 已结束 */ })
-        window.setTimeout(() => runPrompt(text, sid), 900)
+        oc.abort(sid, busyDir.current[sid]).catch(() => { /* 已结束 */ })
+        window.setTimeout(() => runPrompt(text, sid, busyDir.current[sid]), 900)
         return
       }
       setQueue((q) => [...q, { sid: sidRef.current, text }])
@@ -512,13 +732,14 @@ export function ChatView(p: Props) {
     await runPrompt(text)
   }
 
-  async function runPrompt(text: string, sidOverride?: string) {
+  async function runPrompt(text: string, sidOverride?: string, dirOverride?: string) {
+    const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话，避免 "New session - 时间戳"
       const title = text.length > 30 ? text.slice(0, 30) + '…' : text
       try {
-        const s = await oc.createSession(p.project?.path, title)
+        const s = await oc.createSession(dir, title)
         s.title = title
         sid = s.id
         sidRef.current = s.id
@@ -529,7 +750,7 @@ export function ChatView(p: Props) {
         return
       }
     }
-    markBusy(sid, true)
+    markBusy(sid, true, dir)
     inflight.current = { sid, text }
     atBottomRef.current = true
     setAtBottom(true)
@@ -542,7 +763,7 @@ export function ChatView(p: Props) {
     setMsgs((prev) => [...prev, optimistic])
     let transportLost = false
     try {
-      await oc.prompt(sid, p.project?.path, text, parseModel(p.model))
+      await oc.prompt(sid, dir, text, parseModel(p.model))
     } catch (e) {
       const status = (e as Error & { status?: number }).status
       // 502/503 是主进程代抛的传输层故障（内核还在跑），不代表任务结束：
@@ -565,7 +786,7 @@ export function ChatView(p: Props) {
         toolRaw.current.clear()
         setPreviews({})
         try {
-          const list = await oc.messages(sid, p.project?.path)
+          const list = await oc.messages(sid, dir)
           setMsgs(hydrate(list, shown.current, texts.current))
           startTicker()
         } catch { /* 保留已渲染内容 */ }
@@ -577,11 +798,13 @@ export function ChatView(p: Props) {
   function queueSend(i: number) {
     if (busy && sidRef.current) {
       hijack.current = i
-      oc.abort(sidRef.current).catch(() => { /* 已结束 */ })
+      oc.abort(sidRef.current, busyDir.current[sidRef.current]).catch(() => { /* 已结束 */ })
     } else {
       const item = queue[i]
       setQueue((q) => q.filter((_, k) => k !== i))
-      runPrompt(item.text, item.sid || undefined)
+      // 队列里这条消息就是用户的新指令，优先于自动重试续跑
+      cancelRetry(item.sid)
+      void runPrompt(item.text, item.sid || undefined, busyDir.current[item.sid])
     }
   }
 
@@ -642,7 +865,7 @@ export function ChatView(p: Props) {
             ) : (
               <div key={m.info.id} className="amsg">
                 {m.parts.map((part) => (
-                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} />
+                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
                 ))}
               </div>
             )
@@ -665,6 +888,24 @@ export function ChatView(p: Props) {
                       : `正在思考，已用时 ${fmtElapsed(elapsed)}`}
                 </>
               )}
+            </div>
+          )}
+          {retryState?.pending && !busy && (
+            <div className="amsg retrystatus">
+              <LoaderCircle size={13} className="spin" />
+              <span>任务已中断，{RETRY_INTERVAL_MS / 1000} 秒后自动重试（第 {retryState.count}/{RETRY_MAX} 次）</span>
+              <button className="icon-btn" title="取消自动重试" onClick={() => cancelRetry(p.sessionId)}>
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          {retryState && !retryState.pending && !busy && (
+            <div className="amsg retryfail">
+              <AlertCircle size={13} />
+              <span>已自动重试 {RETRY_MAX} 次仍未完成，点右侧按钮让 AI 继续处理</span>
+              <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
+                <RotateCw size={13} /> 重试
+              </button>
             </div>
           )}
         </div>
@@ -776,21 +1017,14 @@ export function ChatView(p: Props) {
             )}
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
-            {busy ? (
-              <button
-                className="send-round"
-                title="停止所有任务"
-                onClick={() => {
-                  Object.keys(busySet).filter((s) => busySet[s]).forEach((s) => oc.abort(s).catch(() => {}))
-                }}
-              >
+            {anyBusy && (
+              <button className="send-round stop" title="停止所有任务" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
-            ) : (
-              <button className="send-round" disabled={!input.trim()} onClick={send} title="发送">
-                <Send size={15} />
-              </button>
             )}
+            <button className="send-round" disabled={!input.trim()} onClick={send} title="发送">
+              <Send size={15} />
+            </button>
           </div>
         </div>
       </div>
@@ -927,16 +1161,15 @@ function applySnapshot(
   ensureTicker: () => void
 ): MessageView[] {
   let patched = part
-  if (part.type === 'text') {
-    texts.set(part.id, part.text ?? '')
+  if (part.type === 'text' || part.type === 'reasoning') {
+    const full = part.text ?? ''
+    texts.set(part.id, full)
     ensureTicker()
-    const n = shown.get(part.id) ?? 0
-    patched = n < (part.text?.length ?? 0) ? { ...part, text: (part.text ?? '').slice(0, n) } : part
-  } else if (part.type === 'reasoning') {
-    texts.set(part.id, part.text ?? '')
-    ensureTicker()
-    const n = shown.get(part.id) ?? 0
-    patched = n < (part.text?.length ?? 0) ? { ...part, text: (part.text ?? '').slice(0, n) } : part
+    // 还没进入流式状态的一部分（用户消息整段快照、或整段快照先于增量抵达）：
+    // 直接显示整段，避免先蹦一个空的底色气泡再逐字补全
+    if (shown.get(part.id) == null) shown.set(part.id, full.length)
+    const n = shown.get(part.id) ?? full.length
+    patched = n < full.length ? { ...part, text: full.slice(0, n) } : part
   }
   return upsertPart(list, patched, roles)
 }
@@ -946,9 +1179,17 @@ function upsertPart(
   part: Part,
   roles: Map<string, 'user' | 'assistant'>
 ): MessageView[] {
-  const next = [...list]
+  let next = [...list]
   const mi = next.findIndex((m) => m.info.id === part.messageID)
   if (mi < 0) {
+    // 真实用户消息出现时，顶掉乐观插入的同文本 tmp 气泡，避免瞬间冒出两个重复气泡
+    if (roles.get(part.messageID) === 'user' && part.type === 'text') {
+      const text = part.text ?? ''
+      next = next.filter(
+        (m) =>
+          !(m.info.id.startsWith('tmp-') && m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n') === text)
+      )
+    }
     next.push({
       info: { id: part.messageID, role: roles.get(part.messageID) ?? 'assistant', sessionID: part.sessionID },
       parts: [part]
@@ -1081,8 +1322,8 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   read: { name: '读取', icon: <FileText size={13} /> },
   write: { name: '写入', icon: <FilePlus size={13} /> },
   edit: { name: '编辑', icon: <Pencil size={13} /> },
-  apply_patch: { name: '应用补丁', icon: <FileDiff size={13} /> },
-  patch: { name: '应用补丁', icon: <FileDiff size={13} /> },
+  apply_patch: { name: '应用补丁', icon: <FileDiffIcon size={13} /> },
+  patch: { name: '应用补丁', icon: <FileDiffIcon size={13} /> },
   bash: { name: '终端', icon: <Terminal size={13} /> },
   shell: { name: '终端', icon: <Terminal size={13} /> },
   execute: { name: '执行', icon: <Terminal size={13} /> },
@@ -1312,7 +1553,7 @@ function relTarget(s: string, projPath?: string): string {
   return s
 }
 
-function PartView({ part, projectPath, preview, live }: { part: Part; projectPath?: string; preview?: string; live?: boolean }) {
+function PartView({ part, projectPath, preview, live, diffs }: { part: Part; projectPath?: string; preview?: string; live?: boolean; diffs?: FileDiff[] }) {
   // 正文过长（代码大段粘贴/长回答）自动收起，点「展开全文」看全
   if (part.type === 'text' && part.text) {
     return (
@@ -1333,12 +1574,14 @@ function PartView({ part, projectPath, preview, live }: { part: Part; projectPat
     if (st === 'running' && !live) st = 'error'
     const tool = (part.tool ?? '').toLowerCase()
     const rawOut = cnOutput(st === 'error' ? str(part.state?.error) : str(part.state?.output))
+    // 写入类工具：内核算好的整轮差量优先（带 +/- 行），工具自身输出仅作回退
+    const fd = isFileTool(tool) ? matchedDiff(diffs, part) : undefined
     let body: ReactNode
     if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
-    } else if (rawOut && (tool === 'write' || tool === 'edit' || tool === 'patch' || tool === 'apply_patch')) {
-      body = <CodeBlock text={rawOut} diff />
+    } else if (isFileTool(tool) && (fd?.patch || rawOut)) {
+      body = fd?.patch ? <CodeBlock text={fd.patch} diff file={fd.file} /> : <CodeBlock text={rawOut} />
     } else if (rawOut && (tool === 'todowrite' || tool === 'todo_write')) {
       // 待办清单输出是 JSON 数组：渲染成任务清单卡（历史快照不转圈），不甩原始 JSON 给用户
       try {
@@ -1361,6 +1604,7 @@ function PartView({ part, projectPath, preview, live }: { part: Part; projectPat
         target={toolTarget(part, projectPath)}
         preview={preview}
         body={body}
+        stats={fd && (fd.additions || fd.deletions) ? { additions: fd.additions, deletions: fd.deletions } : undefined}
         spin={st === 'running' && tool !== 'bash' && tool !== 'shell' && tool !== 'execute'}
       />
     )
@@ -1392,6 +1636,7 @@ function StepLine({
   status,
   preview,
   body,
+  stats,
   spin = true
 }: {
   icon: ReactNode
@@ -1400,6 +1645,8 @@ function StepLine({
   status: string
   preview?: string
   body?: ReactNode
+  /** 写入类工具的整轮增减行数（+ 绿 / - 红） */
+  stats?: { additions: number; deletions: number }
   /** running 时图标位是否转圈：终端类长跑命令不转，避免看起来像一直加载 */
   spin?: boolean
 }) {
@@ -1426,6 +1673,12 @@ function StepLine({
         <span className="step-name">{name}</span>
         {running && <span className="step-doing">{doingLabel(name)}</span>}
         {target && <span className="step-target" title={target}>{target}</span>}
+        {stats && (stats.additions > 0 || stats.deletions > 0) && (
+          <span className="step-stat" title={`新增 ${stats.additions} 行 · 删除 ${stats.deletions} 行`}>
+            {stats.additions > 0 && <span className="d-add">+{stats.additions}</span>}
+            {stats.deletions > 0 && <span className="d-del">-{stats.deletions}</span>}
+          </span>
+        )}
         {status === 'error' && <AlertCircle size={13} className="step-err" />}
         {expandable && <ChevronDown size={13} className={'step-chev' + (open ? ' up' : '')} />}
       </button>

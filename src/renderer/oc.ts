@@ -27,6 +27,8 @@ export interface ToolState {
   input?: Record<string, unknown>
   output?: string
   error?: string
+  /** running 起跳时刻 / 起止时刻（内核 ToolState 携带，超时判定用） */
+  time?: { start?: number; end?: number }
 }
 
 export interface Part {
@@ -71,6 +73,19 @@ export interface QuestionAsk {
   }[]
 }
 
+/**
+ * 会话文件差量（内核 /session/{id}/diff 返回项）
+ * messageID 必须是「用户消息」id：内核把整轮（该用户消息 + 其后续助手消息）的快照差量挂在它身上，
+ * patch 是带 +/- 行的完整 unified diff，直接拿来着色即可
+ */
+export interface FileDiff {
+  file: string
+  patch: string
+  additions: number
+  deletions: number
+  status?: 'added' | 'deleted' | 'modified'
+}
+
 /** 内核管理的终端会话（PTY） */
 export interface PtySession {
   id: string
@@ -100,15 +115,22 @@ export const oc = {
         ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {})
       }
     }),
-  abort: (id: string) => call(`/session/${id}/abort`, { method: 'POST' }),
+  abort: (id: string, directory?: string) => call(`/session/${id}/abort${dirQ(directory)}`, { method: 'POST' }),
   deleteSession: (id: string, directory?: string) =>
     call(`/session/${id}${dirQ(directory)}`, { method: 'DELETE' }),
   /** 内核全部待答问题（question 工具阻塞等待用户应答；事件可能漏收，轮询对账用） */
   questions: () => call<QuestionAsk[]>('/question'),
+  /** 会话文件差量：messageID 必填且必须是用户消息 id（不传或传助手消息 id 一律返回空数组） */
+  diff: (id: string, directory: string | undefined, messageID: string) => {
+    const q = dirQ(directory)
+    return call<FileDiff[]>(`/session/${id}/diff${q}${q ? '&' : '?'}messageID=${encodeURIComponent(messageID)}`)
+  },
   /** 内核管理的终端列表（pty.created/updated/exited/deleted 事件可触发即时刷新） */
   terminals: () => call<PtySession[]>('/pty'),
   /** 终止终端（内核会杀掉该 pty 进程） */
   killTerminal: (ptyID: string, directory?: string) => call(`/pty/${ptyID}${dirQ(directory)}`, { method: 'DELETE' }),
+  /** 内核健康探测（主进程 isHealthy，不经内核 REST；停止按钮兜底用） */
+  kernelHealth: (): Promise<boolean> => window.qingniao.kernelHealth(),
   /** question 工具应答：answers 与 questions 一一对应，每项是选中的标签数组 */
   replyQuestion: (requestID: string, answers: string[][], directory?: string) =>
     call(`/question/${requestID}/reply${dirQ(directory)}`, { method: 'POST', body: { answers } }),

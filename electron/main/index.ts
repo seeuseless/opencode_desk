@@ -69,6 +69,9 @@ ipcMain.handle('dialog:pickDir', async () => {
 
 ipcMain.handle('settings:get', () => loadSettings())
 
+/** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
+ipcMain.handle('kernel:health', () => adapter.isHealthy())
+
 // 保存即生效：写 ~/.qingniaoai 并重启内核（provider/MCP 变更后需重载）
 ipcMain.handle('settings:save', async (_e, s: Settings) => {
   saveSettings(s)
