@@ -42,6 +42,7 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 8. 可靠性：SSE 断线自动重连；错误人性化提示（网关错误、鉴权失败等翻译成中文）
 9. 主题：简约浅（默认）+ 深色 + 4 套彩色浅色（晴空蓝/奶油暖米/薄荷青绿/淡粉蔷薇），强调色自动派生气泡/边框/路径文字色
 10. 自绘标题栏与全部控件（无原生菜单/下拉/弹窗），图标库 lucide，无手写 SVG
+11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
 
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 
@@ -52,6 +53,15 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 ~/.qingniaoai/state/             XDG_STATE_HOME
 ~/qingniaoai-workspace/          默认"工作台"项目目录
 ```
+
+以上是应用层数据；**项目记忆不在这里**——它写在被添加为项目的那个目录里，跟仓库走：
+
+```
+<项目>/.qingniao/memory/MEMORY.md      项目长期记忆（架构约定、技术选型等）
+<项目>/.qingniao/memory/YYYY-MM-DD.md  每日工作流水，每轮对话结束自动追加
+```
+
+> 新对话首发时读取这两个文件并作为隐藏上下文注入，AI 因此自带项目背景；日常的流水记录由应用自动追加，无需手动维护。
 
 > **端点要求**：自定义提供商走 `@ai-sdk/openai-compatible`，需支持 OpenAI **Chat Completions API**（`/chat/completions` + `/models`）。
 

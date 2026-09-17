@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adapter } from './adapter.ts'
 import { loadSettings, saveSettings, writeOpencodeConfig, type Settings } from './config.ts'
@@ -91,6 +91,33 @@ ipcMain.handle('models:fetch', async (_e, req: { baseURL: string; apiKey?: strin
   } catch (e) {
     return { error: e instanceof Error ? e.message : String(e) }
   }
+})
+
+// 项目记忆：每个项目目录下的 .qingniao/memory/（MEMORY.md 长期 + YYYY-MM-DD.md 每日），
+// 跟项目走（可 git/同步），不进应用配置。AI 在新对话自动加载，并在工作中自行维护。
+function memDir(projectPath: string): string {
+  return join(projectPath, '.qingniao', 'memory')
+}
+function memTodayFile(projectPath: string): string {
+  return join(memDir(projectPath), new Date().toISOString().slice(0, 10) + '.md')
+}
+function safeRead(p: string): string {
+  try {
+    return existsSync(p) ? readFileSync(p, 'utf8').trim() : ''
+  } catch {
+    return ''
+  }
+}
+ipcMain.handle('memory:read', (_e, projectPath: string) => {
+  const d = memDir(projectPath)
+  mkdirSync(d, { recursive: true })
+  return { long: safeRead(join(d, 'MEMORY.md')), daily: safeRead(memTodayFile(projectPath)) }
+})
+ipcMain.handle('memory:append', (_e, req: { projectPath: string; content: string }) => {
+  const d = memDir(req.projectPath)
+  mkdirSync(d, { recursive: true })
+  const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
+  appendFileSync(memTodayFile(req.projectPath), `\n## ${stamp}\n\n${req.content}\n`, 'utf8')
 })
 
 // 自绘标题栏的窗口控制

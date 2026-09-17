@@ -62,6 +62,12 @@ export interface ModelSel {
   modelID: string
 }
 
+/**
+ * 项目记忆注入标记：以该前缀开头的用户消息是「仅上下文」记忆（noReply 注入，AI 可见但界面不渲染），
+ * 用于在新会话首发时把项目记忆喂给内核。ChatView 渲染时据此跳过，避免顶部出现多余提示。
+ */
+export const MEMORY_PREFIX = '␞␞项目记忆␞␞\n'
+
 /** 内核 question 工具的提问请求（question.v2.asked 事件推送，阻塞等待用户应答） */
 export interface QuestionAsk {
   id: string
@@ -119,6 +125,12 @@ export const oc = {
       }
     }),
   abort: (id: string, directory?: string) => call(`/session/${id}/abort${dirQ(directory)}`, { method: 'POST' }),
+  /** 注入「仅上下文」消息（noReply：不触发 AI 回复，但后续 prompt 自动带上它）——项目记忆用此机制自动喂给新会话 */
+  injectContext: (id: string, directory: string | undefined, text: string) =>
+    call(`/session/${id}/message${dirQ(directory)}`, {
+      method: 'POST',
+      body: { parts: [{ type: 'text', text }], noReply: true }
+    }),
   /** 撤回会话到指定「用户消息」之前：回滚文件快照并移除该条及其后的历史（编辑消息重发用） */
   revert: (id: string, directory: string | undefined, messageID: string) =>
     call<unknown>(`/session/${id}/revert${dirQ(directory)}`, { method: 'POST', body: { messageID } }),

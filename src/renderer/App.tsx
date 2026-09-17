@@ -43,6 +43,9 @@ export default function App() {
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
   const [saving, setSaving] = useState(false)
   const workspaceRef = useRef('')
+  /** sessionsMap 的最新镜像：App 级 SSE 监听（只注册一次）里查"某 busy 会话属于哪个目录"用，避免闭包拿到旧值 */
+  const sessionsMapRef = useRef(sessionsMap)
+  sessionsMapRef.current = sessionsMap
   /** 正在拉取历史的会话 id：点击当帧就标记，会话行高亮不必等数据回来 */
   const [loadingSids, setLoadingSids] = useState<Record<string, boolean>>({})
 
@@ -64,6 +67,58 @@ export default function App() {
   useEffect(() => save('qingniao.model', model), [model])
 
   useEffect(() => save('qingniao.expanded', expanded), [expanded])
+
+  // App 级 SSE 监听：busy 事实源与 ChatView 生命周期解耦。
+  // ChatView 卸载（切走/切设置页）后 side 加载图标仍能正确更新，不残留。
+  useEffect(() => {
+    const off = window.qingniao.onEvent((raw) => {
+      const e = raw as { type: string; properties: Record<string, unknown> }
+      if (e.type === 'message.part.delta') {
+        // 任务在跑：任何 delta 都说明对应会话正在处理
+        const pr = e.properties as { sessionID?: string }
+        if (pr.sessionID) setBusyIds((m) => (m[pr.sessionID!] ? m : { ...m, [pr.sessionID!]: true }))
+      } else if (e.type === 'session.idle' || e.type === 'session.error') {
+        const pr = e.properties as { sessionID?: string }
+        if (pr.sessionID) {
+          setBusyIds((m) => {
+            if (!(pr.sessionID! in m)) return m
+            const { [pr.sessionID!]: _drop, ...rest } = m
+            return rest
+          })
+          // 一轮对话正常结束：自动把要点追加到项目当日记忆文件（实现「自动记忆」）
+          if (e.type === 'session.idle') void autoLogMemory(pr.sessionID)
+        }
+      } else if (e.type === 'qingniao.sse.reconnected') {
+        // SSE 断线重连：断开期间可能漏掉 session.idle，对仍标记 busy 的会话做一次轻量重同步
+        // ——仅清"已确实完成"的（最后一条助手消息已有完整文本），绝不凭数据补记 busy。
+        setBusyIds((cur) => {
+          if (Object.keys(cur).length === 0) return cur
+          for (const sid of Object.keys(cur)) {
+            const path = Object.keys(sessionsMapRef.current).find((p) =>
+              sessionsMapRef.current[p].some((s) => s.id === sid)
+            )
+            if (!path) continue
+            oc.messages(sid, path)
+              .then((list) => {
+                const last = [...list].reverse().find(
+                  (x) => x.info.role === 'assistant' && x.parts.some((pt) => pt.type === 'text' && pt.text)
+                )
+                if (last) {
+                  setBusyIds((m) => {
+                    if (!(sid in m)) return m
+                    const { [sid]: _drop, ...rest } = m
+                    return rest
+                  })
+                }
+              })
+              .catch(() => { /* 拉取失败不处理，下次重连再对账 */ })
+          }
+          return cur
+        })
+      }
+    })
+    return off
+  }, [])
 
   // 初始加载：项目 + 本地设置；激活项目默认展开（仅首次无存档时）
   // 不预设任何默认项目：新用户左栏为空，由「+」或空态引导自己添加
@@ -113,31 +168,6 @@ export default function App() {
     const proj = projects.find((x) => x.id === activeId)
     if (proj && expanded[proj.id] && !(proj.path in sessionsMap)) loadProjectSessions(proj)
   }, [projects, expanded, activeId])
-
-  // 启动 / 项目数据变化时，对账"正在处理中"的会话：只清不加。
-  // busy 的事实源是事件（session.idle / session.error / kernel.started / ChatView 上报）；
-  // 数据扫描只负责兜底清漏——会话数据里已无 running part 时清掉 busy。
-  // 绝不凭数据里的 running 补记 busy：主动中止（如断网暂停）的回合数据会残留 running，
-  // 补记会让侧栏加载图标在任务结束后常驻。
-  useEffect(() => {
-    for (const [path, list] of Object.entries(sessionsMap)) {
-      for (const s of list) {
-        ;(async () => {
-          try {
-            const msgs = await oc.messages(s.id, path)
-            if (msgs.some((m) => m.parts.some((pt) => pt.state?.status === 'running'))) return
-            setBusyIds((m) => {
-              if (!(s.id in m)) return m
-              const { [s.id]: _drop, ...rest } = m
-              return rest
-            })
-          } catch { /* 单个会话拉取失败不影响其他 */ }
-        })()
-      }
-    }
-    // 仅依赖列表与项目集合，避免每次渲染重发对账请求
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, sessionsMap])
 
   const activeProject = projects.find((x) => x.id === activeId)
 
@@ -246,6 +276,26 @@ export default function App() {
     if (activeProject) loadProjectSessions(activeProject)
   }
 
+  /** 一轮对话正常结束：把要点追加到项目当日记忆文件（<项目>/.qingniao/memory/YYYY-MM-DD.md），实现「自动记忆」；
+   *  长期记忆 MEMORY.md 由 AI 在工作过程中自行维护（新对话会注入维护指引）。 */
+  async function autoLogMemory(sid: string) {
+    const path = Object.keys(sessionsMapRef.current).find((p) =>
+      sessionsMapRef.current[p].some((s) => s.id === sid)
+    )
+    if (!path) return
+    try {
+      const list = await oc.messages(sid, path)
+      const lastUser = [...list].reverse().find((m) => m.info.role === 'user')
+      const lastAsst = [...list].reverse().find((m) => m.info.role === 'assistant')
+      const u = lastUser ? lastUser.parts.filter((x) => x.type === 'text').map((x) => x.text).join('').slice(0, 200) : ''
+      const a = lastAsst ? lastAsst.parts.filter((x) => x.type === 'text').map((x) => x.text).join('').slice(0, 300) : ''
+      if (!u && !a) return
+      await window.qingniao.appendMemory(path, `**用户**：${u}\n\n**AI**：${a}`)
+    } catch {
+      /* 记忆写入失败不影响对话 */
+    }
+  }
+
   async function saveSettingsAll(next: SettingsCfg) {
     setSaving(true)
     // 先落 UI 状态：开关即刻翻转（乐观更新），内核重启在后台完成
@@ -269,7 +319,7 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Titlebar onAddProject={addProject} />
+      <Titlebar />
       <div className="app">
         <Sidebar
           projects={orderedProjects}
@@ -288,20 +338,11 @@ export default function App() {
           onDeleteSession={deleteSessionOf}
           onOpenSettings={() => setView('settings')}
         />
-        {view === 'settings' ? (
-          <SettingsView
-            settings={settings}
-            onSave={saveSettingsAll}
-            saving={saving}
-            theme={theme}
-            onTheme={setTheme}
-            custom={custom}
-            onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
-            onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
-          />
-        ) : activeProject ? (
+        <div className="content">
+        {activeProject ? (
           <ChatView
             project={activeProject}
+            projects={orderedProjects}
             sessionId={sessionId}
             model={model}
             onModelChange={setModel}
@@ -319,10 +360,32 @@ export default function App() {
             }
             focusSignal={focusTick}
             onOpenSettings={() => setView('settings')}
+            onPickDir={addProject}
+            onSwitchProject={(id) => {
+              if (id === activeId) return
+              setActiveId(id)
+              save('qingniao.activeProject', id)
+              setSessionId('')
+              setView('chat')
+              setFocusTick((t) => t + 1)
+            }}
           />
         ) : (
           <Welcome onAddProject={addProject} onOpenSettings={() => setView('settings')} />
         )}
+        {view === 'settings' && (
+          <SettingsView
+            settings={settings}
+            onSave={saveSettingsAll}
+            saving={saving}
+            theme={theme}
+            onTheme={setTheme}
+            custom={custom}
+            onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
+            onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
+          />
+        )}
+        </div>
       </div>
     </div>
   )

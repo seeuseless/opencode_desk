@@ -20,6 +20,12 @@ const api = {
     baseURL: string,
     apiKey?: string
   ): Promise<{ models?: string[]; error?: string }> => ipcRenderer.invoke('models:fetch', { baseURL, apiKey }),
+  /** 读取项目记忆：<项目>/.qingniao/memory/MEMORY.md（长期）+ YYYY-MM-DD.md（当日），目录不存在则建 */
+  readMemory: (projectPath: string): Promise<{ long: string; daily: string }> =>
+    ipcRenderer.invoke('memory:read', projectPath),
+  /** 把一段内容追加到项目当日记忆文件（<项目>/.qingniao/memory/YYYY-MM-DD.md） */
+  appendMemory: (projectPath: string, content: string): Promise<void> =>
+    ipcRenderer.invoke('memory:append', { projectPath, content }),
   winMin: () => ipcRenderer.send('win:min'),
   winMax: () => ipcRenderer.send('win:max'),
   winClose: () => ipcRenderer.send('win:close'),

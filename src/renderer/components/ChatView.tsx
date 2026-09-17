@@ -5,15 +5,17 @@ import {
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
+import { ProjectPicker } from './ProjectPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
 import type { Project } from './Sidebar'
 
 interface Props {
   project?: Project
+  projects: Project[]
   sessionId: string
   model: string
   onModelChange: (key: string) => void
@@ -29,6 +31,10 @@ interface Props {
   focusSignal: number
   /** 跳转到设置页（配置模型） */
   onOpenSettings?: () => void
+  /** 点击左端项目文件夹：弹出系统选目录对话框 */
+  onPickDir: () => void
+  /** 切换当前激活项目（点击左侧项目下拉中的某项） */
+  onSwitchProject: (id: string) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -44,10 +50,14 @@ const RETRY_MAX = 10
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
 
-/** 会话中断的识别：助手消息自带错误，或回合结束时还残留 running/pending 的工具调用（半截截断） */
+/** 会话中断的识别：助手消息自带错误，或回合结束时还残留 running/pending 的工具调用（半截截断）。
+ *  关键修正：助手消息已有有效文本产出 → 视为回合正常完成，不算中断；
+ *  否则「写 Java 示例」这类纯文本回复（即便有残留 tool part）会被误判为中断，触发不该触发的自动续跑。 */
 function isAbortedAssistant(m: MessageView): boolean {
   const err = (m.info as unknown as { error?: { name?: string } }).error
   if (err) return err.name !== 'MessageAbortedError'
+  // 已有正文产出 = 该轮有效完成；残留的 running/pending tool part 属工具未跑完，不是回合被截断
+  if (m.parts.some((x) => x.type === 'text' && (x.text ?? '').length > 0)) return false
   return m.parts.some((x) => x.type === 'tool' && (x.state?.status === 'running' || x.state?.status === 'pending'))
 }
 
@@ -378,7 +388,6 @@ export function ChatView(p: Props) {
     }
     inflight.current = null
     setQueue([])
-    setError('已停止全部任务')
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型
@@ -800,6 +809,23 @@ export function ChatView(p: Props) {
         sid = s.id
         sidRef.current = s.id
         justCreated.current = s.id
+        // 草稿首发即把项目目录下的记忆文件作为「仅上下文」注入：
+        // <项目>/.qingniao/memory/MEMORY.md（长期）+ YYYY-MM-DD.md（当日），AI 自动带上项目背景，
+        // 并被告知可用文件工具维护这两个文件——真正的「自动记忆」，无需 UI 手动编辑。
+        const mem = dir ? await window.qingniao.readMemory(dir).catch(() => null) : null
+        const longMem = mem?.long?.trim() ?? ''
+        const dailyMem = mem?.daily?.trim() ?? ''
+        let memText =
+          MEMORY_PREFIX +
+          '你正在协助的项目，记忆文件位于该工作目录下：\n' +
+          '- 长期记忆：.qingniao/memory/MEMORY.md\n' +
+          '- 每日工作：.qingniao/memory/YYYY-MM-DD.md\n' +
+          '可用文件工具读取与更新它们；新对话会自动加载，无需用户重复说明项目背景。\n' +
+          '遇到值得长期保留的项目知识（技术栈、约定、常见任务、关键路径、踩坑）请写入 MEMORY.md；\n' +
+          '每轮完成的重要工作，请用一两句话追加到当日文件。'
+        if (longMem) memText += '\n\n# 长期记忆\n' + longMem
+        if (dailyMem) memText += '\n\n# 今日已做\n' + dailyMem
+        oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不影响正常对话 */ })
         p.onDraftCreated(s)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -884,6 +910,14 @@ export function ChatView(p: Props) {
     oc.rejectQuestion(req.id, dirRef.current).catch(() => { /* 已应答/已失效 */ })
   }
 
+  // 可见消息数：项目记忆是「仅上下文」注入（AI 可见、界面不渲染），不能算进「有内容」，
+  // 否则注入记忆后 msgs 非空、空态引导就不显示了
+  const visibleMsgCount = msgs.filter((m) => {
+    if (m.info.role !== 'user') return true
+    const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+    return !txt.startsWith(MEMORY_PREFIX)
+  }).length
+
   return (
     <main className="main">
       <div
@@ -908,24 +942,28 @@ export function ChatView(p: Props) {
               </button>
             </div>
           )}
-          {msgs.length === 0 && !busy && (
+          {visibleMsgCount === 0 && !busy && (
             <div className="empty">
-              说出你的需求：写代码、查资料、整理文件都可以
-              <br />
-              任务在左侧项目文件夹内执行，模型可在下方切换。
+              <div className="empty-title">新对话</div>
+              <div>在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令</div>
+              <div>Enter 发送 · Shift+Enter 换行 · 处理中可随时停止，已发送的消息可编辑后重发</div>
             </div>
           )}
-          {msgs.map((m) =>
-            m.info.role === 'user' ? (
-              <UserBubble key={m.info.id} text={m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
-            ) : (
+          {msgs.map((m) => {
+            if (m.info.role === 'user') {
+              const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+              // 项目记忆是「仅上下文」注入，AI 可见但界面不渲染，保持对话顶部干净
+              if (txt.startsWith(MEMORY_PREFIX)) return null
+              return <UserBubble key={m.info.id} text={txt} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
+            }
+            return (
               <div key={m.info.id} className="amsg">
                 {m.parts.map((part) => (
                   <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
                 ))}
               </div>
             )
-          )}
+          })}
           {asks.length > 0 && (
             <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
           )}
@@ -1032,7 +1070,7 @@ export function ChatView(p: Props) {
             className="ctext"
             value={input}
             rows={2}
-            placeholder={busy ? '当前任务执行中，输入新需求可加入队列' : '说出你的需求，Enter 发送 / Shift+Enter 换行'}
+            placeholder={busy ? '当前任务执行中，输入新需求可加入队列' : 'Enter 发送 / Shift+Enter 换行'}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -1058,13 +1096,12 @@ export function ChatView(p: Props) {
             }}
           />
           <div className="crow">
-            {/* 左端常驻当前项目名：让用户一眼知道这轮操作落在哪个文件夹 */}
-            {p.project && (
-              <span className="crow-proj" title={p.project.path}>
-                <Folder size={13} />
-                <span className="crow-proj-name">{p.project.name}</span>
-              </span>
-            )}
+            <ProjectPicker
+              projects={p.projects}
+              value={p.project?.id}
+              onChange={p.onSwitchProject}
+              onPickDir={p.onPickDir}
+            />
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
@@ -1384,40 +1421,32 @@ function UserBubble({ text, editable, onSend }: { text: string; editable?: boole
 }
 
 /** 开发任务清单卡：todo.updated 驱动，完成项打勾 + 中划线，进行项转圈，序号 + 优先级标签 */
-const PRIORITY_META: Record<string, { label: string; cls: string }> = {
-  high: { label: '高', cls: 'high' },
-  medium: { label: '中', cls: 'medium' },
-  low: { label: '低', cls: 'low' },
-}
-
-function TodoCard({ todos, live }: { todos: TodoItem[]; live?: boolean }) {
+function TodoCard({ todos, live, bare }: { todos: TodoItem[]; live?: boolean; bare?: boolean }) {
   const done = todos.filter((t) => t.status === 'completed').length
   return (
     <div className="todo-card">
-      <div className="todo-head">
-        <ListChecks size={13} />
-        任务清单
-        <span className="todo-prog">{done}/{todos.length}</span>
-      </div>
-      {todos.map((t, i) => {
-        const p = PRIORITY_META[t.priority ?? 'medium']
-        return (
-          <div key={i} className={'todo-item ' + t.status}>
-            <span className="todo-idx">{i + 1}</span>
-            <span className="todo-box">
-              {t.status === 'completed' ? (
-                <Check size={13} />
-              ) : t.status === 'in_progress' ? (
-                live ? <LoaderCircle size={13} className="spin" /> : <span className="todo-run" />
-              ) : (
-                <span className="todo-dot" />
-              )}
-            </span>
-            <span className="todo-text">{t.content}</span>
-            <span className={'todo-pri ' + p.cls}>{p.label}</span>
-          </div>
-        )
-      })}
+      {!bare && (
+        <div className="todo-head">
+          <ListChecks size={13} />
+          任务清单
+          <span className="todo-prog">{done}/{todos.length}</span>
+        </div>
+      )}
+      {todos.map((t, i) => (
+        <div key={i} className={'todo-item ' + t.status}>
+          <span className="todo-idx">{i + 1}</span>
+          <span className="todo-box">
+            {t.status === 'completed' ? (
+              <Check size={13} />
+            ) : t.status === 'in_progress' ? (
+              live ? <LoaderCircle size={13} className="spin" /> : <span className="todo-run" />
+            ) : (
+              <span className="todo-dot" />
+            )}
+          </span>
+          <span className="todo-text">{t.content}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -1540,9 +1569,13 @@ function AskModal({
   )
 }
 
-/** 内核工具的英文系统消息 → 中文 */
+/** 内核工具的英文系统消息 → 中文；纯结果确认句（"写入成功"类）视为无信息量，返回空串让渲染层决定回退展示 */
+const OUTPUT_CONFIRM_RE = /^(Edit applied successfully\.?|Wrote file successfully\.?|Update applied successfully\.?|Aborted\.?|The \w+ tool was called with invalid arguments:[\s\S]*$)/i
+
+/** 内核工具的英文系统消息 → 中文；纯结果确认句（"写入成功"类）视为无信息量，返回空串让渲染层决定回退展示 */
 function cnOutput(text: string): string {
-  return text
+  if (OUTPUT_CONFIRM_RE.test(text)) return ''
+  const t = text
     .replace(/^Edit applied successfully\.?/i, '编辑已应用。')
     .replace(/^Wrote file successfully\.?/i, '文件写入成功。')
     .replace(/^Update applied successfully\.?/i, '修改已应用。')
@@ -1551,6 +1584,7 @@ function cnOutput(text: string): string {
       const zh = TOOL_META[n.toLowerCase()]?.name ?? n
       return `「${zh}」工具的调用参数不完整，已让模型重写参数重试。`
     })
+  return t
 }
 
 function str(v: unknown): string {
@@ -1634,6 +1668,8 @@ function escapeHtml(s: string): string {
 }
 
 function toolTarget(part: Part, projPath?: string): string {
+  // 待办清单工具的输出是 JSON 数组（已渲染成任务卡），其标题「N todos」无信息量，不展示在工具行
+  if ((part.tool ?? '').toLowerCase().includes('todo')) return ''
   const inp = part.state?.input ?? {}
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
@@ -1678,6 +1714,15 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     // 会话已不 busy（如内核重启后残留 running 的 tool part）：running 视为中断而非进行中，避免死转圈
     if (st === 'running' && !live) st = 'error'
     const tool = (part.tool ?? '').toLowerCase()
+    // 写入类工具：优先展示内核持久化在 part.state.input 的完整入参（write 的 content、edit 的 old/newString、
+    // patch 的 patchText）；若该字段为空（如 apply_patch 走 structuredOutput、input 未挂）则回退差量/输出。
+    const toolIn = part.state?.input as Record<string, unknown> | undefined
+    const inContent =
+      (tool === 'write' && typeof toolIn?.content === 'string')
+      || (tool === 'edit' && (typeof toolIn?.newString === 'string' || typeof toolIn?.new_string === 'string'))
+      || (tool === 'apply_patch' && typeof (toolIn?.patchText ?? toolIn?.patch_text) === 'string')
+      ? (tool === 'write' ? toolIn!.content : tool === 'edit' ? (toolIn!.newString ?? toolIn!.new_string) : (toolIn!.patchText ?? toolIn!.patch_text)) as string
+      : ''
     const rawOut = cnOutput(st === 'error' ? str(part.state?.error) : str(part.state?.output))
     // 写入类工具：内核算好的整轮差量优先（带 +/- 行），工具自身输出仅作回退
     const fd = isFileTool(tool) ? (matchedDiff(metaDiffs(part), part) ?? matchedDiff(diffs, part)) : undefined
@@ -1685,13 +1730,25 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
-    } else if (isFileTool(tool) && (fd?.patch || rawOut)) {
-      body = fd?.patch ? <CodeBlock text={fd.patch} diff file={fd.file} /> : <CodeBlock text={rawOut} />
+    } else if (isFileTool(tool)) {
+      // 优先展示写入的代码内容（part 入参），其次内核差量，最后工具输出
+      if (inContent) {
+        const file = str(toolIn?.filePath) || str(toolIn?.path) || fd?.file || toolTarget(part, projectPath)
+        body = tool === 'write'
+          ? <CodeBlock text={inContent} file={file} />
+          : tool === 'apply_patch'
+            ? <CodeBlock text={inContent} diff file={file} />
+            : <CodeBlock text={inContent} diff file={file} />
+      } else if (fd?.patch) {
+        body = <CodeBlock text={fd.patch} diff file={fd.file} />
+      } else if (rawOut) {
+        body = <CodeBlock text={rawOut} />
+      }
     } else if (rawOut && (tool === 'todowrite' || tool === 'todo_write')) {
       // 待办清单输出是 JSON 数组：渲染成任务清单卡（历史快照不转圈），不甩原始 JSON 给用户
       try {
         const arr = JSON.parse(rawOut) as TodoItem[]
-        body = Array.isArray(arr) ? <TodoCard todos={arr} live={live} /> : <CodeBlock text={rawOut} />
+        body = Array.isArray(arr) ? <TodoCard todos={arr} live={live} bare /> : <CodeBlock text={rawOut} />
       } catch {
         body = <CodeBlock text={rawOut} />
       }
