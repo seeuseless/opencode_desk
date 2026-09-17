@@ -14,10 +14,9 @@ type View = 'chat' | 'settings'
 const sortSessions = (list: Session[]) =>
   [...list].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
 
-/** 兼容旧存档：已删除/改名的主题做迁移，未知值回落默认主题「简约浅」 */
+/** 兼容旧存档：未知/已删除的主题回落默认「简约浅」；自定义主题单独放行 */
 function loadTheme(): string {
   const t = load<string>('qingniao.theme', 'light')
-  if (t === 'qqblue') return 'skyblue'
   if (t === CUSTOM_ID) return CUSTOM_ID
   return THEMES.some((x) => x.id === t) ? t : 'light'
 }

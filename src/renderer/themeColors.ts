@@ -11,10 +11,10 @@ export interface CustomColors {
 }
 
 export const DEFAULT_CUSTOM: CustomColors = {
-  accent: '#4f7cff',
-  bg: '#0f1115',
-  fg: '#e6e8ee',
-  sideBg: '#16181d',
+  accent: '#3b6ef5',
+  bg: '#ececec',
+  fg: '#1f232b',
+  sideBg: '#f5f5f5',
 }
 
 const hexToRgb = (hex: string): [number, number, number] => {
@@ -75,6 +75,9 @@ export function deriveVars(c: CustomColors): Record<string, string> {
   const sideLight = luminance(hexToRgb(c.sideBg)) >= 0.45
   const sideFg = sideLight ? '#1f232b' : '#ffffff'
 
+  const user = mix(c.accent, content, 0.32)
+  const onUser = luminance(hexToRgb(user)) >= 0.5 ? '#1c2129' : '#ffffff'
+
   return {
     '--bg': c.bg, '--bg2': bg2, '--bg3': bg3, '--line': line,
     '--fg': c.fg, '--fg2': fg2,
@@ -86,7 +89,7 @@ export function deriveVars(c: CustomColors): Record<string, string> {
     '--shadow': dark ? 'rgba(0,0,0,0.5)' : 'rgba(30,40,70,0.12)',
     '--field-bg': fieldBg, '--field-line': fieldLine,
     '--content': content,
-    '--user': mix(c.accent, content, 0.32),
+    '--user': user, '--on-user': onUser,
     '--step-path': mix(c.accent, fg2, 0.52),
     '--side-bg': c.sideBg,
     '--side-fg': sideFg,
@@ -102,6 +105,6 @@ export function deriveVars(c: CustomColors): Record<string, string> {
 export const DERIVED_KEYS = [
   '--bg', '--bg2', '--bg3', '--line', '--fg', '--fg2', '--accent', '--on-accent',
   '--ok', '--err', '--run', '--shadow', '--field-bg', '--field-line', '--content',
-  '--user', '--step-path', '--side-bg', '--side-fg', '--side-fg2', '--side-hover',
-  '--side-solid', '--side-line', '--side-logo',
+  '--user', '--on-user', '--step-path', '--side-bg', '--side-fg', '--side-fg2',
+  '--side-hover', '--side-solid', '--side-line', '--side-logo',
 ] as const

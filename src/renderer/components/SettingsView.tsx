@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertCircle, Check, Eye, EyeOff, Globe, Layers, Link2, Pencil, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, Cpu, Eye, EyeOff, Globe, Layers, Link2, Palette, Pencil, Plus, RefreshCw, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
@@ -28,6 +28,14 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
 /** 主题卡片用色块预览：内置取色卡，自定义实时取当前自定义的 4 色 */
 const swatchOf = (t: ThemeMeta, custom: CustomColors): string[] =>
   t.id === CUSTOM_ID ? [custom.accent, custom.sideBg, custom.bg] : t.swatches
+
+/** 设置页左侧导航：主题 / 模型 / MCP */
+type TabId = 'theme' | 'providers' | 'mcp'
+const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: 'theme', label: '主题', icon: Palette },
+  { id: 'providers', label: '模型', icon: Cpu },
+  { id: 'mcp', label: 'MCP', icon: Globe },
+]
 
 interface Draft {
   isNew: boolean
@@ -69,6 +77,7 @@ export function SettingsView(p: Props) {
   const [formMsg, setFormMsg] = useState<{ text: string; bad: boolean } | null>(null)
   const [confirmDel, setConfirmDel] = useState<ProviderCfg | null>(null)
   const [showKey, setShowKey] = useState(false)
+  const [tab, setTab] = useState<TabId>('theme')
 
   function openNew() {
     setFormMsg(null)
@@ -193,7 +202,21 @@ export function SettingsView(p: Props) {
 
   return (
     <main className="main settings">
-      <div className="setbody">
+      <div className="set-layout">
+        <nav className="set-menu">
+          {TABS.map((t) => (
+            <button
+              type="button"
+              key={t.id}
+              className={'set-item' + (tab === t.id ? ' on' : '')}
+              onClick={() => setTab(t.id)}
+            >
+              <t.icon size={15} /> {t.label}
+            </button>
+          ))}
+        </nav>
+        <div className="setbody">
+        {tab === 'theme' && (
         <section>
           <h3>
             <Layers size={15} /> 主题
@@ -233,7 +256,9 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
+        )}
 
+        {tab === 'providers' && (
         <section>
           <h3>
             模型提供商
@@ -270,7 +295,9 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
+        )}
 
+        {tab === 'mcp' && (
         <section>
           <h3>
             浏览器与扩展（MCP）
@@ -333,6 +360,8 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
+        )}
+        </div>
       </div>
 
       {draft && (

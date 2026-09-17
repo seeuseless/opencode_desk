@@ -24,62 +24,126 @@
   --content: #ffffff;
   --field-bg: #ffffff; --field-line: #DBDBDB;
 }
-/* 晴空蓝：左侧晴空蓝彩色块，右侧浅蓝白内容面 */
-:root[data-theme='skyblue'] {
-  --side-bg: #199fd6; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.75);
-  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #1584b8; --side-line: rgba(255, 255, 255, 0.22);
-  --side-logo: #ffffff;
-  --bg: #eef4f9; --bg2: #ffffff; --bg3: #e2edf5; --line: #d2e2ee;
-  --fg: #1c2a38; --fg2: #6b8199; --accent: #0d8fd0; --on-accent: #ffffff;
-  --ok: #17a866; --err: #d64550; --run: #12a5e0; --shadow: rgba(30, 90, 140, 0.15);
-  --content: #f7fafc;
+/* 克莱因蓝：国际克莱因蓝深蓝块，右侧浅蓝白内容面 */
+:root[data-theme='klein'] {
+  --side-bg: #002fa7; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #00227e; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #cdd9ff;
+  --bg: #eef2fc; --bg2: #ffffff; --bg3: #dde5f5; --line: #c8d3ec;
+  --fg: #17233c; --fg2: #5f6d8d; --accent: #0037c8; --on-accent: #ffffff;
+  --ok: #17a866; --err: #d64550; --run: #2b58d6; --shadow: rgba(20, 40, 90, 0.16);
+  --content: #f5f7fd; --on-user: #17233c;
 }
-/* 奶油暖米：左侧焦糖暖棕块，右侧奶油纸感内容面，长时间护眼 */
-:root[data-theme='cream'] {
-  --side-bg: #a97f52; --side-fg: #fffaf2; --side-fg2: rgba(255, 248, 238, 0.75);
-  --side-hover: rgba(255, 255, 255, 0.14); --side-solid: #966f42; --side-line: rgba(255, 255, 255, 0.2);
-  --side-logo: #ffe9c9;
-  --bg: #f6f0e2; --bg2: #fdfaf2; --bg3: #ece2cc; --line: #e0d3b8;
-  --fg: #4a3f2f; --fg2: #8f8168; --accent: #d97b2f; --on-accent: #fff8ee;
-  --ok: #6a9a3f; --err: #c65b4e; --run: #d9a22f; --shadow: rgba(120, 90, 40, 0.14);
-  --content: #faf5ea;
+/* 蒂芙尼蓝：清新蒂芙尼蓝绿块，右侧淡青白内容面 */
+:root[data-theme='tiffany'] {
+  --side-bg: #0bbab2; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #09a09a; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #d6fbf8;
+  --bg: #e8f5f4; --bg2: #ffffff; --bg3: #d6ecea; --line: #bfe2df;
+  --fg: #10393b; --fg2: #587f7e; --accent: #0eaaa2; --on-accent: #ffffff;
+  --ok: #178a5a; --err: #d64550; --run: #12b0ad; --shadow: rgba(20, 90, 90, 0.15);
+  --content: #f2faf9; --on-user: #10393b;
 }
-/* 薄荷青绿：左侧青绿块，右侧薄荷白内容面 */
-:root[data-theme='mint'] {
-  --side-bg: #0e9f6e; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
-  --side-hover: rgba(255, 255, 255, 0.15); --side-solid: #0c8a5f; --side-line: rgba(255, 255, 255, 0.2);
-  --side-logo: #d7f5e7;
-  --bg: #eef5f0; --bg2: #fbfdfb; --bg3: #dcebe1; --line: #cbe4d3;
-  --fg: #1f3429; --fg2: #5f8272; --accent: #12996b; --on-accent: #ffffff;
-  --ok: #17a866; --err: #d9534f; --run: #17b978; --shadow: rgba(30, 90, 60, 0.14);
-  --content: #f5faf6;
+/* 普鲁士蓝：深沉普鲁士蓝块，右侧浅蓝内容面 */
+:root[data-theme='prussian'] {
+  --side-bg: #003153; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #002444; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #c6d9e8;
+  --bg: #eaf1f7; --bg2: #ffffff; --bg3: #d8e4ee; --line: #bfd0df;
+  --fg: #123248; --fg2: #5b7084; --accent: #0a5090; --on-accent: #ffffff;
+  --ok: #178a5a; --err: #c94a52; --run: #1f6fb0; --shadow: rgba(20, 50, 80, 0.16);
+  --content: #f2f6fa; --on-user: #123248;
 }
-/* 淡粉蔷薇：左侧蔷薇粉块，右侧浅粉白内容面 */
-:root[data-theme='rose'] {
-  --side-bg: #d34a6d; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
-  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #bf3f60; --side-line: rgba(255, 255, 255, 0.22);
-  --side-logo: #ffe1e9;
-  --bg: #f8eef2; --bg2: #fdf8fa; --bg3: #f1dde5; --line: #eacbd5;
-  --fg: #402730; --fg2: #926876; --accent: #e05c7e; --on-accent: #ffffff;
-  --ok: #3aa773; --err: #d64550; --run: #e0728e; --shadow: rgba(160, 60, 90, 0.13);
-  --content: #fdf5f7;
+/* 提香红：陶土暖红块，右侧暖米白内容面 */
+:root[data-theme='titian'] {
+  --side-bg: #b13e30; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.8);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #983428; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #ffdcd2;
+  --bg: #f8efe9; --bg2: #fffdfb; --bg3: #f0dfd4; --line: #e0c5b8;
+  --fg: #3d211b; --fg2: #8a6259; --accent: #c94b37; --on-accent: #ffffff;
+  --ok: #4f9d5c; --err: #d64550; --run: #d06a3f; --shadow: rgba(120, 50, 30, 0.16);
+  --content: #fcf6f1; --on-user: #3d211b;
+}
+/* 马尔斯绿：沉稳马尔斯绿块，右侧薄荷白内容面 */
+:root[data-theme='mars'] {
+  --side-bg: #3f7d5c; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #366b4e; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #cfe9da;
+  --bg: #eaf3ec; --bg2: #ffffff; --bg3: #d6e8dc; --line: #bed8c8;
+  --fg: #1a3325; --fg2: #5f7d6c; --accent: #2e9e6f; --on-accent: #ffffff;
+  --ok: #178a5a; --err: #d64550; --run: #26b184; --shadow: rgba(30, 90, 60, 0.15);
+  --content: #f3f8f4; --on-user: #1a3325;
+}
+/* 凡戴克棕：焦糖凡戴克棕块，右侧奶油纸感内容面，护眼 */
+:root[data-theme='vandyke'] {
+  --side-bg: #6a442f; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.8);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #593a29; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #f3decf;
+  --bg: #f5efe6; --bg2: #fffcf7; --bg3: #eadfcf; --line: #d9c9b5;
+  --fg: #3a2c20; --fg2: #83715c; --accent: #945430; --on-accent: #fff8ee;
+  --ok: #6a9a3f; --err: #c65b4e; --run: #c98a3f; --shadow: rgba(90, 60, 40, 0.16);
+  --content: #faf5ea; --on-user: #3a2c20;
+}
+/* 勃艮第红：深酒红块，右侧淡玫白内容面 */
+:root[data-theme='burgundy'] {
+  --side-bg: #6b1f22; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.78);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #57191b; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #f4cfd1;
+  --bg: #f8eef0; --bg2: #fffafb; --bg3: #f0dbe0; --line: #e2c4cc;
+  --fg: #3a1d20; --fg2: #8a5f64; --accent: #8c2a2e; --on-accent: #ffffff;
+  --ok: #4f9d5c; --err: #d64550; --run: #b04a50; --shadow: rgba(110, 40, 50, 0.15);
+  --content: #fcf6f7; --on-user: #3a1d20;
+}
+/* 中国红：正红块，右侧暖白内容面 */
+:root[data-theme='china'] {
+  --side-bg: #c9101e; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.8);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #ab0e1a; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #ffd8d8;
+  --bg: #fdf0ee; --bg2: #fffafb; --bg3: #f8dfe0; --line: #eec5c6;
+  --fg: #401715; --fg2: #91605f; --accent: #d7232c; --on-accent: #ffffff;
+  --ok: #4f9d5c; --err: #d64550; --run: #d63a3a; --shadow: rgba(150, 30, 30, 0.16);
+  --content: #fff6f5; --on-user: #401715;
+}
+/* 申布伦黄：浅金黄块，右侧米白内容面 */
+:root[data-theme='schonbrunn'] {
+  --side-bg: #e0c05f; --side-fg: #3d2c10; --side-fg2: rgba(61, 44, 16, 0.72);
+  --side-hover: rgba(0, 0, 0, 0.06); --side-solid: #c9a94e; --side-line: rgba(0, 0, 0, 0.14);
+  --side-logo: #c9922a;
+  --bg: #faf5e8; --bg2: #fffdf6; --bg3: #f1e8d0; --line: #e4d5ac;
+  --fg: #3a2e14; --fg2: #8c7b4e; --accent: #c9922a; --on-accent: #ffffff;
+  --ok: #6a9a3f; --err: #c2404f; --run: #d29a2a; --shadow: rgba(120, 95, 40, 0.15);
+  --content: #fdf9ee; --on-user: #3a2e14;
+}
+/* 爱马仕橙：橙块，右侧暖白内容面 */
+:root[data-theme='hermes'] {
+  --side-bg: #f37021; --side-fg: #ffffff; --side-fg2: rgba(255, 255, 255, 0.8);
+  --side-hover: rgba(255, 255, 255, 0.16); --side-solid: #d65f17; --side-line: rgba(255, 255, 255, 0.22);
+  --side-logo: #ffe0c9;
+  --bg: #fdf3ea; --bg2: #fffaf5; --bg3: #f8e2d0; --line: #eecbaa;
+  --fg: #3d2412; --fg2: #8f6a4c; --accent: #e8611a; --on-accent: #ffffff;
+  --ok: #4f9d5c; --err: #c2404f; --run: #ef7f2e; --shadow: rgba(150, 80, 30, 0.15);
+  --content: #fff8f1; --on-user: #3d2412;
 }
 
 /* ================= 主题派生 ================= */
-/* 用户气泡底色 / 输入框与按钮描边 / 工具行路径文字，全部由 --accent 混合生成，
-   换主题自动联动。放在各主题块之后，确保覆盖上面手写的 --user（彩色主题的强调色已定）。 */
+/* 用户气泡底色 / 气泡文字 / 输入框与按钮描边 / 工具行路径文字，全部由 --accent 混合生成，
+   --on-user 与气泡底色匹配（深底白字、浅底黑字），换主题自动联动。
+   放在各主题块之后，确保覆盖上面手写的 --user（彩色主题的强调色已定）。 */
 :root {
   --user: color-mix(in srgb, var(--accent) 30%, var(--content));
+  --on-user: #e6e8ee;
   --field-line: color-mix(in srgb, var(--accent) 34%, var(--line));
   --step-path: color-mix(in srgb, var(--accent) 52%, var(--fg2));
 }
 :root[data-theme='dark'] {
   --user: color-mix(in srgb, var(--accent) 34%, var(--content));
+  --on-user: #e6e8ee;
   --field-line: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
 /* 简约浅：用户气泡与发送/停止按钮用中性灰，不做蓝色强调 */
 :root[data-theme='light'] {
   --user: #e3e3e3;
+  --on-user: #1f232b;
   --field-line: #dbdbdb;
 }
 :root[data-theme='light'] .send-round { color: var(--fg2); }
@@ -231,7 +295,7 @@ input, textarea { font: inherit; }
 /* 用户气泡：气泡 + 折叠按钮纵向排列，按钮与气泡同侧对齐 */
 .ubox { display: flex; flex-direction: column; align-items: flex-end; max-width: 72%; min-width: 0; }
 .ubub {
-  background: var(--user); border-radius: 16px; padding: 8px 14px;
+  background: var(--user); color: var(--on-user); border-radius: 16px; padding: 8px 14px;
   max-width: 100%; white-space: pre-wrap; word-break: break-word; line-height: 1.55;
 }
 /* 气泡下方悬浮操作列：编辑 / 复制（hover 显示，随气泡纵向排在下面） */
@@ -636,6 +700,21 @@ input, textarea { font: inherit; }
 .primary.danger-btn { background: var(--err); color: var(--bg); }
 
 /* ================= 设置页（行式列表，无卡片框） ================= */
+.set-layout { flex: 1; display: flex; min-height: 0; }
+/* 左侧导航：主题 / 模型 / MCP */
+.set-menu {
+  width: 200px; flex-shrink: 0; padding: 26px 12px;
+  border-right: 1px solid var(--line); overflow-y: auto;
+}
+.set-item {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  text-align: left; background: transparent; border: none;
+  color: var(--fg2); padding: 9px 12px; border-radius: 9px; font-size: 13.5px;
+}
+.set-item:hover { color: var(--fg); background: var(--bg3); }
+.set-item.on { color: var(--fg); background: var(--bg3); font-weight: 600; }
+.set-item.on svg { color: var(--accent); }
+
 .setbody { flex: 1; overflow-y: auto; padding: 30px 26px; }
 .setbody > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .setbody section { margin-bottom: 38px; }
