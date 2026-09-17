@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, FileDiff, FilePlus, FileText,
+  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff, FilePlus, FileText,
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, type MessageView, type ModelSel, type Part, type Session } from '../oc'
+import { oc, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
+import { Modal } from './Modal'
 import { Markdown } from './Markdown'
 import type { Project } from './Sidebar'
 
@@ -61,7 +62,8 @@ export function ChatView(p: Props) {
   const [busySet, setBusySet] = useState<Record<string, boolean>>({})
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
-  const [queue, setQueue] = useState<string[]>([])
+  /** 队列项记录发起时的会话：消费时回原会话执行，不跟当前视图走 */
+  const [queue, setQueue] = useState<{ sid: string; text: string }[]>([])
   const [qCollapsed, setQCollapsed] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
@@ -77,6 +79,10 @@ export function ChatView(p: Props) {
   const turnBase = useRef<Set<string>>(new Set())
   // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文）
   const inflight = useRef<{ sid: string; text: string } | null>(null)
+  // 已发送消息的历史：Ctrl+Z 逐条回看、Ctrl+Y 前进；histPos == length 表示在草稿态
+  const hist = useRef<string[]>([])
+  const histPos = useRef(0)
+  const draftRef = useRef('')
   // 打字机：partID → 已吐出的字符数；ticker 定时器；被插队的队列项下标
   const shown = useRef<Map<string, number>>(new Map())
   const ticker = useRef<number | null>(null)
@@ -87,6 +93,20 @@ export function ChatView(p: Props) {
   const [previews, setPreviews] = useState<Record<string, string>>({})
   // 本轮开发任务清单（todo.write / todo.updated 事件驱动，完成项中划线）
   const [todos, setTodos] = useState<TodoItem[]>([])
+  // 内核 question 工具的待答问题（事件 + busy 轮询双通道，阻塞等待用户应答）
+  const [asks, setAsks] = useState<QuestionAsk[]>([])
+  // 内核管理的终端（pty）：有 running 的才在项目名旁显示入口
+  const [terms, setTerms] = useState<PtySession[]>([])
+  const [showTerms, setShowTerms] = useState(false)
+  const asksRef = useRef<QuestionAsk[]>([])
+  asksRef.current = asks
+  /** 正在提交应答的请求 id：轮询对账时跳过，防止卡片闪回 */
+  const replyingRef = useRef<Set<string>>(new Set())
+  // 20 秒无输出提醒：只提示不干预——处理中绝不主动停止任务（长命令、慢模型首包都是正常等待）
+  const stall = useRef({ since: 0 })
+  const stallNoted = useRef(false)
+  // bash 类工具的起始计时：长跑超 30s 视为「终端运行中」，不算处理中
+  const termStart = useRef<Record<string, number>>({})
   // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
   const pollFingerprint = useRef('')
 
@@ -95,6 +115,23 @@ export function ChatView(p: Props) {
 
   /** 当前查看的会话是否在处理中——别的会话在跑时，这里必须是 false（不显示思考、不排队） */
   const busy = p.sessionId !== '' && !!busySet[p.sessionId]
+  // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
+  // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
+  const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
+  // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
+  // 新消息发送将中止当前轮并接管
+  let terminalBlocked = false
+  if (busy && lastAid) {
+    const m = msgs.find((x) => x.info.id === lastAid)
+    const runTool = m?.parts.find((x) => x.type === 'tool' && x.state?.status === 'running')
+    const tname = (runTool?.tool ?? '').toLowerCase()
+    if (runTool && (tname === 'bash' || tname === 'shell' || tname === 'execute')) {
+      const t0 = termStart.current[runTool.id] ?? (termStart.current[runTool.id] = Date.now())
+      terminalBlocked = Date.now() - t0 > 30000
+    }
+  } else if (Object.keys(termStart.current).length) {
+    termStart.current = {}
+  }
 
   /** busySet 的同步镜像 + 修改入口：事件回调（effect 只注册一次）里要用最新值 */
   const busySetRef = useRef<Record<string, boolean>>({})
@@ -138,6 +175,7 @@ export function ChatView(p: Props) {
     setPreviews({})
     setQueue([])
     setTodos([])
+    setAsks([])
     if (!p.sessionId) {
       setMsgs([])
       setInput('')
@@ -183,6 +221,12 @@ export function ChatView(p: Props) {
         const pr = e.properties as { sessionID?: string; todos?: TodoItem[] }
         if (pr.sessionID !== sidRef.current) return
         setTodos(pr.todos ?? [])
+      } else if (e.type === 'question.v2.asked') {
+        const q = e.properties as unknown as QuestionAsk
+        if (q && q.id && q.sessionID === sidRef.current) setAsks((prev) => [...prev.filter((x) => x.id !== q.id), q])
+      } else if (e.type === 'question.v2.replied' || e.type === 'question.v2.rejected') {
+        const pr = e.properties as { requestID?: string }
+        setAsks((prev) => prev.filter((x) => x.id !== pr.requestID))
       } else if (e.type === 'session.idle') {
         const idleSid = (e.properties as { sessionID?: string }).sessionID
         if (!idleSid || !busySetRef.current[idleSid]) return
@@ -220,6 +264,7 @@ export function ChatView(p: Props) {
         for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
         inflight.current = null
         setTodos([])
+        setAsks([])
         setError('')
         if (sidRef.current) {
           oc.messages(sidRef.current, dirRef.current)
@@ -288,9 +333,9 @@ export function ChatView(p: Props) {
       i = Math.min(hijack.current, queue.length - 1)
       hijack.current = null
     }
-    const text = queue[i]
+    const item = queue[i]
     setQueue((q) => q.filter((_, k) => k !== i))
-    runPrompt(text)
+    runPrompt(item.text, item.sid || undefined)
   }, [busy, queue])
 
   // 点新任务/点任务：光标自动落进输入框
@@ -336,15 +381,44 @@ export function ChatView(p: Props) {
     if (!busy || !p.sessionId) return
     const sid = p.sessionId
     let alive = true
+    stall.current.since = Date.now()
+    stallNoted.current = false
+    /** 20 秒无输出提醒：只提示，绝不主动中止——长命令、慢模型首包都是正常等待 */
+    const maybeStall = (list: MessageView[]) => {
+      const now = Date.now()
+      // 工具还在跑（长命令是正常的）、或正等用户回答提问，都不算挂
+      if (list.some((m) => m.parts.some((x) => x.type === 'tool' && x.state?.status === 'running')) || asksRef.current.length > 0) {
+        stall.current.since = now
+        stallNoted.current = false
+        return
+      }
+      if (now - stall.current.since < 20000) return
+      if (!stallNoted.current) {
+        stallNoted.current = true
+        setError('AI 已 20 秒没有输出，仍在等待模型响应；若长时间无恢复，可点停止按钮后重发。')
+      }
+    }
     const sync = async () => {
       if (!alive) return
+      // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准
+      try {
+        const list = await oc.questions()
+        const mine = (Array.isArray(list) ? list : []).filter((x) => x.sessionID === sid && !replyingRef.current.has(x.id))
+        const cur = asksRef.current
+        if (mine.length !== cur.length || mine.some((x) => !cur.some((k) => k.id === x.id))) setAsks(mine)
+      } catch { /* 忽略 */ }
       try {
         const list = await oc.messages(sid, dirRef.current)
         if (!alive || sid !== sidRef.current || sid !== p.sessionId) return
         // 指纹：消息数 + 各 part 长度。内容无变化直接跳过，避免无谓渲染
         const fp = list.map((m) => m.info.id + ':' + m.parts.map((x) => x.type + (x.text?.length ?? 0)).join(',')).join('|')
-        if (fp === pollFingerprint.current) return
+        if (fp === pollFingerprint.current) {
+          maybeStall(list)
+          return
+        }
         pollFingerprint.current = fp
+        stall.current.since = Date.now()
+        stallNoted.current = false
         setMsgs((prev) => mergePoll(list, prev, texts.current, shown.current, startTicker))
       } catch {
         /* 内核瞬时不可达，下一轮再试 */
@@ -389,13 +463,50 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // 内核管理的终端（pty）：pty.* 事件即时刷新 + 5 秒轮询兜底
+  useEffect(() => {
+    let alive = true
+    const sync = async () => {
+      try {
+        const list = await oc.terminals()
+        if (alive) setTerms(Array.isArray(list) ? list : [])
+      } catch { /* 内核瞬时不可达 */ }
+    }
+    const t = window.setInterval(sync, 5000)
+    const off = window.qingniao.onEvent((raw) => {
+      const e = raw as { type: string }
+      if (e.type === 'pty.created' || e.type === 'pty.updated' || e.type === 'pty.exited' || e.type === 'pty.deleted') sync()
+    })
+    sync()
+    return () => {
+      alive = false
+      clearInterval(t)
+      off()
+    }
+  }, [])
+
+  /** 终止内核终端：乐观移除，实际结果由下轮轮询纠偏 */
+  function killTerm(t: PtySession) {
+    setTerms((prev) => prev.filter((x) => x.id !== t.id))
+    oc.killTerminal(t.id, dirRef.current).catch(() => { /* 已退出 */ })
+  }
+
   async function send() {
     const text = input.trim()
     if (!text) return
     setInput('')
     setError('')
+    hist.current.push(text)
+    histPos.current = hist.current.length
     if (busy) {
-      setQueue((q) => [...q, text])
+      // 终端长跑卡住本轮：发送新消息 = 用户主动接管（中止当前轮后立即执行，不进队列）
+      if (terminalBlocked && sidRef.current) {
+        const sid = sidRef.current
+        oc.abort(sid).catch(() => { /* 已结束 */ })
+        window.setTimeout(() => runPrompt(text, sid), 900)
+        return
+      }
+      setQueue((q) => [...q, { sid: sidRef.current, text }])
       return
     }
     await runPrompt(text)
@@ -429,24 +540,36 @@ export function ChatView(p: Props) {
       parts: [{ id: tmpId + '-p', sessionID: sid, messageID: tmpId, type: 'text', text }]
     }
     setMsgs((prev) => [...prev, optimistic])
+    let transportLost = false
     try {
       await oc.prompt(sid, p.project?.path, text, parseModel(p.model))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const status = (e as Error & { status?: number }).status
+      // 502/503 是主进程代抛的传输层故障（内核还在跑），不代表任务结束：
+      // 任务继续执行任意时长都由事件流与轮询展示，session.idle / SSE 重连负责收尾。
+      // 只有内核明确拒绝（如 4xx，请求未被接受）才当场报错收尾。
+      if (status && status !== 502 && status !== 503) {
+        setError(e instanceof Error ? e.message : String(e))
+        markBusy(sid, false)
+      } else {
+        transportLost = true
+      }
     } finally {
       inflight.current = null
-      // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用；仅当前仍停在本轮会话时清——
-      // 队列插队已在本会话开新轮时不能误清新轮）
-      if (sidRef.current === sid && busySetRef.current[sid]) markBusy(sid, false)
-      // 已切走（新任务草稿/别的会话）：界面缓冲归切走时加载的新会话所有，绝不清理，避免盖掉正在流式的新任务
-      if (sidRef.current !== sid) return
-      toolRaw.current.clear()
-      setPreviews({})
-      try {
-        const list = await oc.messages(sid, p.project?.path)
-        setMsgs(hydrate(list, shown.current, texts.current))
-        startTicker()
-      } catch { /* 保留已渲染内容 */ }
+      if (!transportLost) {
+        // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用；仅当前仍停在本轮会话时清——
+        // 队列插队已在本会话开新轮时不能误清新轮）
+        if (sidRef.current === sid && busySetRef.current[sid]) markBusy(sid, false)
+        // 已切走（新任务草稿/别的会话）：界面缓冲归切走时加载的新会话所有，绝不清理，避免盖掉正在流式的新任务
+        if (sidRef.current !== sid) return
+        toolRaw.current.clear()
+        setPreviews({})
+        try {
+          const list = await oc.messages(sid, p.project?.path)
+          setMsgs(hydrate(list, shown.current, texts.current))
+          startTicker()
+        } catch { /* 保留已渲染内容 */ }
+      }
     }
   }
 
@@ -456,21 +579,47 @@ export function ChatView(p: Props) {
       hijack.current = i
       oc.abort(sidRef.current).catch(() => { /* 已结束 */ })
     } else {
-      const text = queue[i]
+      const item = queue[i]
       setQueue((q) => q.filter((_, k) => k !== i))
-      runPrompt(text)
+      runPrompt(item.text, item.sid || undefined)
     }
   }
 
   function queueEdit(i: number) {
-    const text = queue[i]
+    const item = queue[i]
     setQueue((q) => q.filter((_, k) => k !== i))
-    setInput(text)
+    setInput(item.text)
+  }
+
+  /** 应答内核提问：提交后内核继续本轮任务；提交期间轮询对账跳过该请求，防止卡片闪回 */
+  function replyAsk(req: QuestionAsk, answers: string[][]) {
+    replyingRef.current.add(req.id)
+    setAsks((prev) => prev.filter((x) => x.id !== req.id))
+    oc.replyQuestion(req.id, answers, dirRef.current)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => replyingRef.current.delete(req.id))
+  }
+
+  function rejectAsk(req: QuestionAsk) {
+    setAsks((prev) => prev.filter((x) => x.id !== req.id))
+    oc.rejectQuestion(req.id, dirRef.current).catch(() => { /* 已应答/已失效 */ })
   }
 
   return (
     <main className="main">
-      <div className="msgs" ref={scrollRef} onScroll={onMsgsScroll}>
+      <div
+        className="msgs"
+        ref={scrollRef}
+        onScroll={onMsgsScroll}
+        onWheel={(e) => {
+          // 上滚瞬间同步脱离吸底：流式期间 24ms 一帧的自动滚动会赶在 scroll 事件前把位置拉回底部，
+          // 只有拖滚动条（持续触发 onScroll）能赢，滚轮就这么被"吸"回去了
+          if (e.deltaY < 0) {
+            atBottomRef.current = false
+            setAtBottom(false)
+          }
+        }}
+      >
         <div className="col">
           {error && (
             <div className="errbar">
@@ -487,27 +636,37 @@ export function ChatView(p: Props) {
               任务在左侧项目文件夹内执行，模型可在下方切换。
             </div>
           )}
-          {msgs.map((m, idx) =>
+          {msgs.map((m) =>
             m.info.role === 'user' ? (
-              <UserBubble key={m.info.id} text={m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')} />
+              <UserBubble key={m.info.id} text={m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')} onEdit={(t) => { setInput(t); taRef.current?.focus() }} />
             ) : (
               <div key={m.info.id} className="amsg">
                 {m.parts.map((part) => (
-                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy} />
+                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} />
                 ))}
-                {busy && idx === msgs.length - 1 && (
-                  <span className="stream-dots"><i /><i /><i /></span>
-                )}
               </div>
             )
           )}
-          {busy && !msgs.some((m) => m.info.role === 'assistant' && !turnBase.current.has(m.info.id)) && (
+          {asks.length > 0 && (
+            <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
+          )}
+          {todos.length > 0 && <TodoCard todos={todos} live={busy} />}
+          {busy && (
             <div className="amsg busyline">
-              <LoaderCircle size={13} className="spin" />
-              正在思考，已用时 {fmtElapsed(elapsed)}
+              {terminalBlocked ? (
+                '终端运行中 · 新消息发送将接管任务'
+              ) : (
+                <>
+                  <LoaderCircle size={13} className="spin" />
+                  {asks.length > 0
+                    ? '等待你回答'
+                    : msgs.some((m) => m.info.role === 'assistant' && !turnBase.current.has(m.info.id))
+                      ? `处理中，已用时 ${fmtElapsed(elapsed)}`
+                      : `正在思考，已用时 ${fmtElapsed(elapsed)}`}
+                </>
+              )}
             </div>
           )}
-          {todos.length > 0 && <TodoCard todos={todos} />}
         </div>
       </div>
 
@@ -529,9 +688,9 @@ export function ChatView(p: Props) {
             </button>
             {!qCollapsed &&
               queue.map((t, i) => (
-                <div key={i} className="qitem" title={t}>
+                <div key={i} className="qitem" title={t.text}>
                   <span className="qi-no">{i + 1}</span>
-                  <span className="qi-text">{t}</span>
+                  <span className="qi-text">{t.text}</span>
                   <span className="qacts">
                     <button className="icon-btn" title="立即执行（中断当前任务）" onClick={() => queueSend(i)}>
                       <Send size={13} />
@@ -549,6 +708,26 @@ export function ChatView(p: Props) {
         </div>
       )}
 
+      {showTerms && (
+        <Modal title="运行中的终端" onClose={() => setShowTerms(false)}>
+          {terms.filter((x) => x.status === 'running').map((t) => (
+            <div key={t.id} className="term-row">
+              <Terminal size={13} />
+              <span className="term-cmd" title={[t.command, ...(t.args ?? [])].filter(Boolean).join(' ')}>
+                {t.title || t.command}
+              </span>
+              {t.pid ? <span className="term-pid">PID {t.pid}</span> : null}
+              <button className="icon-btn danger" title="终止终端" onClick={() => killTerm(t)}>
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+          {terms.filter((x) => x.status === 'running').length === 0 && (
+            <div className="mp-empty">当前没有运行中的终端</div>
+          )}
+        </Modal>
+      )}
+
       <div className="cwrap">
         <div className="cbox col">
           <textarea
@@ -559,6 +738,22 @@ export function ChatView(p: Props) {
             placeholder={busy ? '当前任务执行中，输入新需求可加入队列' : '说出你的需求，Enter 发送 / Shift+Enter 换行'}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
+              if (e.ctrlKey && !e.altKey && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+                e.preventDefault()
+                if (!hist.current.length) return
+                if (histPos.current === hist.current.length) draftRef.current = input
+                histPos.current = Math.max(0, histPos.current - 1)
+                setInput(hist.current[histPos.current])
+                return
+              }
+              if ((e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) || (e.ctrlKey && (e.key === 'y' || e.key === 'Y'))) {
+                e.preventDefault()
+                if (histPos.current >= hist.current.length) return
+                histPos.current += 1
+                setInput(histPos.current === hist.current.length ? draftRef.current : hist.current[histPos.current])
+                return
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 send()
@@ -572,6 +767,12 @@ export function ChatView(p: Props) {
                 <Folder size={13} />
                 <span className="crow-proj-name">{p.project.name}</span>
               </span>
+            )}
+            {terms.some((x) => x.status === 'running') && (
+              <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
+                <Terminal size={13} />
+                {terms.filter((x) => x.status === 'running').length}
+              </button>
             )}
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
@@ -699,8 +900,20 @@ function mergePoll(
     out.push(merged)
     known.delete(m.info.id)
   }
-  // 本地独有的（如乐观插入的 tmp 用户消息）保留
-  known.forEach((m) => out.push(m))
+  // 本地独有的保留；乐观插入的 tmp 用户消息在真实用户消息到达后按文本匹配丢弃，避免重复气泡
+  const realUserTexts = new Set(
+    polled
+      .filter((m) => m.info.role === 'user')
+      .map((m) => m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n'))
+  )
+  known.forEach((m) => {
+    if (
+      m.info.id.startsWith('tmp-') &&
+      realUserTexts.has(m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n'))
+    )
+      return
+    out.push(m)
+  })
   return changed ? out : prev
 }
 
@@ -794,10 +1007,27 @@ function Collapsible({
   )
 }
 
-/** 用户消息气泡：超过 6 行自动折叠，点击展开全文 */
-function UserBubble({ text }: { text: string }) {
+/** 用户消息气泡：超过 6 行自动折叠；悬浮显示 编辑（放回输入框）/复制，操作列在气泡上方 */
+function UserBubble({ text, onEdit }: { text: string; onEdit: (t: string) => void }) {
+  const [copied, setCopied] = useState(false)
   return (
     <div className="umsg">
+      <div className="uacts">
+        <button className="icon-btn" title="编辑（放回输入框）" onClick={() => onEdit(text)}>
+          <Pencil size={12} />
+        </button>
+        <button
+          className="icon-btn"
+          title={copied ? '已复制' : '复制'}
+          onClick={() => {
+            navigator.clipboard?.writeText(text).catch(() => {})
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1200)
+          }}
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+        </button>
+      </div>
       <div className="ubox">
         <Collapsible maxPx={150} forceText={text}>
           <div className="ubub">{text}</div>
@@ -814,7 +1044,7 @@ const PRIORITY_META: Record<string, { label: string; cls: string }> = {
   low: { label: '低', cls: 'low' },
 }
 
-function TodoCard({ todos }: { todos: TodoItem[] }) {
+function TodoCard({ todos, live }: { todos: TodoItem[]; live?: boolean }) {
   const done = todos.filter((t) => t.status === 'completed').length
   return (
     <div className="todo-card">
@@ -832,7 +1062,7 @@ function TodoCard({ todos }: { todos: TodoItem[] }) {
               {t.status === 'completed' ? (
                 <Check size={13} />
               ) : t.status === 'in_progress' ? (
-                <LoaderCircle size={13} className="spin" />
+                live ? <LoaderCircle size={13} className="spin" /> : <span className="todo-run" />
               ) : (
                 <span className="todo-dot" />
               )}
@@ -870,6 +1100,100 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   invalid: { name: '无效调用', icon: <AlertCircle size={13} /> }
 }
 
+/** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
+function AskModal({
+  req,
+  onReply,
+  onReject
+}: {
+  req: QuestionAsk
+  onReply: (answers: string[][]) => void
+  onReject: () => void
+}) {
+  const [sel, setSel] = useState<string[][]>(() => req.questions.map(() => []))
+  const [draft, setDraft] = useState<string[]>(() => req.questions.map(() => ''))
+  const [step, setStep] = useState(0)
+  const i = Math.min(step, req.questions.length - 1)
+  const q = req.questions[i]
+  const last = i >= req.questions.length - 1
+
+  function toggle(label: string) {
+    setSel((prev) =>
+      prev.map((s, k) => {
+        if (k !== i) return s
+        if (s.includes(label)) return s.filter((x) => x !== label)
+        return q.multiple ? [...s, label] : [label]
+      })
+    )
+  }
+
+  function addCustom() {
+    const v = (draft[i] ?? '').trim()
+    if (!v) return
+    setSel((prev) => prev.map((s, k) => (k === i && !s.includes(v) ? [...s, v] : s)))
+    setDraft((prev) => prev.map((d, k) => (k === i ? '' : d)))
+  }
+
+  return (
+    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} onClose={onReject}>
+      <div className="ask-q">
+        <div className="ask-title">{q.question}</div>
+        <div className="ask-opts">
+          {(q.options ?? []).map((o) => (
+            <button
+              key={o.label}
+              type="button"
+              className={'ask-opt' + (sel[i].includes(o.label) ? ' on' : '')}
+              title={o.description}
+              onClick={() => toggle(o.label)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        {(q.custom ?? true) && (
+          <div className="ask-custom">
+            <input
+              value={draft[i] ?? ''}
+              placeholder="自定义回答，回车添加…"
+              onChange={(e) => setDraft((prev) => prev.map((d, k) => (k === i ? e.target.value : d)))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  addCustom()
+                }
+              }}
+            />
+            <button type="button" className="ghost" onClick={addCustom}>
+              添加
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="ask-acts">
+        {i > 0 && (
+          <button className="ghost" onClick={() => setStep(i - 1)}>
+            上一步
+          </button>
+        )}
+        {!last && (
+          <button className="primary" onClick={() => setStep(i + 1)}>
+            下一步
+          </button>
+        )}
+        {last && (
+          <button className="primary" onClick={() => onReply(req.questions.map((_, k) => sel[k] ?? []))}>
+            提交答案
+          </button>
+        )}
+        <button className="ghost" onClick={onReject}>
+          跳过
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
 /** 内核工具的英文系统消息 → 中文 */
 function cnOutput(text: string): string {
   return text
@@ -877,6 +1201,10 @@ function cnOutput(text: string): string {
     .replace(/^Wrote file successfully\.?/i, '文件写入成功。')
     .replace(/^Update applied successfully\.?/i, '修改已应用。')
     .replace(/^Aborted\.?/i, '已中止。')
+    .replace(/^The (\w+) tool was called with invalid arguments:[\s\S]*$/i, (_m, n: string) => {
+      const zh = TOOL_META[n.toLowerCase()]?.name ?? n
+      return `「${zh}」工具的调用参数不完整，已让模型重写参数重试。`
+    })
 }
 
 function str(v: unknown): string {
@@ -963,9 +1291,14 @@ function toolTarget(part: Part, projPath?: string): string {
   const inp = part.state?.input ?? {}
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
-  // 兜底内核生成的英文摘要（如 "5 todos"）→ 中文化
+  // 兜底内核生成的英文摘要 → 中文化（"4 todos"→"4条任务"、"Asked 2 questions"→"提问 2 个问题"）
   const t = str(part.state?.title)
-  if (!raw) raw = /todos?/i.test(t) ? `${t.replace(/\s*todos?\.?/i, '条任务').trim()} 任务` : t
+  if (!raw) {
+    const asked = /^Asked (\d+) questions?$/i.exec(t)
+    if (asked) raw = `提问 ${asked[1]} 个问题`
+    else if (/todos?/i.test(t)) raw = t.replace(/\s*todos?\.?/i, '条任务').trim()
+    else raw = t
+  }
   const cut = raw.length > 90 ? raw.slice(0, 90) + '…' : raw
   return relTarget(cut, projPath)
 }
@@ -989,7 +1322,9 @@ function PartView({ part, projectPath, preview, live }: { part: Part; projectPat
     )
   }
   if (part.type === 'reasoning') {
-    return <StepLine icon={<Brain size={13} />} name="思考" status={part.text ? 'completed' : 'running'} body={<CodeBlock text={part.text ?? ''} />} />
+    // 空 reasoning（被中断/未产出内容）不渲染：避免残留出多个空「正在思考」、展开无内容
+    if (!part.text?.trim()) return null
+    return <StepLine icon={<Brain size={13} />} name="思考" status="completed" body={<CodeBlock text={part.text} />} />
   }
   if (part.type === 'tool') {
     const meta = TOOL_META[(part.tool ?? '').toLowerCase()] ?? { name: part.tool ?? '工具', icon: <Wrench size={13} /> }
@@ -1004,6 +1339,14 @@ function PartView({ part, projectPath, preview, live }: { part: Part; projectPat
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
     } else if (rawOut && (tool === 'write' || tool === 'edit' || tool === 'patch' || tool === 'apply_patch')) {
       body = <CodeBlock text={rawOut} diff />
+    } else if (rawOut && (tool === 'todowrite' || tool === 'todo_write')) {
+      // 待办清单输出是 JSON 数组：渲染成任务清单卡（历史快照不转圈），不甩原始 JSON 给用户
+      try {
+        const arr = JSON.parse(rawOut) as TodoItem[]
+        body = Array.isArray(arr) ? <TodoCard todos={arr} live={live} /> : <CodeBlock text={rawOut} />
+      } catch {
+        body = <CodeBlock text={rawOut} />
+      }
     } else if (rawOut && tool === 'task') {
       const inner = parseTaskOutput(rawOut)
       body = inner !== null ? <Markdown text={inner} /> : <CodeBlock text={rawOut} />
@@ -1018,6 +1361,7 @@ function PartView({ part, projectPath, preview, live }: { part: Part; projectPat
         target={toolTarget(part, projectPath)}
         preview={preview}
         body={body}
+        spin={st === 'running' && tool !== 'bash' && tool !== 'shell' && tool !== 'execute'}
       />
     )
   }
@@ -1036,6 +1380,7 @@ function doingLabel(name: string): string {
     case '抓取网页': case '网络搜索': return '正在查询'
     case '子任务': return '正在执行子任务'
     case '待办清单': return '正在整理任务'
+    case '提问': return '等待回答'
     default: return '进行中'
   }
 }
@@ -1046,7 +1391,8 @@ function StepLine({
   target,
   status,
   preview,
-  body
+  body,
+  spin = true
 }: {
   icon: ReactNode
   name: string
@@ -1054,6 +1400,8 @@ function StepLine({
   status: string
   preview?: string
   body?: ReactNode
+  /** running 时图标位是否转圈：终端类长跑命令不转，避免看起来像一直加载 */
+  spin?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const expandable = !!body
@@ -1074,7 +1422,7 @@ function StepLine({
         disabled={!expandable}
         onClick={() => expandable && setOpen((v) => !v)}
       >
-                <span className="step-icon">{running ? <LoaderCircle size={13} className="spin" /> : icon}</span>
+                <span className="step-icon">{running && spin ? <LoaderCircle size={13} className="spin" /> : icon}</span>
         <span className="step-name">{name}</span>
         {running && <span className="step-doing">{doingLabel(name)}</span>}
         {target && <span className="step-target" title={target}>{target}</span>}

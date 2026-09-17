@@ -77,6 +77,12 @@
   --user: color-mix(in srgb, var(--accent) 34%, var(--content));
   --field-line: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
+/* 简约浅：用户气泡与发送/停止按钮用中性灰，不做蓝色强调 */
+:root[data-theme='light'] {
+  --user: #e3e3e3;
+  --field-line: #dbdbdb;
+}
+:root[data-theme='light'] .send-round { color: var(--fg2); }
 
 /* ================= 基础 ================= */
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -221,13 +227,24 @@ input, textarea { font: inherit; }
 .errbar svg { flex-shrink: 0; margin-top: 3px; }
 .errbar span { flex: 1; min-width: 0; }
 
-.umsg { display: flex; justify-content: flex-end; margin: 10px 0; }
+.umsg { display: flex; justify-content: flex-end; margin: 10px 0; position: relative; }
 /* 用户气泡：气泡 + 折叠按钮纵向排列，按钮与气泡同侧对齐 */
 .ubox { display: flex; flex-direction: column; align-items: flex-end; max-width: 72%; min-width: 0; }
 .ubub {
   background: var(--user); border-radius: 16px; padding: 8px 14px;
   max-width: 100%; white-space: pre-wrap; word-break: break-word; line-height: 1.55;
 }
+/* 气泡上方悬浮操作列：编辑 / 复制 */
+.uacts {
+  position: absolute; top: -20px; right: 2px; z-index: 2;
+  display: flex; gap: 2px;
+  background: var(--bg3); border-radius: 7px; padding: 1px;
+  box-shadow: 0 2px 8px var(--shadow);
+  opacity: 0; pointer-events: none; transition: opacity 0.12s;
+}
+.umsg:hover .uacts { opacity: 1; pointer-events: auto; }
+.uacts .icon-btn { width: 20px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: var(--fg2); cursor: pointer; }
+.uacts .icon-btn:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 
 /* ================= 通用折叠容器 ================= */
 .cbl { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; max-width: 100%; }
@@ -328,15 +345,7 @@ input, textarea { font: inherit; }
   display: inline-block; width: 7px; height: 14px; margin-top: 2px;
   background: var(--accent); border-radius: 1px; animation: blink 1s steps(1) infinite;
 }
-/* 正文仍在生成：尾部三点跳动 loading */
-.stream-dots { display: inline-flex; gap: 4px; padding: 6px 0 2px; }
-.stream-dots i {
-  width: 5px; height: 5px; border-radius: 50%; background: var(--accent);
-  animation: dot 1.2s ease-in-out infinite;
-}
-.stream-dots i:nth-child(2) { animation-delay: 0.15s; }
-.stream-dots i:nth-child(3) { animation-delay: 0.3s; }
-@keyframes dot { 0%, 60%, 100% { opacity: 0.25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-4px); } }
+/* 正文仍在生成的加载状态统一由底部「处理中/正在思考」行承担，不再重复展示尾部三点 */
 @keyframes blink { 50% { opacity: 0; } }
 .step-code {
   background: var(--bg3); color: var(--fg2); border-radius: 10px;
@@ -392,6 +401,8 @@ input, textarea { font: inherit; }
   color: var(--accent);
 }
 .todo-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg2); opacity: 0.5; }
+/* 非当前轮次的历史清单快照里"进行中"的静态标记：不转圈，避免误读成还在处理 */
+.todo-run { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0.55; }
 .todo-text { flex: 1; min-width: 0; word-break: break-word; line-height: 22px; }
 .todo-item.completed .todo-text { text-decoration: line-through; color: var(--fg2); }
 .todo-item.completed .todo-box { color: var(--ok); }
@@ -408,6 +419,34 @@ input, textarea { font: inherit; }
 .todo-pri.medium { background: color-mix(in srgb, var(--run) 14%, transparent); color: var(--run); }
 .todo-pri.low { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
 .todo-item.completed .todo-pri { opacity: 0.5; }
+/* 工具详情里展开的任务清单：跟随详情区紧凑小字，弱化卡片感 */
+.step-body .todo-card { box-shadow: none; background: transparent; padding: 2px 0; margin: 4px 0; }
+.step-body .todo-head { font-size: 11.5px; margin-bottom: 5px; }
+.step-body .todo-text { font-size: 12px; line-height: 20px; }
+.step-body .todo-idx, .step-body .todo-box { height: 20px; }
+
+/* ================= 内核提问应答弹窗 ================= */
+.ask-q { margin-bottom: 12px; }
+.ask-title { font-size: 13.5px; color: var(--fg); margin-bottom: 8px; line-height: 1.5; }
+.ask-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-opt {
+  padding: 5px 10px; border-radius: 9px; font-size: 12.5px;
+  background: var(--bg3); color: var(--fg); border: none; cursor: pointer;
+  text-align: left; line-height: 1.4;
+}
+.ask-opt:hover { background: color-mix(in srgb, var(--accent) 14%, var(--bg3)); }
+.ask-opt.on { background: var(--accent); color: var(--on-accent); }
+.ask-custom { display: flex; gap: 6px; margin-top: 8px; }
+.ask-custom input {
+  flex: 1; min-width: 0; padding: 5px 9px; font-size: 12.5px;
+  background: var(--field-bg); color: var(--fg);
+  border: 1px solid var(--field-line); border-radius: 9px; outline: none;
+}
+.ask-custom input:focus { border-color: var(--accent); }
+.ask-custom .ghost { padding: 4px 10px; font-size: 12.5px; border-radius: 9px; }
+.ask-acts { display: flex; gap: 8px; margin-top: 4px; }
+.ask-acts .primary { padding: 5px 14px; font-size: 12.5px; border-radius: 9px; }
+.ask-acts .ghost { padding: 5px 14px; font-size: 12.5px; border-radius: 9px; }
 
 /* ================= 回到底部悬浮按钮 ================= */
 .jumpwrap { position: relative; height: 0; padding: 0 24px; }
@@ -468,6 +507,18 @@ input, textarea { font: inherit; }
 }
 .crow-proj > svg { flex-shrink: 0; opacity: 0.8; }
 .crow-proj-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 项目名右侧：有内核终端在跑时出现，点击查看列表并可直接终止 */
+.crow-term {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 8px; font-size: 12px;
+  background: transparent; border: none; color: var(--fg2); cursor: pointer;
+  flex-shrink: 0;
+}
+.crow-term:hover { background: var(--bg3); color: var(--fg); }
+.term-row { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 8px; font-size: 12.5px; }
+.term-row:hover { background: var(--bg3); }
+.term-cmd { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.term-pid { color: var(--fg2); font-size: 11px; flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 .send-round {
   display: inline-flex; align-items: center; justify-content: center;
@@ -510,7 +561,7 @@ input, textarea { font: inherit; }
 /* ================= 模型二级级联菜单 ================= */
 .menu-panel.mp {
   position: absolute; left: 0; right: auto;
-  display: flex; align-items: flex-end; gap: 4px;
+  display: flex; align-items: flex-start; gap: 4px;
   min-width: auto; max-height: 340px; overflow: visible; padding: 6px;
 }
 .mp-col {
@@ -537,7 +588,7 @@ input, textarea { font: inherit; }
 /* 二级模型列：与一级列并排（正常流布局），展开时面板自动变宽，不遮挡聊天区 */
 .mp-col2-float {
   display: flex; flex-direction: column; gap: 2px;
-  width: 220px; max-height: 328px; overflow-y: auto;
+  width: 220px; max-height: 60vh; overflow-y: auto;
 }
 
 /* ================= 按钮 ================= */
