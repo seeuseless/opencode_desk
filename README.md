@@ -1,6 +1,9 @@
 # 青鸟 QingNiao — 开源工作助手
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![GitHub](https://img.shields.io/badge/GitHub-seeuseless%2Fopencode__desk-181717?logo=github)](https://github.com/seeuseless/opencode_desk)
+
+**代码地址：<https://github.com/seeuseless/opencode_desk>**
 
 ![screenshot](screenshot/1.png)
 
@@ -16,6 +19,8 @@
 ## 运行
 
 ```bash
+git clone https://github.com/seeuseless/opencode_desk.git
+cd opencode_desk
 npm install        # 首次会下载 Electron 与 OpenCode 原生二进制
 npm run dev        # 开发模式（桌面窗口）
 npm run build      # 编译 main/preload/renderer
