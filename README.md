@@ -6,7 +6,7 @@
 
 取意神话中替人出行、把事办成带回消息的信使鸟，对标腾讯 WorkBuddy 形态的桌面 AI 工作助手，全开源技术栈：
 
-- **Agent 内核：[OpenCode](https://github.com/sst/opencode)**（MIT，60k+ star）
+- **Agent 内核：[OpenCode](https://github.com/sst/opencode)**
   主进程拉起 `opencode serve`（REST + SSE）作为内核，**原生 token 级流式**（message.part.delta），
   工具执行、任务清单（todo）、会话持久化均由内核负责；终端形态 `opencode` 同生态
 - **桌面壳：Electron + React + TypeScript**
