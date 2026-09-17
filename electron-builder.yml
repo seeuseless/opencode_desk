@@ -1,4 +1,7 @@
-# electron-builder 打包配置（win 安装包）
+# 打包说明
+# - win: NSIS 安装包（主开发平台）
+# - mac: dmg / zip（Mac 支持；个人自用可 unset CSC_IDENTITY_AUTO_DISCOVERY 跳过签名）
+# - extraResources 把 OpenCode 内核二进制拷进 resources/bin（主进程打包态从该处读取）
 appId: com.qingniao.desktop
 productName: 青鸟
 directories:
@@ -13,6 +16,9 @@ extraResources:
     to: bin
   - from: resources/icon.png
     to: icon.png
+# 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
+asarUnpack:
+  - "**/resources/bin/**"
 win:
   icon: resources/icon.ico
   target:
@@ -21,3 +27,14 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
+mac:
+  icon: resources/icon.icns
+  target:
+    - dmg
+    - zip
+  category: public.app-category.productivity
+  # 个人自用 / 无 Apple Developer 账号时，可在调用 dist:mac 脚本前导出：
+  #   export CSC_IDENTITY_AUTO_DISCOVERY=false
+  # 否则 electron-builder 会要求签名（公证另需 Apple 公证服务）。
+dmg:
+  sign: false

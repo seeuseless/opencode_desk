@@ -13,7 +13,9 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "dist": "electron-vite build && electron-builder --win"
+    "dist": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:mac:unsigned": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac"
   },
   "dependencies": {
     "highlight.js": "^11.12.0",
@@ -33,6 +35,7 @@
     "electron": "^44.4.0",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
+    "cross-env": "^7.0.3",
     "sharp": "^0.35.4",
     "typescript": "^7.0.2",
     "vite": "^7.3.6"

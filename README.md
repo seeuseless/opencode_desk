@@ -21,7 +21,14 @@ npm run dev        # 开发模式（桌面窗口）
 npm run build      # 编译 main/preload/renderer
 npm run typecheck  # 类型检查
 npm run dist       # electron-builder 打 Windows 安装包
+npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm install 自动生成）
 ```
+
+> **macOS 支持**
+> - 内核二进制：`opencode-ai` 通过 npm optional 依赖自动拉取对应架构（`opencode-darwin-arm64` / `opencode-darwin-x64`），`npm install` 后无需额外下载。
+> - 可执行位：`postinstall` 自动 `chmod +x node_modules/opencode-ai/bin/*`（mac 上 npm 装的二进制常缺 x）。
+> - 图标：`postinstall` 用 `sips` + `iconutil` 从 `resources/icon.png` 生成 `resources/icon.icns`。
+> - 签名：有 Apple Developer 账号直接 `npm run dist:mac`；个人自用/无账号用 `npm run dist:mac:unsigned` 跳过签名（Gatekeeper 会拦截，需右键打开）。
 
 ## 功能
 
