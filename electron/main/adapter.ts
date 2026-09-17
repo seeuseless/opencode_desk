@@ -114,7 +114,7 @@ class Adapter {
     const port = await findFreePort()
     this.base = `http://${HOST}:${port}`
     // 内核配置/数据全部隔离进 ~/.qingniaoai（opencode 在 XDG 目录下再套一层 opencode/）
-    this.proc = spawn(this.bin, ['serve', '--port', String(port), '--hostname', HOST], {
+    const child = spawn(this.bin, ['serve', '--port', String(port), '--hostname', HOST], {
       cwd: this.workspace,
       windowsHide: true,
       env: {
@@ -125,11 +125,15 @@ class Adapter {
         ...providerEnv(s)
       }
     })
-    this.proc.stderr.setEncoding('utf8')
-    this.proc.stderr.on('data', (chunk: string) => {
+    this.proc = child
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
       for (const line of chunk.split('\n')) if (line.trim()) console.log('[opencode]', line.trim())
     })
-    this.proc.on('exit', (code) => {
+    child.on('exit', (code) => {
+      // 重启时旧进程的退出事件可能晚于新一轮 start 到达：若 this.proc 已被替换成新内核，
+      // 说明这是上一代的退出，直接忽略——否则会清掉新进程引用并误触发自动重启（重启死循环）
+      if (this.proc !== child) return
       this.proc = null
       if (!this.stopping) {
         console.error('[opencode] 内核意外退出 code=' + String(code))
@@ -190,11 +194,15 @@ class Adapter {
           }
           backoff = 1000
         } catch {
+          // stop() 主动 abort / 正在重启（stopping）属预期内的连接关闭，不算异常：
+          // 必须在这里直接返回，绝不能触发 onUnhealthy——否则每次重启都会自我触发下一轮重启，
+          // adapter.restart() 的 do…while 永远退不出，调用方 await 永久挂起（表现为「界面不动」）
+          if (this.stopping || signal.aborted) return
           /* 连接断开走重连 */
           // 记录断连遥测 + 通知渲染层做一次轻量重同步，兜住 busy 残留等状态
           bumpTelemetryReconnect()
           this.safePush({ type: 'qingniao.sse.reconnected', properties: {} })
-          // 若内核已死（非瞬时断连），健康探测会返回 false，触发自动重启
+          // 若内核确实已死（非瞬时断连），健康探测会返回 false，触发自动重启
           if (!(await this.isHealthy())) this.onUnhealthy?.()
         }
         if (this.stopping || signal.aborted) return
