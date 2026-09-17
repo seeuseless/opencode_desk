@@ -1353,7 +1353,8 @@ function UserBubble({ text, editable, onSend }: { text: string; editable?: boole
   function sendEdit() {
     setEditing(false)
     const v = draft.trim()
-    if (!v || v === text) return
+    // 内容与原文相同也允许发送：等价于「按原话重新生成」，由下游 revert + 重发完成
+    if (!v) return
     onSend(v)
   }
 
@@ -1381,7 +1382,7 @@ function UserBubble({ text, editable, onSend }: { text: string; editable?: boole
             <button className="ghost" onClick={() => setEditing(false)}>
               取消
             </button>
-            <button className="primary" disabled={!draft.trim() || draft.trim() === text} onClick={sendEdit}>
+            <button className="primary" disabled={!draft.trim()} onClick={sendEdit}>
               发送
             </button>
           </div>
