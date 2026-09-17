@@ -19,6 +19,9 @@ export interface Session {
   id: string
   title?: string
   time?: { created?: number; updated?: number }
+  /** 父会话 id：AI 用 task 工具（子 agent）派生出来的子会话都带这个字段；
+   *  用户自己发起的会话没有。左侧任务列表只呈现用户的，故列表接口按它过滤 */
+  parentID?: string
 }
 
 export interface ToolState {
@@ -111,7 +114,12 @@ export interface PtySession {
 const dirQ = (directory?: string) => (directory ? `?directory=${encodeURIComponent(directory)}` : '')
 
 export const oc = {
-  sessions: (directory?: string) => call<Session[]>(`/session${dirQ(directory)}`),
+  /** 项目会话列表：**过滤掉 AI 派生的子会话**（task 工具 / 子 agent 创建，带 parentID）。
+   *  左侧任务列表只显示用户自己创建的会话，AI 跑子任务不再往左栏冒条目。 */
+  sessions: async (directory?: string) => {
+    const list = await call<Session[]>(`/session${dirQ(directory)}`)
+    return list.filter((s) => !s.parentID)
+  },
   createSession: (directory?: string, title?: string) =>
     call<Session>(`/session${dirQ(directory)}`, { method: 'POST', body: { title } }),
   messages: (id: string, directory?: string) => call<MessageView[]>(`/session/${id}/message${dirQ(directory)}`),
