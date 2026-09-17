@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { AlertCircle, Check, Eye, EyeOff, Globe, Layers, Link2, Pencil, Plus, RefreshCw, Terminal, Trash2 } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
-import { THEMES } from '../theme'
+import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
+import type { CustomColors } from '../themeColors'
 import type { McpCfg, ProviderCfg, SettingsCfg } from '../oc'
 
 interface Props {
@@ -11,7 +12,22 @@ interface Props {
   saving: boolean
   theme: string
   onTheme: (id: string) => void
+  custom: CustomColors
+  onCustom: (key: keyof CustomColors, value: string) => void
+  onResetCustom: () => void
 }
+
+/** 自定义主题可调的 4 个基础色：标签 + 变量键 */
+const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
+  { key: 'accent', label: '主色' },
+  { key: 'bg', label: '窗体背景' },
+  { key: 'fg', label: '正文文字' },
+  { key: 'sideBg', label: '左侧面板底色' },
+]
+
+/** 主题卡片用色块预览：内置取色卡，自定义实时取当前自定义的 4 色 */
+const swatchOf = (t: ThemeMeta, custom: CustomColors): string[] =>
+  t.id === CUSTOM_ID ? [custom.accent, custom.sideBg, custom.bg] : t.swatches
 
 interface Draft {
   isNew: boolean
@@ -183,7 +199,7 @@ export function SettingsView(p: Props) {
             <Layers size={15} /> 主题
           </h3>
           <div className="theme-grid">
-            {THEMES.map((t) => (
+            {getThemeList().map((t) => (
               <button
                 type="button"
                 key={t.id}
@@ -191,7 +207,7 @@ export function SettingsView(p: Props) {
                 onClick={() => p.onTheme(t.id)}
               >
                 <span className="swatches">
-                  {t.swatches.map((c) => (
+                  {swatchOf(t, p.custom).map((c) => (
                     <i key={c} style={{ background: c }} />
                   ))}
                 </span>
@@ -199,6 +215,23 @@ export function SettingsView(p: Props) {
               </button>
             ))}
           </div>
+          {p.theme === CUSTOM_ID && (
+            <div className="custom-editor">
+              {CUSTOM_FIELDS.map((f) => (
+                <label key={f.key} className="cc-row">
+                  <span>{f.label}</span>
+                  <input
+                    type="color"
+                    value={p.custom[f.key]}
+                    onChange={(e) => p.onCustom(f.key, e.target.value)}
+                  />
+                </label>
+              ))}
+              <button type="button" className="ghost cc-reset" onClick={p.onResetCustom}>
+                重置
+              </button>
+            </div>
+          )}
         </section>
 
         <section>

@@ -1776,11 +1776,15 @@ function StepLine({
                 <span className="step-icon">{running && spin ? <LoaderCircle size={13} className="spin" /> : icon}</span>
         <span className="step-name">{name}</span>
         {running && <span className="step-doing">{doingLabel(name)}</span>}
-        {target && <span className="step-target" title={target}>{target}</span>}
-        {stats && (stats.additions > 0 || stats.deletions > 0) && (
-          <span className="step-stat" title={`新增 ${stats.additions} 行 · 删除 ${stats.deletions} 行`}>
-            {stats.additions > 0 && <span className="d-add">+{stats.additions}</span>}
-            {stats.deletions > 0 && <span className="d-del">-{stats.deletions}</span>}
+        {target && (
+          <span className="step-target" title={target}>
+            <span className="step-target-text">{target}</span>
+            {stats && (stats.additions > 0 || stats.deletions > 0) && (
+              <span className="step-stat" title={`新增 ${stats.additions} 行 · 删除 ${stats.deletions} 行`}>
+                {stats.additions > 0 && <span className="d-add">+{stats.additions}</span>}
+                {stats.deletions > 0 && <span className="d-del">-{stats.deletions}</span>}
+              </span>
+            )}
           </span>
         )}
         {status === 'error' && <AlertCircle size={13} className="step-err" />}

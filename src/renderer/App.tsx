@@ -6,7 +6,8 @@ import { SettingsView } from './components/SettingsView'
 import { Titlebar } from './components/Titlebar'
 import { oc, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import { load, save } from './store'
-import { THEMES } from './theme'
+import { CUSTOM_ID, THEMES } from './theme'
+import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
 
 type View = 'chat' | 'settings'
 
@@ -17,11 +18,13 @@ const sortSessions = (list: Session[]) =>
 function loadTheme(): string {
   const t = load<string>('qingniao.theme', 'light')
   if (t === 'qqblue') return 'skyblue'
+  if (t === CUSTOM_ID) return CUSTOM_ID
   return THEMES.some((x) => x.id === t) ? t : 'light'
 }
 
 export default function App() {
   const [theme, setTheme] = useState<string>(loadTheme)
+  const [custom, setCustom] = useState<CustomColors>(() => load('qingniao.themeColors', DEFAULT_CUSTOM))
   const [view, setView] = useState<View>('chat')
   const [projects, setProjects] = useState<Project[]>([])
   const [activeId, setActiveId] = useState('')
@@ -47,7 +50,17 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     save('qingniao.theme', theme)
-  }, [theme])
+    const el = document.documentElement
+    if (theme === CUSTOM_ID) {
+      // 自定义主题：内联派生变量权重最高，覆盖所有样式表配色
+      for (const [k, v] of Object.entries(deriveVars(custom))) el.style.setProperty(k, v)
+    } else {
+      // 离开自定义主题：清掉内联覆盖，回到内置主题样式表
+      for (const k of DERIVED_KEYS) el.style.removeProperty(k)
+    }
+  }, [theme, custom])
+
+  useEffect(() => save('qingniao.themeColors', custom), [custom])
 
   useEffect(() => save('qingniao.model', model), [model])
 
@@ -283,6 +296,9 @@ export default function App() {
             saving={saving}
             theme={theme}
             onTheme={setTheme}
+            custom={custom}
+            onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
+            onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
           />
         ) : activeProject ? (
           <ChatView

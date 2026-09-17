@@ -17,3 +17,6 @@ dist
 /.qn-verify-data
 /.workbuddy
 /.gitcheck.txt
+
+# ZCode 工具目录
+.zcode/
