@@ -89,6 +89,15 @@ scripts/                   gen-icon 图标生成、smoke 内核冒烟
 
 完整依赖清单及许可见 `package.json` 与各项目上游仓库。
 
+> **字体**：本项目**不打包任何字体文件**，界面全部引用系统已装字体，不构成再分发。
+>
+> - 正文优先 `Noto Sans SC`（思源黑体，SIL OFL 1.1）——中英同源设计，混排字重一致，是长时间阅读的主选；
+>   未安装时依次退回 `Segoe UI Variable Text` / `Segoe UI` / `Microsoft YaHei`。
+> - 等宽优先 `Sarasa Mono SC`（更纱黑体，SIL OFL 1.1，中文宽度恰为英文 2 倍，中英混排对齐）；
+>   未安装时退回 `Cascadia Mono`（SIL OFL 1.1）/ `Consolas`。
+>
+> 落到系统字体引用而非内置，是因为微软雅黑、等线、Segoe UI 等均为微软专有授权，只能随系统引用、不可再分发。
+
 ## 许可
 
 [MIT License](./LICENSE) — 版权 © 2026 QingNiao (青鸟)。

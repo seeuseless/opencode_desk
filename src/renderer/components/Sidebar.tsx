@@ -35,12 +35,12 @@ interface Props {
 }
 
 export function Sidebar(p: Props) {
-  /** 每个文件夹「显示全部会话」的展开状态——持久化，重启后记住 */
-  const [expandAll, setExpandAll] = useState<Record<string, boolean>>(() => load('qingniao.sessExpand', {}))
+  /** 每个文件夹「已显示会话条数」——持久化，重启后记住；点「显示更多会话」每次 +5 */
+  const [shownCount, setShownCount] = useState<Record<string, number>>(() => load('qingniao.sessShown', {}))
   const [confirmDel, setConfirmDel] = useState<Project | null>(null)
   const [confirmDelSess, setConfirmDelSess] = useState<{ proj: Project; sess: Session } | null>(null)
 
-  useEffect(() => save('qingniao.sessExpand', expandAll), [expandAll])
+  useEffect(() => save('qingniao.sessShown', shownCount), [shownCount])
 
   return (
     <aside className="side">
@@ -49,16 +49,16 @@ export function Sidebar(p: Props) {
           <div className="proj-empty">
             <FolderPlus size={22} />
             <span>还没有项目</span>
-            <button className="ghost" onClick={p.onAddProject}>
-              添加项目文件夹
+            <button className="ghost pick-dir" onClick={p.onAddProject}>
+              选择本地文件夹
             </button>
           </div>
         )}
         {p.projects.map((proj) => {
           const isOpen = !!p.expanded[proj.id]
           const list = p.sessionsMap[proj.path] ?? []
-          const all = !!expandAll[proj.id]
-          const shown = all ? list : list.slice(0, COLLAPSE_AT)
+          const count = shownCount[proj.id] ?? COLLAPSE_AT
+          const shown = list.slice(0, count)
           return (
             <div key={proj.id}>
               <div className="proj" title={proj.path} onClick={() => p.onToggleProject(proj.id)}>
@@ -117,10 +117,27 @@ export function Sidebar(p: Props) {
                   {list.length > COLLAPSE_AT && (
                     <div
                       className="sess-more"
-                      onClick={() => setExpandAll((m) => ({ ...m, [proj.id]: !m[proj.id] }))}
+                      onClick={() =>
+                        setShownCount((m) => ({
+                          ...m,
+                          [proj.id]:
+                            (m[proj.id] ?? COLLAPSE_AT) < list.length
+                              ? Math.min((m[proj.id] ?? COLLAPSE_AT) + 5, list.length)
+                              : COLLAPSE_AT,
+                        }))
+                      }
                     >
-                      {all ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                      {all ? '收起' : `显示全部 ${list.length} 条会话`}
+                      {(shownCount[proj.id] ?? COLLAPSE_AT) < list.length ? (
+                        <>
+                          <ChevronRight size={13} />
+                          显示更多会话
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown size={13} />
+                          收起
+                        </>
+                      )}
                     </div>
                   )}
                 </>

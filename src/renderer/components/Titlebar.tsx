@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Bird, FolderPlus, Maximize2, Minimize2, Minus, X } from 'lucide-react'
+import { Maximize2, Minimize2, Minus, X } from 'lucide-react'
 
 /** 自绘标题栏：替代原生 header，颜色跟随主题；整条可拖拽 */
-export function Titlebar({ onAddProject }: { onAddProject: () => void }) {
+export function Titlebar() {
   const [maxed, setMaxed] = useState(false)
 
   useEffect(() => {
@@ -13,11 +13,8 @@ export function Titlebar({ onAddProject }: { onAddProject: () => void }) {
   return (
     <header className="titlebar">
       <span className="tb-brand">
-        <Bird size={15} className="tb-logo" /> 青鸟 <span className="tb-en">QingNiao</span>
+        <span className="tb-en">QingNiao</span>
       </span>
-      <button className="icon-btn tb-btn" title="添加项目（选择本地文件夹）" onClick={onAddProject}>
-        <FolderPlus size={16} />
-      </button>
       <span className="tb-drag" />
       <button className="icon-btn tb-btn" title="最小化" onClick={() => window.qingniao.winMin()}>
         <Minus size={15} />
