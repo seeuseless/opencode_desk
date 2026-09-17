@@ -275,6 +275,7 @@ input, textarea { font: inherit; }
   width: 26px; height: 26px; border-radius: 6px; flex-shrink: 0;
 }
 .icon-btn:hover { background: var(--line); color: var(--fg); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; background: none; color: var(--fg2); }
 .icon-btn.danger:hover { color: var(--err); }
 /* 侧栏里的图标按钮用面板配色（覆盖通用色） */
 .side .icon-btn { color: var(--side-fg2); }
@@ -983,17 +984,38 @@ input, textarea { font: inherit; }
 .prow.bad .sk-desc { color: var(--err); }
 .chip.bad { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
 
-/* ---------- 浏览面板：AI 浏览器操作（headless playwright）的右侧跟随画面 ---------- */
-/* 会话行容器：对话主体与面板并排；面板可放大为 flex:1 占满会话区（侧栏不受影响） */
+/* ---------- 浏览面板：AI 浏览器操作（headless playwright）时右侧滑出的内嵌浏览器 ---------- */
+/* 会话行容器：对话主体与面板并排；面板可放大为 flex:1 占满会话区 */
 .chat-row { flex: 1; min-height: 0; min-width: 0; display: flex; }
-.browser-panel { width: 40%; min-width: 280px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--content); }
+.browser-panel { position: relative; width: 40%; min-width: 280px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--content); }
 .browser-panel.max { width: auto; min-width: 0; max-width: none; flex: 1; }
-/* 放大时对话区让位隐藏（组件保持挂载，任务与输入状态不丢） */
+/* 放大时左栏让位隐藏（组件保持挂载，任务与输入状态不丢） */
+.app:has(.browser-panel.max) .side { display: none; }
+/* 浮动卡收起时对话整体隐藏（组件保持挂载） */
 .main.hidden { display: none; }
+/* 放大时对话变成右下角浮动聊天卡（网页客服窗那样），盖在浏览器上不占布局 */
+.main.float {
+  position: fixed; right: 16px; bottom: 72px; z-index: 30;
+  width: min(400px, calc(100vw - 32px)); height: min(560px, calc(100vh - 128px));
+  flex: none; border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 12px 40px var(--shadow); overflow: hidden;
+}
+/* 浮动卡的开合气泡按钮 */
+.chat-fab {
+  position: fixed; right: 16px; bottom: 16px; z-index: 40;
+  width: 44px; height: 44px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--on-accent); border: none;
+  box-shadow: 0 6px 20px var(--shadow);
+}
+.chat-fab:hover { filter: brightness(1.05); }
 .bp-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--fg2); flex-shrink: 0; }
-.bp-url { flex: 1; min-width: 0; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bp-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 10px; }
-.bp-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 2px 14px var(--shadow); }
-.bp-empty { color: var(--fg2); font-size: 12.5px; line-height: 1.8; text-align: center; padding: 0 20px; }
+/* 地址栏是可手输的 input：透明底融入头部，回车即导航 */
+.bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--fg2); white-space: nowrap; }
+.bp-url:focus { color: var(--fg); }
+/* webview 需显式尺寸，flex:1 撑满面板剩余空间 */
+.bp-wv { flex: 1; min-height: 0; width: 100%; border: none; background: #fff; }
+/* 左缘拖拽把手：不可见热区，只以光标形状提示可拖；拖拽用 pointer capture，指针划进 webview 也不丢事件 */
+.bp-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; touch-action: none; }
 
 

@@ -1,9 +1,10 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell, type WebContents } from 'electron'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, saveSettings, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, saveSettings, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 
 /**
@@ -40,7 +41,9 @@ function createWindow(): void {
     frame: false, // 去原生标题栏，用自绘 Titlebar（跟随主题）
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
-      sandbox: false
+      sandbox: false,
+      // webviewTag：右侧浏览面板用 <webview> 直接渲染 AI 打开的网页
+      webviewTag: true
     }
   })
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
@@ -73,6 +76,126 @@ ipcMain.handle('dialog:pickDir', async () => {
 ipcMain.handle('openExternal', (_e, url: string) => {
   if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
 })
+
+// ---------- 面板浏览器控制端点 ----------
+// AI 经 panel_* MCP 工具操控右侧面板里的 webview：与用户看的是同一个浏览器（persist:webpanel
+// 分区，登录态共享）。MCP server 是独立进程，通过这个本地 HTTP 端点调用主进程的 webContents。
+let panelWc: WebContents | null = null
+
+app.on('web-contents-created', (_e, wc) => {
+  if (wc.getType() === 'webview' && wc.session === session.fromPartition('persist:webpanel')) {
+    panelWc = wc
+    wc.once('destroyed', () => {
+      if (panelWc === wc) panelWc = null
+    })
+  }
+})
+
+/** 面板没开时通知渲染层打开，并等它创建好（MCP navigate 场景：AI 想浏览而面板关着） */
+async function ensurePanel(): Promise<WebContents> {
+  if (panelWc && !panelWc.isDestroyed()) return panelWc
+  mainWin?.webContents.send('opencode:event', { type: 'qingniao.browser.open' })
+  for (let i = 0; i < 10; i++) {
+    await new Promise((r) => setTimeout(r, 300))
+    if (panelWc && !panelWc.isDestroyed()) return panelWc
+  }
+  throw new Error('面板浏览器未打开')
+}
+
+/** 页面可交互元素采集：给可见元素打 data-qref 编号，输出 AI 可读的清单 */
+const SNAP_JS = `(() => {
+  document.querySelectorAll('[data-qref]').forEach((e) => e.removeAttribute('data-qref'))
+  const els = document.querySelectorAll('a[href],button,input,select,textarea,[role=button],[role=link],[role=tab],[role=menuitem],[role=checkbox],[role=radio],[role=option]')
+  const out = []
+  let n = 0
+  for (const el of els) {
+    if (out.length >= 150) break
+    const r = el.getBoundingClientRect()
+    if (r.width < 2 && r.height < 2) continue
+    const st = getComputedStyle(el)
+    if (st.visibility === 'hidden' || st.display === 'none') continue
+    const ref = ++n
+    el.setAttribute('data-qref', String(ref))
+    const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 60)
+    const val = 'value' in el && el.value && el.value !== label ? ' 值:' + String(el.value).slice(0, 40) : ''
+    out.push('[' + ref + '] ' + el.tagName.toLowerCase() + (label ? ' 「' + label + '」' : '') + val)
+  }
+  return out.join('\\n')
+})()`
+
+async function panelOp(action: string, body: Record<string, unknown>): Promise<unknown> {
+  if (action === 'state') {
+    const wc = await ensurePanel()
+    return { url: wc.getURL(), title: wc.getTitle() }
+  }
+  const wc = await ensurePanel()
+  if (action === 'navigate') {
+    const u = String(body.url ?? '').trim()
+    if (!/^https?:\/\//i.test(u)) throw new Error('只支持 http/https 网址')
+    await wc.loadURL(u).catch(() => undefined) // ERR_ABORTED 等中断不影响已开始加载
+    return { url: wc.getURL(), title: wc.getTitle() }
+  }
+  if (action === 'snapshot') {
+    return { url: wc.getURL(), title: wc.getTitle(), snapshot: await wc.executeJavaScript(SNAP_JS, true) }
+  }
+  if (action === 'click') {
+    const ref = Number(body.ref)
+    const ok = await wc.executeJavaScript(
+      `(() => { const el = document.querySelector('[data-qref="${ref}"]'); if (!el) return false; el.scrollIntoView({ block: 'center' }); el.click(); return true })()`,
+      true
+    )
+    if (!ok) throw new Error(`元素 [${ref}] 不存在，页面可能已变化，请重新 snapshot`)
+    return { ok: true }
+  }
+  if (action === 'type') {
+    const ref = Number(body.ref)
+    const text = String(body.text ?? '')
+    const ok = await wc.executeJavaScript(
+      `(() => { const el = document.querySelector('[data-qref="${ref}"]'); if (!el) return false; el.focus();
+        el.value = ${JSON.stringify(text)};
+        el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+        ${body.submit ? 'el.form?.requestSubmit?.(); el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, which: 13, bubbles: true }));' : ''}
+        return true })()`,
+      true
+    )
+    if (!ok) throw new Error(`元素 [${ref}] 不存在，页面可能已变化，请重新 snapshot`)
+    return { ok: true }
+  }
+  throw new Error('未知操作：' + action)
+}
+
+/** 本地控制端点（仅监听 127.0.0.1）：MCP server → 主进程 → 面板 webview */
+function startPanelApi(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let port = 39521
+    const srv = createServer((req, res) => {
+      let data = ''
+      req.on('data', (c) => (data += c))
+      req.on('end', () => {
+        let body: Record<string, unknown> = {}
+        try { body = data ? JSON.parse(data) : {} } catch { /* 空体/坏 JSON 按空参处理 */ }
+        panelOp((req.url ?? '').replace(/^\/+/, '').split('?')[0], body)
+          .then((r) => res.end(JSON.stringify(r ?? { ok: true })))
+          .catch((e: unknown) => res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) })))
+      })
+    })
+    srv.on('error', reject)
+    const retry = (e: Error): void => {
+      if (port >= 39541) { reject(e); return }
+      port++
+      srv.listen({ port, host: '127.0.0.1' }, () => resolve(port))
+    }
+    srv.listen({ port, host: '127.0.0.1' }, () => resolve(port))
+    srv.on('error', retry)
+  })
+}
+
+/** 面板浏览器 MCP 脚本位置（随安装包分发） */
+function panelMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'panel-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'panel-mcp.mjs')
+}
 
 ipcMain.handle('settings:get', () => loadSettings())
 
@@ -318,7 +441,9 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.qingniao.desktop')
   Menu.setApplicationMenu(null) // 去掉原生菜单，交互全部走应用内 UI
   mkdirSync(workspace, { recursive: true })
+  const panelPort = await startPanelApi() // 面板浏览器控制端点：MCP 配置要带上端口，先于内核配置
   syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前
+  setPanelMcp({ path: panelMcpPath(), port: panelPort })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace

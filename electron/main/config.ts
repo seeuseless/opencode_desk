@@ -115,6 +115,12 @@ export function usableProviders(s: Settings): ProviderCfg[] {
   return s.providers.filter((p) => p.enabled && p.id.trim() && p.baseURL.trim() && p.models.length > 0)
 }
 
+/** 面板浏览器 MCP 的启动信息（主进程启动时注入：脚本路径 + 控制端点端口），writeOpencodeConfig 用 */
+let panelMcp: { path: string; port: number } | undefined
+export function setPanelMcp(v: { path: string; port: number }): void {
+  panelMcp = v
+}
+
 /**
  * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器与桌面控制）。
  * opencode 默认放行全部工具执行，无需 permission 配置；端点必须提供 /chat/completions。
@@ -141,11 +147,12 @@ export function writeOpencodeConfig(s: Settings): void {
     }
   }
   const mcp: Record<string, unknown> = {}
-  if (s.browser) {
-    // --headless：AI 的浏览器操作不弹独立 Chrome 窗口，画面经截图进右侧浏览面板
-    mcp.playwright = {
+  if (s.browser && panelMcp) {
+    // 内置浏览器 = 右侧面板里的 webview：AI 与用户看同一个浏览器（登录态共享），
+    // 靠元素 ref 定位点击/输入，不依赖模型支持图片。playwright 独立浏览器已由它取代。
+    mcp.panel = {
       type: 'local',
-      command: ['npx', '-y', '@playwright/mcp@latest', '--headless'],
+      command: ['node', panelMcp.path, String(panelMcp.port)],
       enabled: true
     }
   }

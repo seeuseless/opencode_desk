@@ -524,7 +524,7 @@ export function SettingsView(p: Props) {
                 <Globe size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
                 内置浏览器
               </div>
-              <div className="prow-url">AI 可打开网页、截图、点击、抓取内容</div>
+              <div className="prow-url">AI 与右侧面板共用同一个浏览器（登录态共享），可打开网页、按元素点击、填表</div>
             </div>
           </div>
           <div className="prow">

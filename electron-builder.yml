@@ -19,6 +19,9 @@ extraResources:
   # 内置技能（主进程启动时同步到 ~/.qingniaoai/opencode/skills）
   - from: resources/builtin-skills
     to: builtin-skills
+  # 面板浏览器 MCP 脚本（AI 操控右侧面板 webview 的工具端）
+  - from: resources/panel-mcp.mjs
+    to: panel-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"

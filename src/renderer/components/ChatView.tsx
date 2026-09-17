@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCw, Search, Send, Sparkles,
+  AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileDiff as FileDiffIcon, FilePlus, FileText,
+  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Maximize2, MessageCircle, Minimize2, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
@@ -216,32 +217,38 @@ export function ChatView(p: Props) {
   const diffsBusy = useRef<Set<string>>(new Set())
 
   // ---------- 浏览面板 ----------
-  // AI 调用浏览器工具（playwright MCP，headless）时右侧滑出：主画面为最近一次截图，地址栏跟随当前页面。
-  // 截图来自 browser_take_screenshot 的附件输出（内核把 MCP 图片存为 data URI 附件），不是逐帧实时画面。
+  // AI 调用浏览器工具（playwright MCP，headless）时右侧滑出：内嵌 webview 直接渲染页面，地址栏跟随 AI 的导航。
   // 用户关掉后同一会话内不再自动弹出，切到其他会话恢复；会话无浏览器活动时面板收起。
   const [browserOpen, setBrowserOpen] = useState(false)
   const [browserMax, setBrowserMax] = useState(false)
+  /** 放大时右下角浮动聊天卡是否展开 */
+  const [floatOpen, setFloatOpen] = useState(false)
   const browserDismissedIn = useRef('')
 
   const browserView = useMemo(() => {
-    let shot = ''
     let url = ''
     for (const m of msgs) {
       for (const pt of m.parts) {
         if (pt.type !== 'tool') continue
         const t = (pt.tool ?? '').toLowerCase()
-        if (!t.includes('browser_')) continue
+        // 地址栏数据源：面板浏览器（panel_*）与 playwright 工具的导航入参、输出里的当前页 URL
+        if (!t.includes('browser_') && !t.includes('computer') && !t.includes('panel')) continue
         const inp = pt.state?.input as Record<string, unknown> | undefined
-        if (t.endsWith('browser_navigate') && typeof inp?.url === 'string' && inp.url) url = inp.url
+        if ((t.endsWith('browser_navigate') || t.endsWith('panel_navigate')) && typeof inp?.url === 'string' && inp.url) url = inp.url
         const pu = /Page URL:\s*(\S+)/.exec(pt.state?.output ?? '')
         if (pu) url = pu[1]
-        const atts = pt.state?.attachments ?? pt.attachments
-        if (Array.isArray(atts)) {
-          for (const a of atts) if (a?.url && (!a.mime || a.mime.startsWith('image/'))) shot = a.url
-        }
       }
     }
-    return { shot, url, active: shot !== '' || url !== '' }
+    // 桌面控制没有 URL 字段：从 AI 的回复文本里抓最后一个网址（用户让它「打开某页」的场景）
+    if (!url) {
+      for (const m of msgs) {
+        if (m.info.role !== 'assistant') continue
+        const text = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+        const ms = text.match(/https?:\/\/[^\s)<>"'）】」。，；]+/g)
+        if (ms?.length) url = ms[ms.length - 1]
+      }
+    }
+    return { url, active: url !== '' }
   }, [msgs])
 
   useEffect(() => {
@@ -252,10 +259,27 @@ export function ChatView(p: Props) {
     }
   }, [browserView.active, p.sessionId])
 
+  // 主进程「AI 要用面板浏览器」事件（panel_* 工具在面板关着时触发）：清掉本会话的关闭记录并打开
+  useEffect(() => {
+    return window.qingniao.onEvent((raw) => {
+      if ((raw as { type?: string }).type === 'qingniao.browser.open') {
+        browserDismissedIn.current = ''
+        setBrowserOpen(true)
+      }
+    })
+  }, [])
+
   function closeBrowserPanel() {
     setBrowserOpen(false)
     setBrowserMax(false)
     browserDismissedIn.current = p.sessionId
+  }
+
+  /** 放大/还原：进入放大时自动展开右下角的浮动聊天卡 */
+  function toggleBrowserMax() {
+    const next = !browserMax
+    setBrowserMax(next)
+    if (next) setFloatOpen(true)
   }
 
   // 中断自动重试登记表：sid → { 重试次数, 定时器 }；无定时器 = 次数耗尽，等用户手动点重试
@@ -964,7 +988,7 @@ export function ChatView(p: Props) {
 
   return (
     <div className="chat-row">
-    <main className={'main' + (browserMax ? ' hidden' : '')}>
+    <main className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}>
       <div
         className="msgs"
         ref={scrollRef}
@@ -1170,41 +1194,128 @@ export function ChatView(p: Props) {
     </main>
     {browserOpen && (
       <BrowserPanel
-        shot={browserView.shot}
         url={browserView.url}
         max={browserMax}
-        onToggleMax={() => setBrowserMax((v) => !v)}
+        onToggleMax={toggleBrowserMax}
         onClose={closeBrowserPanel}
       />
+    )}
+    {browserMax && (
+      <button className="chat-fab" title={floatOpen ? '收起对话' : '打开对话'} onClick={() => setFloatOpen((v) => !v)}>
+        {floatOpen ? <X size={18} /> : <MessageCircle size={18} />}
+      </button>
     )}
     </div>
   )
 }
 
-/** 右侧浏览面板：跟随 AI 的浏览器操作（headless），显示最近截图与当前网址，可放大占满会话区 */
+/** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；可放大占满会话区 */
 function BrowserPanel({
-  shot,
   url,
   max,
   onToggleMax,
   onClose
 }: {
-  shot: string
   url: string
   max: boolean
   onToggleMax: () => void
   onClose: () => void
 }) {
+  // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
+  const [addr, setAddr] = useState(url)
+  /** webview 挂载时的初始地址：src 只在挂载时定一次，之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
+  const [src0] = useState(url)
+  /** 左缘拖出的面板宽度（px）；null = 默认 40% */
+  const [width, setWidth] = useState<number | null>(null)
+  /** webview 历史状态：驱动前进/后退按钮可用性 */
+  const [nav, setNav] = useState({ back: false, fwd: false })
+  const wvRef = useRef<WebviewTag | null>(null)
+  const panelRef = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (url && url !== addr) {
+      setAddr(url)
+      wvRef.current?.loadURL(url)
+    }
+    // 只跟随 AI 的新导航；addr 是用户手输值，不作为依赖
+  }, [url])
+
+  // webview 由 React 直接管理 src（addr 变化即导航）；这里挂内核事件把页内跳转同步回地址栏
+  /** 每次导航后查一遍历史状态，驱动前进/后退按钮可用性 */
+  const syncNav = () => {
+    const wv = wvRef.current
+    if (!wv) return
+    setNav({ back: wv.canGoBack(), fwd: wv.canGoForward() })
+  }
+  const bindWv = (wv: WebviewTag | null) => {
+    if (wvRef.current) {
+      wvRef.current.removeEventListener('did-navigate', onWvNav)
+      wvRef.current.removeEventListener('did-navigate-in-page', onWvNav)
+    }
+    wvRef.current = wv
+    if (wv) {
+      wv.addEventListener('did-navigate', onWvNav)
+      wv.addEventListener('did-navigate-in-page', onWvNav)
+    }
+  }
+  const onWvNav = (e: { url: string }): void => {
+    setAddr(e.url)
+    syncNav()
+  }
+
+  function loadAddr(v: string) {
+    const u = /^\w+:\/\//.test(v.trim()) ? v.trim() : 'https://' + v.trim()
+    if (!u) return
+    setAddr(u)
+    wvRef.current?.loadURL(u)
+  }
+
+  /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
+  function startResize(e: ReactPointerEvent) {
+    e.preventDefault()
+    const panel = panelRef.current
+    const row = panel?.parentElement
+    if (!panel || !row) return
+    const x0 = e.clientX
+    const w0 = panel.offsetWidth
+    const move = (ev: PointerEvent) =>
+      setWidth(Math.min(Math.max(280, w0 + (x0 - ev.clientX)), row.clientWidth - 320))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
   return (
-    <aside className={'browser-panel' + (max ? ' max' : '')}>
+    <aside
+      ref={panelRef}
+      className={'browser-panel' + (max ? ' max' : '')}
+      style={width != null && !max ? { width, maxWidth: 'none' } : undefined}
+    >
+      {!max && <div className="bp-resizer" onPointerDown={startResize} />}
       <div className="bp-head">
-        <Globe size={13} />
-        <span className="bp-url" title={url}>
-          {url || '等待浏览器活动…'}
-        </span>
+        <button className="icon-btn" disabled={!nav.back} title="后退" onClick={() => wvRef.current?.goBack()}>
+          <ArrowLeft size={14} />
+        </button>
+        <button className="icon-btn" disabled={!nav.fwd} title="前进" onClick={() => wvRef.current?.goForward()}>
+          <ArrowRight size={14} />
+        </button>
+        <input
+          className="bp-url"
+          value={addr}
+          placeholder="输入网址回车打开"
+          spellCheck={false}
+          onChange={(e) => setAddr(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') loadAddr((e.target as HTMLInputElement).value)
+          }}
+        />
         <span className="spacer" />
-        {url && (
-          <button className="icon-btn" title="在系统浏览器打开" onClick={() => void window.qingniao.openExternal(url)}>
+        {addr && (
+          <button className="icon-btn" title="在系统浏览器打开" onClick={() => void window.qingniao.openExternal(addr)}>
             <ExternalLink size={14} />
           </button>
         )}
@@ -1215,15 +1326,13 @@ function BrowserPanel({
           <X size={14} />
         </button>
       </div>
-      <div className="bp-body">
-        {shot ? (
-          <img src={shot} alt="页面截图" />
-        ) : (
-          <div className="bp-empty">
-            {url ? 'AI 还没有截图。可以在对话里让它「截一张当前页面」。' : 'AI 打开网页后，这里会显示它看到的画面。'}
-          </div>
-        )}
-      </div>
+      <webview
+        ref={bindWv}
+        className="bp-wv"
+        src={src0}
+        partition="persist:webpanel"
+        allowpopups={false}
+      />
     </aside>
   )
 }
