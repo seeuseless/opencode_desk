@@ -41,6 +41,8 @@ const api = {
   /** 在系统文件管理器里打开技能目录 */
   openSkillsDir: (req: { scope: SkillScope; projectPath?: string | null }): Promise<string> =>
     ipcRenderer.invoke('skills:openDir', req),
+  /** 用系统默认浏览器打开网页地址（浏览面板「在外部打开」用） */
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('openExternal', url),
   winMin: () => ipcRenderer.send('win:min'),
   winMax: () => ipcRenderer.send('win:max'),
   winClose: () => ipcRenderer.send('win:close'),

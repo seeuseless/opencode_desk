@@ -41,7 +41,7 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 2. 草稿会话：新任务不发首条消息不占列表；标题 = 首条消息
 3. 模型提供商：自定义 OpenAI **Chat Completions 兼容**端点（Base URL + Key，自动拉取模型列表，可启停），聊天内随时切换并跨重启持久
 4. 任务清单：AI 开发任务实时展示（todo.updated 驱动），完成项打勾 + 中划线，进行项转圈
-5. 内置浏览器：一键开启 Playwright MCP，AI 可直接操作网页；同时支持添加自定义 MCP（本地命令 / 远程 URL）
+5. 内置浏览器与桌面控制：一键开启 Playwright MCP（AI 可直接操作网页）与 computer-use-mcp（AI 可截屏并操控键鼠，需模型支持图片输入）；同时支持添加自定义 MCP（本地命令 / 远程 URL）
 6. 任务队列：执行中继续发任务自动排队，支持插队执行（中断当前）、编辑、删除
 7. 步骤可视化：中文工具名、写入实时预览动画、diff/语法高亮展开详情、Markdown 渲染
 8. 可靠性：SSE 断线自动重连；错误人性化提示（网关错误、鉴权失败等翻译成中文）

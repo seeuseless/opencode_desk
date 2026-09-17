@@ -38,7 +38,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
-  const [settings, setSettings] = useState<SettingsCfg>({ providers: [], mcps: [], browser: false })
+  const [settings, setSettings] = useState<SettingsCfg>({ providers: [], mcps: [], browser: false, computerUse: false })
   const [settingsReady, setSettingsReady] = useState(false)
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
   const [saving, setSaving] = useState(false)

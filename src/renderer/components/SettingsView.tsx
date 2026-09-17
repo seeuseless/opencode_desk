@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, Check, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, Check, Copy, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
 import type { CustomColors } from '../themeColors'
-import type { McpCfg, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
+import type { McpCfg, Modality, ModelCfg, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
+import { MODEL_DEFAULTS } from '../oc'
+
+/** 输入类型可选项（输出固定为文本，无需配置） */
+const MODALITY_LABELS: { key: Modality; label: string }[] = [
+  { key: 'text', label: '文本' },
+  { key: 'image', label: '图片' },
+  { key: 'video', label: '视频' }
+]
 
 interface Props {
   settings: SettingsCfg
@@ -49,6 +57,8 @@ interface Draft {
   baseURL: string
   apiKey: string
   modelsText: string
+  /** 每个模型已编辑过的接入参数（键=模型 ID）；没编辑过的模型用 MODEL_DEFAULTS */
+  cfgs: Record<string, ModelCfg>
 }
 
 interface McpDraft {
@@ -84,6 +94,11 @@ function parseModels(text: string): string[] {
   return [...new Set(text.split(/[\n,]/).map((m) => m.trim()).filter(Boolean))]
 }
 
+/** 未单独编辑过的模型用默认接入参数（每次新拷贝，避免共享数组引用） */
+function defaultModelCfg(): Omit<ModelCfg, 'id'> {
+  return { context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
+}
+
 export function SettingsView(p: Props) {
   const providers = p.settings.providers
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -102,7 +117,7 @@ export function SettingsView(p: Props) {
 
   function openNew() {
     setFormMsg(null)
-    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '' })
+    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })
   }
 
   function openEdit(i: number) {
@@ -115,7 +130,8 @@ export function SettingsView(p: Props) {
       id: c.id,
       baseURL: c.baseURL,
       apiKey: c.apiKey,
-      modelsText: c.models.join('\n')
+      modelsText: c.models.map((m) => m.id).join('\n'),
+      cfgs: Object.fromEntries(c.models.map((m) => [m.id, m]))
     })
   }
 
@@ -136,6 +152,21 @@ export function SettingsView(p: Props) {
     }
   }
 
+  /** 某个模型的接入参数：编辑过的取草稿值，没编辑过的用默认 */
+  function cfgOf(id: string): ModelCfg {
+    return draft?.cfgs[id] ?? { id, ...defaultModelCfg() }
+  }
+
+  function updateCfg(id: string, patch: Partial<ModelCfg>) {
+    if (!draft) return
+    setDraft({ ...draft, cfgs: { ...draft.cfgs, [id]: { ...cfgOf(id), ...patch } } })
+  }
+
+  function toggleModality(id: string, key: Modality) {
+    const cur = cfgOf(id).input
+    updateCfg(id, { input: cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key] })
+  }
+
   async function saveDraft() {
     if (!draft) return
     const id = (draft.id.trim() || slugify(draft.name)).toLowerCase()
@@ -153,7 +184,7 @@ export function SettingsView(p: Props) {
       baseURL: draft.baseURL.trim(),
       apiKey: draft.apiKey.trim(),
       enabled: draft.isNew ? true : providers[draft.index].enabled,
-      models: parseModels(draft.modelsText)
+      models: parseModels(draft.modelsText).map((mid) => draft.cfgs[mid] ?? { id: mid, ...defaultModelCfg() })
     }
     const list = draft.isNew ? [...providers, cfg] : providers.map((x, i) => (i === draft.index ? cfg : x))
     await p.onSave({ ...p.settings, providers: list })
@@ -191,6 +222,10 @@ export function SettingsView(p: Props) {
       setFormMsg({ text: 'playwright 为内置浏览器保留名，请换一个', bad: true })
       return
     }
+    if (name === 'computer-use') {
+      setFormMsg({ text: 'computer-use 为桌面控制保留名，请换一个', bad: true })
+      return
+    }
     const list = p.settings.mcps
     if (list.some((x, i) => x.name === name && i !== mcpDraft.index)) {
       setFormMsg({ text: '同名 MCP 已存在：' + name, bad: true })
@@ -219,6 +254,10 @@ export function SettingsView(p: Props) {
 
   async function toggleBrowser() {
     await p.onSave({ ...p.settings, browser: !p.settings.browser })
+  }
+
+  async function toggleComputerUse() {
+    await p.onSave({ ...p.settings, computerUse: !p.settings.computerUse })
   }
 
   // ---------- 技能（Skills）----------
@@ -287,29 +326,48 @@ export function SettingsView(p: Props) {
     }
   }
 
-  /** 技能分组：全局对所有项目生效，项目级只在当前项目下被内核发现 */
-  function skillGroup(scope: SkillScope, title: string, hint: string) {
-    const usable = scope === 'global' || !!p.projectPath
-    const list = skills.filter((s) => s.scope === scope)
+  /** 内置技能只读：另存为副本（预填到新建弹窗，落到全局目录）后即可编辑 */
+  async function duplicateSkill(s: SkillItem) {
+    setFormMsg(null)
+    const d = await window.qingniao.readSkill({ scope: 'global', projectPath: p.projectPath, name: s.name })
+    setSkDraft({
+      isNew: true,
+      scope: 'global',
+      originalName: '',
+      name: s.name + '-copy',
+      description: d.description,
+      body: d.body
+    })
+  }
+
+  /** 技能分组：内置随安装包分发（只读），全局对所有项目生效，项目级只在当前项目下被内核发现 */
+  function skillGroup(kind: 'builtin' | SkillScope, title: string, hint: string) {
+    const usable = kind !== 'builtin' && (kind === 'global' || !!p.projectPath)
+    const list = skills.filter((s) => (kind === 'builtin' ? s.builtin && s.scope === 'global' : s.scope === kind && !s.builtin))
     return (
-      <div className="sk-sec" key={scope}>
+      <div className="sk-sec" key={kind}>
         <div className="sk-head">
           <span className="sk-title">{title}</span>
           <span className="sk-hint">{hint}</span>
           <span className="spacer" />
-          <button className="ghost" disabled={!usable} onClick={() => void window.qingniao.openSkillsDir({ scope, projectPath: p.projectPath })}>
-            <FolderOpen size={13} /> 打开目录
-          </button>
-          <button className="ghost" disabled={!usable} onClick={() => newSkill(scope)}>
-            <Plus size={13} /> 新建
-          </button>
+          {kind !== 'builtin' && (
+            <>
+              <button className="ghost" disabled={!usable} onClick={() => void window.qingniao.openSkillsDir({ scope: kind, projectPath: p.projectPath })}>
+                <FolderOpen size={13} /> 打开目录
+              </button>
+              <button className="ghost" disabled={!usable} onClick={() => newSkill(kind === 'global' ? 'global' : 'project')}>
+                <Plus size={13} /> 新建
+              </button>
+            </>
+          )}
         </div>
         {!usable && <div className="plist-empty">还没有打开项目，项目级技能需在具体项目下创建</div>}
         {usable && list.length === 0 && (
           <div className="plist-empty hint">
-            {scope === 'global' ? '还没有全局技能' : `「${p.projectName ?? '当前项目'}」下还没有技能`}
+            {kind === 'global' ? '还没有全局技能' : `「${p.projectName ?? '当前项目'}」下还没有技能`}
           </div>
         )}
+        {kind === 'builtin' && list.length === 0 && <div className="plist-empty hint">没有内置技能</div>}
         {list.map((s) => (
           <div key={s.scope + s.name} className={'prow' + (s.error ? ' bad' : '')}>
             <span className="prow-ico">
@@ -318,17 +376,25 @@ export function SettingsView(p: Props) {
             <div className="prow-main">
               <div className="prow-name">
                 {s.name}
-                <span className="chip">{scope === 'global' ? '全局' : '项目'}</span>
+                <span className="chip">{kind === 'builtin' ? '内置' : kind === 'global' ? '全局' : '项目'}</span>
                 {s.error && <span className="chip bad">不可用</span>}
               </div>
               <div className="sk-desc">{s.error ?? s.description}</div>
             </div>
-            <button className="icon-btn" title="编辑" onClick={() => void openSkill(s)}>
-              <Pencil size={15} />
-            </button>
-            <button className="icon-btn danger" title="删除" onClick={() => setSkDel(s)}>
-              <Trash2 size={15} />
-            </button>
+            {kind === 'builtin' ? (
+              <button className="icon-btn" title="另存为副本后编辑" onClick={() => void duplicateSkill(s)}>
+                <Copy size={15} />
+              </button>
+            ) : (
+              <>
+                <button className="icon-btn" title="编辑" onClick={() => void openSkill(s)}>
+                  <Pencil size={15} />
+                </button>
+                <button className="icon-btn danger" title="删除" onClick={() => setSkDel(s)}>
+                  <Trash2 size={15} />
+                </button>
+              </>
+            )}
           </div>
         ))}
       </div>
@@ -448,7 +514,7 @@ export function SettingsView(p: Props) {
             </button>
           </h3>
           <p className="sec-tip">
-            内置浏览器基于 Playwright MCP（首次使用需本机有 Node.js，会自动经 npx 拉起）；
+            内置浏览器基于 Playwright MCP、桌面控制基于 computer-use-mcp（首次使用需本机有 Node.js，会自动经 npx 拉起）；
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="prow">
@@ -459,6 +525,16 @@ export function SettingsView(p: Props) {
                 内置浏览器
               </div>
               <div className="prow-url">AI 可打开网页、截图、点击、抓取内容</div>
+            </div>
+          </div>
+          <div className="prow">
+            <Switch checked={p.settings.computerUse} onChange={toggleComputerUse} />
+            <div className="prow-main">
+              <div className="prow-name">
+                <Monitor size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+                桌面控制
+              </div>
+              <div className="prow-url">AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入）</div>
             </div>
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
@@ -507,6 +583,7 @@ export function SettingsView(p: Props) {
             适合把「这个项目的活该怎么干」沉淀下来——提交规范、发布流程、界面约定之类。
             技能只在启动时加载，保存或删除后会自动重启内核生效（与 MCP 变更同一机制）。描述写得越具体，模型越能判断准。
           </p>
+          {skillGroup('builtin', '内置技能', '随青鸟安装，不可直接修改，可另存为副本后编辑')}
           {skillGroup('global', '全局技能', '~/.qingniaoai/opencode/skills')}
           {skillGroup('project', '项目技能', p.projectName ? `${p.projectName} · .opencode/skills` : '<项目>/.opencode/skills')}
         </section>
@@ -515,7 +592,7 @@ export function SettingsView(p: Props) {
       </div>
 
       {draft && (
-        <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} onClose={() => setDraft(null)}>
+        <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} wide onClose={() => setDraft(null)}>
           <label>
             名称
             <input
@@ -564,6 +641,55 @@ export function SettingsView(p: Props) {
               onChange={(e) => setDraft({ ...draft, modelsText: e.target.value })}
             />
           </label>
+          {parseModels(draft.modelsText).length > 0 && (
+            <div className="model-cfgs">
+              <div className="model-cfgs-tip">每个模型的上下文窗口、最大输出（token）与输入类型；输出固定为文本</div>
+              {parseModels(draft.modelsText).map((mid) => {
+                const c = cfgOf(mid)
+                return (
+                  <div className="model-cfg" key={mid}>
+                    <div className="model-cfg-head">
+                      <span className="model-cfg-name">{mid}</span>
+                      <span className="model-cfg-out">输出：文本</span>
+                    </div>
+                    <div className="model-cfg-row">
+                      <label>
+                        上下文窗口
+                        <input
+                          type="number"
+                          min={1}
+                          value={c.context || ''}
+                          onChange={(e) => updateCfg(mid, { context: e.target.valueAsNumber || 0 })}
+                        />
+                      </label>
+                      <label>
+                        最大输出 Token
+                        <input
+                          type="number"
+                          min={1}
+                          value={c.output || ''}
+                          onChange={(e) => updateCfg(mid, { output: e.target.valueAsNumber || 0 })}
+                        />
+                      </label>
+                      <div className="model-cfg-in">
+                        输入
+                        {MODALITY_LABELS.map((m) => (
+                          <button
+                            key={m.key}
+                            type="button"
+                            className={'iochip' + (c.input.includes(m.key) ? ' on' : '')}
+                            onClick={() => toggleModality(mid, m.key)}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
           <div className="form-row">
             <button className="ghost" onClick={fetchModels} disabled={fetching}>
               <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> 自动获取模型

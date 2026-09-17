@@ -1,7 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { McpCfg, ProviderCfg, Settings } from './types.ts'
+import type { McpCfg, ModelCfg, Modality, ProviderCfg, Settings } from './types.ts'
+import { MODEL_DEFAULTS, MODALITIES } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -22,6 +23,19 @@ export const opencodeStateDir = () => join(storeDir(), 'state')
 export const opencodeConfigPath = () => join(opencodeConfigDir(), 'opencode.json')
 export const qingniaoHome = storeDir
 
+/** 单条模型记录归一化：兼容旧版字符串数组与手改文件的缺字段，缺失一律落默认参数 */
+function normalizeModel(m: unknown): ModelCfg | null {
+  if (typeof m === 'string') return { id: m, context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
+  if (!m || typeof (m as ModelCfg).id !== 'string' || !(m as ModelCfg).id.trim()) return null
+  const r = m as Partial<ModelCfg>
+  return {
+    id: r.id!.trim(),
+    context: Number(r.context) > 0 ? Number(r.context) : MODEL_DEFAULTS.context,
+    output: Number(r.output) > 0 ? Number(r.output) : MODEL_DEFAULTS.output,
+    input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => MODALITIES.includes(x)) : [...MODEL_DEFAULTS.input]
+  }
+}
+
 /** 补齐缺失字段并做形状清洗（旧版存档 / 手改文件都走这里） */
 export function normalize(raw: Partial<Settings> | null | undefined): Settings {
   const providers: ProviderCfg[] = Array.isArray(raw?.providers)
@@ -33,7 +47,7 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
           baseURL: String(p.baseURL ?? ''),
           apiKey: String(p.apiKey ?? ''),
           enabled: p.enabled !== false,
-          models: Array.isArray(p.models) ? p.models.map(String) : []
+          models: Array.isArray(p.models) ? p.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
         }))
     : []
   const mcps: McpCfg[] = Array.isArray(raw?.mcps)
@@ -47,7 +61,9 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
           enabled: m.enabled !== false
         }))
     : []
-  return { providers, mcps, browser: raw?.browser === true }
+  // 内置浏览器默认开启：没记录过开关的新/旧配置都开，用户显式关过（false）才保持关；
+  // 桌面控制涉及键鼠操控，默认关
+  return { providers, mcps, browser: raw?.browser !== false, computerUse: raw?.computerUse === true }
 }
 
 /** 旧数据目录一次性迁移（codexdesk / qingniao / justdo 时代的设置） */
@@ -71,7 +87,7 @@ export function loadSettings(): Settings {
   try {
     return normalize(JSON.parse(readFileSync(settingsPath(), 'utf8')) as Partial<Settings>)
   } catch {
-    return { providers: [], mcps: [], browser: false }
+    return normalize({}) // 坏文件/无文件：走默认配置（内置浏览器默认开）
   }
 }
 
@@ -100,7 +116,7 @@ export function usableProviders(s: Settings): ProviderCfg[] {
 }
 
 /**
- * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器）。
+ * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器与桌面控制）。
  * opencode 默认放行全部工具执行，无需 permission 配置；端点必须提供 /chat/completions。
  */
 export function writeOpencodeConfig(s: Settings): void {
@@ -115,14 +131,29 @@ export function writeOpencodeConfig(s: Settings): void {
         baseURL: p.baseURL.trim().replace(/\/+$/, ''),
         apiKey: '{env:' + envKey(id) + '}'
       },
-      models: Object.fromEntries(p.models.map((m) => [m, {}]))
+      // 每模型接入参数：上下文窗口/最大输出 → limit，输入类型 → modalities.input（输出固定文本）
+      models: Object.fromEntries(
+        p.models.map((m) => [
+          m.id,
+          { limit: { context: m.context, output: m.output }, modalities: { input: m.input, output: ['text'] } }
+        ])
+      )
     }
   }
   const mcp: Record<string, unknown> = {}
   if (s.browser) {
+    // --headless：AI 的浏览器操作不弹独立 Chrome 窗口，画面经截图进右侧浏览面板
     mcp.playwright = {
       type: 'local',
-      command: ['npx', '-y', '@playwright/mcp@latest'],
+      command: ['npx', '-y', '@playwright/mcp@latest', '--headless'],
+      enabled: true
+    }
+  }
+  if (s.computerUse) {
+    // 截屏 + 键鼠模拟控制本机（nut.js 实现，跨平台；模型需支持图片输入）
+    mcp['computer-use'] = {
+      type: 'local',
+      command: ['npx', '-y', 'computer-use-mcp'],
       enabled: true
     }
   }
@@ -148,7 +179,7 @@ export function writeOpencodeConfig(s: Settings): void {
 export function defaultModel(s: Settings): { providerID: string; modelID: string } | undefined {
   const p = usableProviders(s)[0]
   const m = p?.models[0]
-  return p && m ? { providerID: p.id, modelID: m } : undefined
+  return p && m ? { providerID: p.id, modelID: m.id } : undefined
 }
 
 /**
@@ -162,6 +193,6 @@ export function resolveModel(
   const list = usableProviders(s)
   const hit = sel?.providerID ? list.find((p) => p.id === sel.providerID) : undefined
   if (!hit) return defaultModel(s)
-  const modelID = sel?.modelID && hit.models.includes(sel.modelID) ? sel.modelID : hit.models[0]
+  const modelID = sel?.modelID && hit.models.some((m) => m.id === sel.modelID) ? sel.modelID : hit.models[0].id
   return { providerID: hit.id, modelID }
 }

@@ -16,6 +16,9 @@ extraResources:
     to: bin
   - from: resources/icon.png
     to: icon.png
+  # 内置技能（主进程启动时同步到 ~/.qingniaoai/opencode/skills）
+  - from: resources/builtin-skills
+    to: builtin-skills
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"

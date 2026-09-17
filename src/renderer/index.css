@@ -845,6 +845,7 @@ input, textarea { font: inherit; }
   background: var(--bg2); border: none; border-radius: 16px;
   box-shadow: 0 18px 60px var(--shadow);
 }
+.modal.wide { width: 720px; }
 .mhead { display: flex; align-items: center; padding: 16px 18px 12px; }
 .mhead h3 { flex: 1; font-size: 16px; }
 .mbody { padding: 0 18px 18px; }
@@ -869,6 +870,35 @@ input, textarea { font: inherit; }
 .form-msg { font-size: 13px; color: var(--ok); }
 .form-msg.bad { color: var(--err); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
+
+/* ================= 提供商弹窗：每模型的接入参数 ================= */
+.model-cfgs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+.model-cfgs-tip { font-size: 11.5px; color: var(--fg2); }
+.model-cfg { background: var(--bg3); border-radius: 10px; padding: 10px 12px; }
+.model-cfg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.model-cfg-name {
+  flex: 1; min-width: 0;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.model-cfg-out { flex-shrink: 0; font-size: 11.5px; color: var(--fg2); }
+.model-cfg-row { display: flex; align-items: center; gap: 14px; row-gap: 8px; flex-wrap: wrap; }
+.model-cfg-row label { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; color: var(--fg2); }
+.model-cfg-row input {
+  display: block; width: 108px; margin: 0;
+  background: var(--bg2); color: var(--fg); border: none;
+  border-radius: 7px; padding: 6px 8px; font-size: 12.5px; outline: none;
+}
+.model-cfg-row input:focus { box-shadow: 0 0 0 2px var(--accent); }
+.model-cfg-in { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg2); }
+.iochip {
+  border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);
+  border-radius: 999px; padding: 2.5px 10px; font-size: 11.5px;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.iochip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--field-line)); }
+.iochip.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
 
 /* ================= MCP 表单（弹窗内） ================= */
 .mcp-form { display: flex; flex-direction: column; }
@@ -952,4 +982,18 @@ input, textarea { font: inherit; }
 .prow.bad { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 45%, transparent); }
 .prow.bad .sk-desc { color: var(--err); }
 .chip.bad { background: color-mix(in srgb, var(--err) 15%, transparent); color: var(--err); }
+
+/* ---------- 浏览面板：AI 浏览器操作（headless playwright）的右侧跟随画面 ---------- */
+/* 会话行容器：对话主体与面板并排；面板可放大为 flex:1 占满会话区（侧栏不受影响） */
+.chat-row { flex: 1; min-height: 0; min-width: 0; display: flex; }
+.browser-panel { width: 40%; min-width: 280px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--content); }
+.browser-panel.max { width: auto; min-width: 0; max-width: none; flex: 1; }
+/* 放大时对话区让位隐藏（组件保持挂载，任务与输入状态不丢） */
+.main.hidden { display: none; }
+.bp-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--fg2); flex-shrink: 0; }
+.bp-url { flex: 1; min-width: 0; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bp-body { flex: 1; min-height: 0; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 10px; }
+.bp-body img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 2px 14px var(--shadow); }
+.bp-empty { color: var(--fg2); font-size: 12.5px; line-height: 1.8; text-align: center; padding: 0 20px; }
+
 

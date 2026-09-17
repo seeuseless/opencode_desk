@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Pencil, RotateCw, Search, Send, Sparkles,
+  AlertCircle, ArrowDown, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileDiff as FileDiffIcon, FilePlus, FileText,
+  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Maximize2, Minimize2, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
@@ -214,6 +214,50 @@ export function ChatView(p: Props) {
   // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
   const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
   const diffsBusy = useRef<Set<string>>(new Set())
+
+  // ---------- 浏览面板 ----------
+  // AI 调用浏览器工具（playwright MCP，headless）时右侧滑出：主画面为最近一次截图，地址栏跟随当前页面。
+  // 截图来自 browser_take_screenshot 的附件输出（内核把 MCP 图片存为 data URI 附件），不是逐帧实时画面。
+  // 用户关掉后同一会话内不再自动弹出，切到其他会话恢复；会话无浏览器活动时面板收起。
+  const [browserOpen, setBrowserOpen] = useState(false)
+  const [browserMax, setBrowserMax] = useState(false)
+  const browserDismissedIn = useRef('')
+
+  const browserView = useMemo(() => {
+    let shot = ''
+    let url = ''
+    for (const m of msgs) {
+      for (const pt of m.parts) {
+        if (pt.type !== 'tool') continue
+        const t = (pt.tool ?? '').toLowerCase()
+        if (!t.includes('browser_')) continue
+        const inp = pt.state?.input as Record<string, unknown> | undefined
+        if (t.endsWith('browser_navigate') && typeof inp?.url === 'string' && inp.url) url = inp.url
+        const pu = /Page URL:\s*(\S+)/.exec(pt.state?.output ?? '')
+        if (pu) url = pu[1]
+        const atts = pt.state?.attachments ?? pt.attachments
+        if (Array.isArray(atts)) {
+          for (const a of atts) if (a?.url && (!a.mime || a.mime.startsWith('image/'))) shot = a.url
+        }
+      }
+    }
+    return { shot, url, active: shot !== '' || url !== '' }
+  }, [msgs])
+
+  useEffect(() => {
+    if (browserView.active) {
+      if (browserDismissedIn.current !== p.sessionId) setBrowserOpen(true)
+    } else {
+      setBrowserOpen(false)
+    }
+  }, [browserView.active, p.sessionId])
+
+  function closeBrowserPanel() {
+    setBrowserOpen(false)
+    setBrowserMax(false)
+    browserDismissedIn.current = p.sessionId
+  }
+
   // 中断自动重试登记表：sid → { 重试次数, 定时器 }；无定时器 = 次数耗尽，等用户手动点重试
   const retries = useRef<Map<string, { count: number; timer?: number }>>(new Map())
   // 重试状态在 ref 里，同步成 state 供渲染（pending=有定时器待执行；无定时器=次数耗尽）
@@ -393,7 +437,7 @@ export function ChatView(p: Props) {
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型
   const groups: ModelGroup[] = p.settings
     .filter((x) => x.enabled && x.id && x.models.length)
-    .map((c) => ({ id: c.id, label: c.name || c.id, models: c.models.map((m) => ({ mid: m })) }))
+    .map((c) => ({ id: c.id, label: c.name || c.id, models: c.models.map((m) => ({ mid: m.id })) }))
 
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
@@ -919,7 +963,8 @@ export function ChatView(p: Props) {
   }).length
 
   return (
-    <main className="main">
+    <div className="chat-row">
+    <main className={'main' + (browserMax ? ' hidden' : '')}>
       <div
         className="msgs"
         ref={scrollRef}
@@ -1123,6 +1168,63 @@ export function ChatView(p: Props) {
         </div>
       </div>
     </main>
+    {browserOpen && (
+      <BrowserPanel
+        shot={browserView.shot}
+        url={browserView.url}
+        max={browserMax}
+        onToggleMax={() => setBrowserMax((v) => !v)}
+        onClose={closeBrowserPanel}
+      />
+    )}
+    </div>
+  )
+}
+
+/** 右侧浏览面板：跟随 AI 的浏览器操作（headless），显示最近截图与当前网址，可放大占满会话区 */
+function BrowserPanel({
+  shot,
+  url,
+  max,
+  onToggleMax,
+  onClose
+}: {
+  shot: string
+  url: string
+  max: boolean
+  onToggleMax: () => void
+  onClose: () => void
+}) {
+  return (
+    <aside className={'browser-panel' + (max ? ' max' : '')}>
+      <div className="bp-head">
+        <Globe size={13} />
+        <span className="bp-url" title={url}>
+          {url || '等待浏览器活动…'}
+        </span>
+        <span className="spacer" />
+        {url && (
+          <button className="icon-btn" title="在系统浏览器打开" onClick={() => void window.qingniao.openExternal(url)}>
+            <ExternalLink size={14} />
+          </button>
+        )}
+        <button className="icon-btn" title={max ? '还原' : '放大占满'} onClick={onToggleMax}>
+          {max ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
+        <button className="icon-btn" title="关闭面板" onClick={onClose}>
+          <X size={14} />
+        </button>
+      </div>
+      <div className="bp-body">
+        {shot ? (
+          <img src={shot} alt="页面截图" />
+        ) : (
+          <div className="bp-empty">
+            {url ? 'AI 还没有截图。可以在对话里让它「截一张当前页面」。' : 'AI 打开网页后，这里会显示它看到的画面。'}
+          </div>
+        )}
+      </div>
+    </aside>
   )
 }
 

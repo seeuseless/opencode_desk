@@ -1,7 +1,9 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, ProviderCfg, Settings } from '../../electron/main/types'
+import { MODEL_DEFAULTS } from '../../electron/main/types'
 
-export type { McpCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope } from '../../electron/main/types'
+export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope } from '../../electron/main/types'
+export { MODEL_DEFAULTS } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 
@@ -35,6 +37,8 @@ export interface ToolState {
   /** 工具自身携带的结构化结果：edit 存 filediff，apply_patch/write 存 files[]
    *  （均为 {file, patch, additions, deletions}，直接用于 +N/-M 与差量展开） */
   metadata?: Record<string, unknown>
+  /** MCP 工具返回的附件：browser_take_screenshot 的截图在这里（url 为 data:image/...;base64） */
+  attachments?: { type?: string; mime?: string; url: string }[]
 }
 
 export interface Part {
@@ -45,6 +49,8 @@ export interface Part {
   text?: string
   tool?: string
   state?: ToolState
+  /** 内核某些版本把附件挂在 part 顶层而非 state 上，浏览面板提取时两处兼容 */
+  attachments?: { type?: string; mime?: string; url: string }[]
 }
 
 export interface MessageInfo {

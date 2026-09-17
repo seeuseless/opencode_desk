@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, saveSettings, writeOpencodeConfig, type Settings } from './config.ts'
@@ -68,6 +69,11 @@ ipcMain.handle('dialog:pickDir', async () => {
   return r.canceled ? null : r.filePaths[0]
 })
 
+// 浏览面板的「在外部浏览器打开」：只放行网页地址
+ipcMain.handle('openExternal', (_e, url: string) => {
+  if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+})
+
 ipcMain.handle('settings:get', () => loadSettings())
 
 /** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
@@ -134,6 +140,59 @@ function skillsRoot(scope: SkillScope, projectPath?: string | null): string {
   return scope === 'global' ? join(opencodeConfigDir(), 'skills') : join(projectPath ?? '', '.opencode', 'skills')
 }
 
+// ---------- 内置技能 ----------
+// 内置技能随安装包放在 resources/builtin-skills/<name>/SKILL.md。内核只认全局/项目
+// 两个发现目录，没有「第三个目录」的配置项，所以启动时同步复制进全局技能目录。
+// 清单（builtin-skills.json）记录上次写入的内容指纹，用于区分三种情况：
+// 目标没被用户改过 → 随版本升级覆盖；被改过 → 跳过、尊重用户版本；
+// 被用户删掉（目录不存在）→ 不再恢复。
+const sha256 = (t: string) => createHash('sha256').update(t).digest('hex')
+const builtinManifestFile = () => join(opencodeConfigDir(), 'builtin-skills.json')
+
+function readBuiltinManifest(): Record<string, { hash: string }> {
+  try {
+    const v = JSON.parse(readFileSync(builtinManifestFile(), 'utf8'))
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {}
+  } catch {
+    return {}
+  }
+}
+
+function syncBuiltinSkills(): void {
+  const from = app.isPackaged
+    ? join(process.resourcesPath, 'builtin-skills')
+    : join(app.getAppPath(), 'resources', 'builtin-skills')
+  let names: string[]
+  try {
+    names = readdirSync(from, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)
+  } catch {
+    return // 源目录缺失：静默跳过，不影响启动
+  }
+  const manifest = readBuiltinManifest()
+  const root = skillsRoot('global')
+  let dirty = false
+  for (const name of names) {
+    const src = readFileText(join(from, name, 'SKILL.md'))
+    if (!src) continue
+    const file = join(root, name, 'SKILL.md')
+    const cur = existsSync(file) ? readFileText(file) : ''
+    if (cur === src) continue // 已是最新
+    if (cur && manifest[name]?.hash !== sha256(cur)) continue // 被用户改过：尊重用户版本
+    if (!cur && manifest[name]) continue // 被用户删过：不恢复
+    mkdirSync(join(root, name), { recursive: true })
+    writeFileSync(file, src)
+    manifest[name] = { hash: sha256(src) }
+    dirty = true
+  }
+  for (const name of Object.keys(manifest)) {
+    if (!names.includes(name)) {
+      delete manifest[name] // 安装包已移除的内置技能：清掉清单，残留文件留在全局目录当普通技能
+      dirty = true
+    }
+  }
+  if (dirty) writeFileSync(builtinManifestFile(), JSON.stringify(manifest, null, 2), 'utf8')
+}
+
 /** 写回 frontmatter 时的标量转义：含冒号/井号或非普通字符时加双引号，避免 YAML 解析炸掉 */
 function yamlScalar(v: string): string {
   const flat = v.replace(/\s*\n+\s*/g, ' ').trim()
@@ -184,10 +243,14 @@ function listSkills(scope: SkillScope, projectPath?: string | null): SkillItem[]
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-ipcMain.handle('skills:list', (_e, req: { projectPath?: string | null }) => [
-  ...listSkills('global'),
-  ...listSkills('project', req?.projectPath)
-])
+ipcMain.handle('skills:list', (_e, req: { projectPath?: string | null }) => {
+  const manifest = readBuiltinManifest()
+  return [
+    // 与安装包内容一致的算内置技能；被用户改过的按普通全局技能对待（可编辑可删除）
+    ...listSkills('global').map((s) => (manifest[s.name]?.hash === sha256(readFileText(s.path)) ? { ...s, builtin: true } : s)),
+    ...listSkills('project', req?.projectPath)
+  ]
+})
 
 /** 读单条技能并拆出 frontmatter / 正文，供编辑弹窗回填 */
 ipcMain.handle('skills:read', (_e, req: { scope: SkillScope; projectPath?: string | null; name: string }) =>
@@ -255,6 +318,7 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.qingniao.desktop')
   Menu.setApplicationMenu(null) // 去掉原生菜单，交互全部走应用内 UI
   mkdirSync(workspace, { recursive: true })
+  syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
