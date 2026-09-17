@@ -1,7 +1,7 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, ProviderCfg, Settings } from '../../electron/main/types'
 
-export type { McpCfg, ProviderCfg }
+export type { McpCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 

@@ -43,6 +43,7 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 9. 主题：简约浅（默认）+ 深色 + 4 套彩色浅色（晴空蓝/奶油暖米/薄荷青绿/淡粉蔷薇），强调色自动派生气泡/边框/路径文字色
 10. 自绘标题栏与全部控件（无原生菜单/下拉/弹窗），图标库 lucide，无手写 SVG
 11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
+12. 技能（Skills）：设置页可视化管理 `SKILL.md`，按**全局 / 项目**两组展示，支持新建、编辑、改名、删除与打开目录，保存前按内核规则校验 frontmatter（名称规范、描述必填、描述长度）；模型平时只看到「名称 + 描述」，判断需要才读全文，不占常驻上下文
 
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 
@@ -62,6 +63,17 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 ```
 
 > 新对话首发时读取这两个文件并作为隐藏上下文注入，AI 因此自带项目背景；日常的流水记录由应用自动追加，无需手动维护。
+
+**技能（Skills）** 同样是磁盘上的文件，位置由内核的发现规则决定，只有两处会被青鸟管理：
+
+```
+~/.qingniaoai/opencode/skills/<技能名>/SKILL.md    全局技能，所有项目生效
+<项目>/.opencode/skills/<技能名>/SKILL.md          项目技能，仅在打开该项目时生效
+```
+
+> 一个技能 = 一个以技能名命名的目录 + 一份大写 `SKILL.md`。frontmatter 必须含 `name`（小写字母/数字/单个连字符，须与目录名一致）与 `description`；
+> 内核启动时扫描这两处（另行兼容 `~/.claude/skills`、`~/.agents/skills`），把「名称 + 描述」写进 skill 工具说明，模型据此判断何时加载全文。
+> 因为只在启动时加载，设置页里增删改技能后会自动重启内核使其生效——与修改 MCP 的机制一致。
 
 > **端点要求**：自定义提供商走 `@ai-sdk/openai-compatible`，需支持 OpenAI **Chat Completions API**（`/chat/completions` + `/models`）。
 

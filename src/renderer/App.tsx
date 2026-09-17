@@ -383,6 +383,8 @@ export default function App() {
             custom={custom}
             onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
             onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
+            projectPath={activeProject?.path ?? null}
+            projectName={activeProject?.name ?? null}
           />
         )}
         </div>

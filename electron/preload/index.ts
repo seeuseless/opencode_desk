@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Settings } from '../main/types'
+import type { Settings, SkillDraft, SkillItem, SkillScope } from '../main/types'
 
 /** 暴露给渲染进程的最小桥：REST 代理 + 事件订阅 + 应用级能力 */
 const api = {
@@ -26,6 +26,21 @@ const api = {
   /** 把一段内容追加到项目当日记忆文件（<项目>/.qingniao/memory/YYYY-MM-DD.md） */
   appendMemory: (projectPath: string, content: string): Promise<void> =>
     ipcRenderer.invoke('memory:append', { projectPath, content }),
+  /** 技能列表：全局（~/.qingniaoai/opencode/skills）+ 当前项目（<项目>/.opencode/skills），含 frontmatter 校验结果 */
+  listSkills: (projectPath?: string | null): Promise<SkillItem[]> => ipcRenderer.invoke('skills:list', { projectPath }),
+  /** 读单条技能，返回拆分后的 frontmatter 与正文（编辑弹窗回填用） */
+  readSkill: (req: {
+    scope: SkillScope
+    projectPath?: string | null
+    name: string
+  }): Promise<{ name: string; description: string; body: string; hasFm: boolean }> => ipcRenderer.invoke('skills:read', req),
+  /** 新建或保存技能（改名时自动清理旧目录），返回 { error } 表示校验未通过 */
+  saveSkill: (draft: SkillDraft): Promise<{ error?: string }> => ipcRenderer.invoke('skills:save', draft),
+  removeSkill: (req: { scope: SkillScope; projectPath?: string | null; name: string }): Promise<void> =>
+    ipcRenderer.invoke('skills:remove', req),
+  /** 在系统文件管理器里打开技能目录 */
+  openSkillsDir: (req: { scope: SkillScope; projectPath?: string | null }): Promise<string> =>
+    ipcRenderer.invoke('skills:openDir', req),
   winMin: () => ipcRenderer.send('win:min'),
   winMax: () => ipcRenderer.send('win:max'),
   winClose: () => ipcRenderer.send('win:close'),
