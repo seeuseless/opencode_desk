@@ -98,8 +98,9 @@ export function deriveVars(c: CustomColors): Record<string, string> {
     '--side-solid': sideLight ? mix(c.sideBg, '#ffffff', 0.25) : mix(c.sideBg, '#000000', 0.14),
     '--side-line': sideLight ? 'rgba(0,0,0,0.12)' : rgba('#ffffff', 0.2),
     '--side-logo': sideLight ? c.accent : sideFg,
-    // 右侧 AI 回复里「点击展开」的详情/代码块背景：用左侧菜单底色，浅色主题再往白里提一档，比 --bg3 更通透
-    '--expand-bg': sideLight ? mix(c.sideBg, '#ffffff', 0.72) : mix(c.sideBg, '#000000', 0.16),
+    // 右侧 AI 回复里「点击展开」的详情/代码块背景：
+    // 深色主题用主题浮面色 bg3（深底配浅字，对比足够）；浅色主题用左侧菜单底色往白里提一档（通透，配深字）
+    '--expand-bg': dark ? bg3 : mix(c.sideBg, '#ffffff', 0.5),
   }
 }
 

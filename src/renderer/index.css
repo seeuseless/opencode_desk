@@ -15,8 +15,10 @@
   --side-solid: var(--bg3);       /* 不透明小浮面（悬浮按钮组等，需遮住底层文字） */
   --side-line: var(--line);       /* 面板内描边 */
   --side-logo: var(--accent);     /* 标题栏 logo 色 */
-  /* AI 回复「点击展开」的详情/代码块背景：基于左侧菜单底色再往白里提一档，保持通透 */
-  --expand-bg: color-mix(in srgb, var(--side-bg) 50%, #ffffff);
+  /* AI 回复「点击展开」的详情/代码块背景：默认用主题自身浮面色 --bg3
+     （深色主题=深浮面、彩色主题=浅色调），保证与正文/代码文字有足够对比；
+     简约浅主题在下方单独覆盖为「左侧菜单底色往白里提一档」的通透色 */
+  --expand-bg: var(--bg3);
   /* AI 回复气泡底色（与用户气泡呼应）：默认跟随浮层表面色，简约浅覆盖为浅灰 */
   --ai: var(--bg3);
 }
@@ -150,6 +152,8 @@
   --user: #f1f1f1;
   --on-user: #1f232b;
   --field-line: #dbdbdb;
+  /* 简约浅：展开详情/代码块底色 = 左侧菜单底(#f5f5f5)往白里提一档，通透且与深字对比足够 */
+  --expand-bg: color-mix(in srgb, var(--side-bg) 50%, #ffffff);
 }
 :root[data-theme='light'] .send-round { color: var(--fg2); }
 /* 简约浅：停止按钮不加彩色背景，与发送态同底（白底描边）；
