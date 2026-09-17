@@ -22,6 +22,8 @@ interface Props {
   sessionId: string
   /** 处理中的会话集合（sid → true）：对应任务行显示加载图标，多任务并行各自转圈 */
   busyIds: Record<string, boolean>
+  /** 正在拉取历史的会话集合（sid → true）：点击当帧高亮，不用等数据回来 */
+  loadingSids: Record<string, boolean>
   view: 'chat' | 'settings'
   onToggleProject: (id: string) => void
   onRemoveProject: (id: string) => void
@@ -90,7 +92,7 @@ export function Sidebar(p: Props) {
                   {shown.map((s) => (
                     <div
                       key={s.id}
-                      className={'sess' + (s.id === p.sessionId && proj.id === p.activeId ? ' on' : '')}
+                      className={'sess' + (s.id === p.sessionId && proj.id === p.activeId || p.loadingSids[s.id] ? ' on' : '')}
                       onClick={() => p.onPickSession(proj, s.id)}
                       title={s.title}
                     >

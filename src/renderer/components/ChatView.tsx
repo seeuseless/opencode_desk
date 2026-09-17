@@ -26,6 +26,8 @@ interface Props {
   onBusy: (sid: string, running: boolean) => void
   /** 自增信号：点 + / 点任务时自动聚焦输入框 */
   focusSignal: number
+  /** 跳转到设置页（配置模型） */
+  onOpenSettings?: () => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -73,6 +75,8 @@ export function ChatView(p: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   // 本轮发送前已存在的消息 id：用于判断本轮是否已开始产出
   const turnBase = useRef<Set<string>>(new Set())
+  // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文）
+  const inflight = useRef<{ sid: string; text: string } | null>(null)
   // 打字机：partID → 已吐出的字符数；ticker 定时器；被插队的队列项下标
   const shown = useRef<Map<string, number>>(new Map())
   const ticker = useRef<number | null>(null)
@@ -83,8 +87,8 @@ export function ChatView(p: Props) {
   const [previews, setPreviews] = useState<Record<string, string>>({})
   // 本轮开发任务清单（todo.write / todo.updated 事件驱动，完成项中划线）
   const [todos, setTodos] = useState<TodoItem[]>([])
-  // 内核自动重试提示（session.status retry 事件驱动，恢复出结果即清除）
-  const [retryNote, setRetryNote] = useState('')
+  // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
+  const pollFingerprint = useRef('')
 
   dirRef.current = p.project?.path
   sidRef.current = p.sessionId
@@ -134,7 +138,6 @@ export function ChatView(p: Props) {
     setPreviews({})
     setQueue([])
     setTodos([])
-    setRetryNote('')
     if (!p.sessionId) {
       setMsgs([])
       setInput('')
@@ -147,7 +150,7 @@ export function ChatView(p: Props) {
 
   // 订阅内核事件：token 级增量 + part 快照 + 会话空闲
   useEffect(() => {
-    const off = window.qingniao.onEvent((raw) => {
+    const off = window.qingniao.onEvent(async (raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
       if (e.type === 'message.updated') {
         const info = e.properties.info as MessageView['info'] | undefined
@@ -188,18 +191,11 @@ export function ChatView(p: Props) {
         const isCurrent = idleSid === sidRef.current
         if (!isCurrent) return
         setTodos([])
-        setRetryNote('')
         oc.messages(sidRef.current, dirRef.current)
           .then((list) => hydrate(list, shown.current, texts.current))
           .then((hydrated) => setMsgs(hydrated))
           .catch(() => { /* 事件流已展示内容 */ })
         p.onRefreshSessions()
-      } else if (e.type === 'session.status') {
-        // 内核自动重试（限流/断网）：只给当前会话一行可见提示，不吞 busy（本轮还在跑）
-        const pr = e.properties as { sessionID?: string; status?: { type: string; message?: string } }
-        if (pr.sessionID === sidRef.current && pr.status?.type === 'retry')
-          setRetryNote(pr.status.message ? humanizeError(pr.status.message) : '连接模型失败，自动重试中…')
-        else if (pr.sessionID && busySetRef.current[pr.sessionID]) setRetryNote('')
       } else if (e.type === 'qingniao.sse.reconnected') {
         // SSE 桥断线重连：断开期间可能漏掉 session.idle，busy 会话做一次轻量重同步
         for (const s of Object.keys(busySetRef.current)) {
@@ -217,6 +213,18 @@ export function ChatView(p: Props) {
               .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
               .catch(() => {})
           }
+        }
+      } else if (e.type === 'qingniao.kernel.started') {
+        // 内核（重）启动：重启前在跑的回合已失效（任务为内存态），清本地 busy 与待重发记录；
+        // 残留的 running tool part 由渲染层按"非 busy 即中断"处理，不再死转圈
+        for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
+        inflight.current = null
+        setTodos([])
+        setError('')
+        if (sidRef.current) {
+          oc.messages(sidRef.current, dirRef.current)
+            .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
+            .catch(() => {})
         }
       } else if (e.type === 'qingniao.kernel.unhealthy') {
         // 主进程自动重启内核后，本地 busy 状态全部失效，做一次整体重同步
@@ -318,6 +326,69 @@ export function ChatView(p: Props) {
     return () => clearInterval(t)
   }, [busy])
 
+  /**
+   * 流式兜底轮询：内核对部分 provider 不向 /event 推 message.part.delta（实测只发 heartbeat），
+   * 导致渲染层看不到中间过程、内容一次性涌出。busy 期间每 1.2s 拉一次该会话消息，
+   * 增量登记进 texts 让打字机续吐——既有 delta 事件时轮询只是幂等补充，无 delta 时它是唯一实时源。
+   * 会话空闲后自动停止。
+   */
+  useEffect(() => {
+    if (!busy || !p.sessionId) return
+    const sid = p.sessionId
+    let alive = true
+    const sync = async () => {
+      if (!alive) return
+      try {
+        const list = await oc.messages(sid, dirRef.current)
+        if (!alive || sid !== sidRef.current || sid !== p.sessionId) return
+        // 指纹：消息数 + 各 part 长度。内容无变化直接跳过，避免无谓渲染
+        const fp = list.map((m) => m.info.id + ':' + m.parts.map((x) => x.type + (x.text?.length ?? 0)).join(',')).join('|')
+        if (fp === pollFingerprint.current) return
+        pollFingerprint.current = fp
+        setMsgs((prev) => mergePoll(list, prev, texts.current, shown.current, startTicker))
+      } catch {
+        /* 内核瞬时不可达，下一轮再试 */
+      }
+    }
+    const t = window.setInterval(sync, 1200)
+    sync()
+    return () => {
+      alive = false
+      clearInterval(t)
+    }
+  }, [busy, p.sessionId])
+
+  /**
+   * 断网自动暂停 / 恢复自动执行：
+   * 内核是本地进程，断网只影响它到模型端点的链路。浏览器 offline 时把正在跑的
+   * 本轮 prompt 记下并中止内核任务（自动暂停）；online 时自动重发同一句话（自动执行）。
+   * 恢复后内核会话历史仍在，重发会接续上下文，不是重复。
+   */
+  useEffect(() => {
+    const inflightRef = inflight
+    const onOffline = () => {
+      const cur = inflightRef.current
+      if (!cur) return
+      oc.abort(cur.sid).catch(() => { /* 内核已停/无此任务 */ })
+      markBusy(cur.sid, false)
+      setError('网络已断开，任务自动暂停，恢复后自动执行。')
+    }
+    const onOnline = () => {
+      const cur = inflightRef.current
+      if (!cur) return
+      inflightRef.current = null
+      setError('')
+      runPrompt(cur.text, cur.sid)
+    }
+    window.addEventListener('offline', onOffline)
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('offline', onOffline)
+      window.removeEventListener('online', onOnline)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function send() {
     const text = input.trim()
     if (!text) return
@@ -330,8 +401,8 @@ export function ChatView(p: Props) {
     await runPrompt(text)
   }
 
-  async function runPrompt(text: string) {
-    let sid = p.sessionId
+  async function runPrompt(text: string, sidOverride?: string) {
+    let sid = sidOverride ?? p.sessionId
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话，避免 "New session - 时间戳"
       const title = text.length > 30 ? text.slice(0, 30) + '…' : text
@@ -348,6 +419,7 @@ export function ChatView(p: Props) {
       }
     }
     markBusy(sid, true)
+    inflight.current = { sid, text }
     atBottomRef.current = true
     setAtBottom(true)
     const tmpId = 'tmp-' + Date.now()
@@ -362,6 +434,7 @@ export function ChatView(p: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
+      inflight.current = null
       // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用；仅当前仍停在本轮会话时清——
       // 队列插队已在本会话开新轮时不能误清新轮）
       if (sidRef.current === sid && busySetRef.current[sid]) markBusy(sid, false)
@@ -420,7 +493,7 @@ export function ChatView(p: Props) {
             ) : (
               <div key={m.info.id} className="amsg">
                 {m.parts.map((part) => (
-                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} />
+                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy} />
                 ))}
                 {busy && idx === msgs.length - 1 && (
                   <span className="stream-dots"><i /><i /><i /></span>
@@ -432,16 +505,6 @@ export function ChatView(p: Props) {
             <div className="amsg busyline">
               <LoaderCircle size={13} className="spin" />
               正在思考，已用时 {fmtElapsed(elapsed)}
-            </div>
-          )}
-          {busy && (
-            <div className="busychip">
-              <LoaderCircle size={11} className="spin" />
-              <span>任务执行中 · {fmtElapsed(elapsed)}</span>
-              {retryNote && <span className="retry-note">{retryNote}</span>}
-              <button className="icon-btn" title="停止本轮" onClick={() => sidRef.current && oc.abort(sidRef.current).catch(() => {})}>
-                <Square size={11} fill="currentColor" strokeWidth={0} />
-              </button>
             </div>
           )}
           {todos.length > 0 && <TodoCard todos={todos} />}
@@ -511,9 +574,15 @@ export function ChatView(p: Props) {
               </span>
             )}
             <span className="spacer" />
-            <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} />
+            <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
             {busy ? (
-              <button className="send-round" onClick={() => sidRef.current && oc.abort(sidRef.current)} title="停止本轮">
+              <button
+                className="send-round"
+                title="停止所有任务"
+                onClick={() => {
+                  Object.keys(busySet).filter((s) => busySet[s]).forEach((s) => oc.abort(s).catch(() => {}))
+                }}
+              >
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
             ) : (
@@ -578,6 +647,61 @@ function appendDelta(
   }
   const part: Part = { id: pr.partID, sessionID: pr.sessionID, messageID: pr.messageID, type, text: full.slice(0, n) }
   return upsertPart(list, part, roles)
+}
+
+/**
+ * 轮询兜底：把 /message 拉到的全量消息增量并入现有渲染列表。
+ * 新 part 的 text 登记进 texts，打字机从「当前已显示长度」继续吐（不从头重播）；
+ * 已有 part 只合并新字段，不覆盖事件流已推进的打字进度。
+ */
+function mergePoll(
+  polled: MessageView[],
+  prev: MessageView[],
+  texts: Map<string, string>,
+  shown: Map<string, number>,
+  ensureTicker: () => void
+): MessageView[] {
+  const known = new Map<string, MessageView>(prev.map((m) => [m.info.id, m]))
+  const out: MessageView[] = []
+  let changed = false
+  for (const m of polled) {
+    const exist = known.get(m.info.id)
+    if (!exist) {
+      // 新消息（本轮的助手消息）：整体并入，text part 登记全文让打字机接着吐
+      for (const pt of m.parts) {
+        if ((pt.type === 'text' || pt.type === 'reasoning') && pt.text) {
+          if (!texts.has(pt.id)) {
+            texts.set(pt.id, pt.text)
+            ensureTicker()
+          }
+        }
+      }
+      out.push(m)
+      changed = true
+      continue
+    }
+    // 已有消息：逐个 part 合并（只补新 part / 新字段，不碰已渲染文本）
+    let merged = exist
+    for (const pt of m.parts) {
+      const have = merged.parts.find((x) => x.id === pt.id)
+      if (!have) {
+        merged = { ...merged, parts: [...merged.parts, pt] }
+        changed = true
+        if ((pt.type === 'text' || pt.type === 'reasoning') && pt.text && !texts.has(pt.id)) {
+          texts.set(pt.id, pt.text)
+          ensureTicker()
+        }
+      } else if (have.tool && pt.state?.status !== have.state?.status) {
+        merged = { ...merged, parts: merged.parts.map((x) => (x.id === pt.id ? pt : x)) }
+        changed = true
+      }
+    }
+    out.push(merged)
+    known.delete(m.info.id)
+  }
+  // 本地独有的（如乐观插入的 tmp 用户消息）保留
+  known.forEach((m) => out.push(m))
+  return changed ? out : prev
 }
 
 /** message.part.updated：parts 全量快照（登记全文，打字进度由 ticker 追） */
@@ -855,7 +979,7 @@ function relTarget(s: string, projPath?: string): string {
   return s
 }
 
-function PartView({ part, projectPath, preview }: { part: Part; projectPath?: string; preview?: string }) {
+function PartView({ part, projectPath, preview, live }: { part: Part; projectPath?: string; preview?: string; live?: boolean }) {
   // 正文过长（代码大段粘贴/长回答）自动收起，点「展开全文」看全
   if (part.type === 'text' && part.text) {
     return (
@@ -869,7 +993,9 @@ function PartView({ part, projectPath, preview }: { part: Part; projectPath?: st
   }
   if (part.type === 'tool') {
     const meta = TOOL_META[(part.tool ?? '').toLowerCase()] ?? { name: part.tool ?? '工具', icon: <Wrench size={13} /> }
-    const st = part.state?.status ?? 'pending'
+    let st = part.state?.status ?? 'pending'
+    // 会话已不 busy（如内核重启后残留 running 的 tool part）：running 视为中断而非进行中，避免死转圈
+    if (st === 'running' && !live) st = 'error'
     const tool = (part.tool ?? '').toLowerCase()
     const rawOut = cnOutput(st === 'error' ? str(part.state?.error) : str(part.state?.output))
     let body: ReactNode

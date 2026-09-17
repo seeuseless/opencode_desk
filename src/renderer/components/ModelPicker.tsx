@@ -12,10 +12,12 @@ interface Props {
   /** 'providerID/modelID' */
   value: string
   onChange: (v: string) => void
+  /** 点击「去配置模型」跳转到设置页 */
+  onOpenSettings?: () => void
 }
 
 /** 二级级联模型菜单：默认只显示一级提供商，点击后展开二级模型列 */
-export function ModelPicker({ groups, value, onChange }: Props) {
+export function ModelPicker({ groups, value, onChange, onOpenSettings }: Props) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
@@ -43,8 +45,8 @@ export function ModelPicker({ groups, value, onChange }: Props) {
   const active = groups.find((g) => g.id === expanded)
 
   return (
-    <div className="menu-wrap" ref={wrap}>
-      <button type="button" className="menu-trigger" onClick={() => setOpen((v) => !v)}>
+    <div className="menu-wrap mp" ref={wrap}>
+      <button type="button" className="menu-trigger mp" onClick={() => setOpen((v) => !v)}>
         <Sparkles size={14} />
         <span className="menu-label">{display}</span>
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
@@ -63,7 +65,16 @@ export function ModelPicker({ groups, value, onChange }: Props) {
                 <ChevronRight size={13} className="mp-arrow" />
               </button>
             ))}
-            {!groups.length && <div className="mp-empty">请先在设置添加提供商</div>}
+            <button
+              type="button"
+              className="mp-item mp-config"
+              onClick={() => {
+                setOpen(false)
+                onOpenSettings?.()
+              }}
+            >
+              <span className="mp-name">配置模型</span>
+            </button>
           </div>
           {active && active.models.length > 0 && (
             <div className="mp-col2-float">

@@ -41,6 +41,8 @@ export default function App() {
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
   const [saving, setSaving] = useState(false)
   const workspaceRef = useRef('')
+  /** 正在拉取历史的会话 id：点击当帧就标记，会话行高亮不必等数据回来 */
+  const [loadingSids, setLoadingSids] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -69,7 +71,7 @@ export default function App() {
     })()
   }, [])
 
-  async function loadProjectSessions(proj: Project) {
+  async function loadProjectSessions(proj: Project): Promise<void> {
     try {
       const list = sortSessions(await oc.sessions(proj.path))
       setSessionsMap((m) => ({ ...m, [proj.path]: list }))
@@ -100,25 +102,22 @@ export default function App() {
     if (proj && expanded[proj.id] && !(proj.path in sessionsMap)) loadProjectSessions(proj)
   }, [projects, expanded, activeId])
 
-  // 启动 / 项目数据变化时，对账"正在处理中"的会话：
-  // 内核里还有工具 part 处于 running = 真在跑，补记 busy（右侧与侧栏同步显示）；
-  // 否则一律清掉——"发完消息就关应用、助手还没吐字"的会话按已结束处理，
-  // 避免误判成在跑导致图标常驻。真正在跑的内核重启后也会发 session.idle 兜住
+  // 启动 / 项目数据变化时，对账"正在处理中"的会话：只清不加。
+  // busy 的事实源是事件（session.idle / session.error / kernel.started / ChatView 上报）；
+  // 数据扫描只负责兜底清漏——会话数据里已无 running part 时清掉 busy。
+  // 绝不凭数据里的 running 补记 busy：主动中止（如断网暂停）的回合数据会残留 running，
+  // 补记会让侧栏加载图标在任务结束后常驻。
   useEffect(() => {
-    const busyRef: Record<string, boolean> = {}
     for (const [path, list] of Object.entries(sessionsMap)) {
       for (const s of list) {
         ;(async () => {
           try {
             const msgs = await oc.messages(s.id, path)
-            busyRef[s.id] = msgs.some((m) => m.parts.some((pt) => pt.state?.status === 'running'))
+            if (msgs.some((m) => m.parts.some((pt) => pt.state?.status === 'running'))) return
             setBusyIds((m) => {
-              const next = { ...m }
-              for (const [sid, b] of Object.entries(busyRef)) {
-                if (b) next[sid] = true
-                else delete next[sid]
-              }
-              return next
+              if (!(s.id in m)) return m
+              const { [s.id]: _drop, ...rest } = m
+              return rest
             })
           } catch { /* 单个会话拉取失败不影响其他 */ }
         })()
@@ -166,6 +165,17 @@ export default function App() {
     setSessionId(sid)
     setView('chat')
     setFocusTick((t) => t + 1)
+    const projList = sessionsMap[proj.path]
+    if (!projList?.some((s) => s.id === sid)) {
+      // 会话历史尚未拉回：先标记加载中让左侧立即高亮，拉回后解除
+      setLoadingSids((m) => ({ ...m, [sid]: true }))
+      loadProjectSessions(proj).then(() =>
+        setLoadingSids((m) => {
+          const { [sid]: _drop, ...rest } = m
+          return rest
+        })
+      )
+    }
   }
 
   async function deleteSessionOf(proj: Project, sid: string) {
@@ -256,6 +266,7 @@ export default function App() {
           sessionsMap={sessionsMap}
           sessionId={sessionId}
           busyIds={busyIds}
+          loadingSids={loadingSids}
           view={view}
           onToggleProject={toggleProject}
           onRemoveProject={removeProject}
@@ -292,6 +303,7 @@ export default function App() {
               })
             }
             focusSignal={focusTick}
+            onOpenSettings={() => setView('settings')}
           />
         ) : (
           <Welcome onAddProject={addProject} onOpenSettings={() => setView('settings')} />

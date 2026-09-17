@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import net from 'node:net'
 import {
   loadSettings,
@@ -12,6 +13,40 @@ import {
   settingsPath,
   writeOpencodeConfig
 } from './config.ts'
+
+/** 事件桥遥测：记录 SSE 断连/重连次数，暴露给渲染层排障 */
+const TELEMETRY = 'qn-event-telemetry.json'
+
+function telemetryPath(): string {
+  return join(qingniaoHome(), TELEMETRY)
+}
+
+export interface Telemetry {
+  sseReconnects: number
+  lastReconnectAt: string
+}
+
+export function loadTelemetry(): Telemetry {
+  try {
+    if (existsSync(telemetryPath())) {
+      return JSON.parse(readFileSync(telemetryPath(), 'utf8')) as Telemetry
+    }
+  } catch {
+    /* 损坏文件走默认 */
+  }
+  return { sseReconnects: 0, lastReconnectAt: '' }
+}
+
+export function bumpTelemetryReconnect(): void {
+  const t = loadTelemetry()
+  t.sseReconnects += 1
+  t.lastReconnectAt = new Date().toISOString()
+  try {
+    writeFileSync(telemetryPath(), JSON.stringify(t, null, 2))
+  } catch {
+    /* 写失败不阻塞 */
+  }
+}
 
 /**
  * OpenCode serve 的透传门面：
@@ -103,6 +138,8 @@ class Adapter {
     })
     await this.waitHealthy()
     this.openEventBridge()
+    // 内核（重）启动成功：渲染层据此清理重启前的残留 busy/running 状态（任务为内存态，重启即失效）
+    this.safePush({ type: 'qingniao.kernel.started', properties: {} })
   }
 
   /** 轮询 /global/health 直到内核就绪（冷启动偶尔较慢，给 ~10s） */
@@ -154,8 +191,8 @@ class Adapter {
           backoff = 1000
         } catch {
           /* 连接断开走重连 */
-          // 断开期间错过的 kernel 事件（如 session.idle）无法补收，
-          // 通知渲染层做一次轻量重同步，兜住 busy 残留等状态
+          // 记录断连遥测 + 通知渲染层做一次轻量重同步，兜住 busy 残留等状态
+          bumpTelemetryReconnect()
           this.safePush({ type: 'qingniao.sse.reconnected', properties: {} })
           // 若内核已死（非瞬时断连），健康探测会返回 false，触发自动重启
           if (!(await this.isHealthy())) this.onUnhealthy?.()

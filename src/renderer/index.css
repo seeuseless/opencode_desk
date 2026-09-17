@@ -251,16 +251,6 @@ input, textarea { font: inherit; }
 
 .amsg { margin: 10px 0; line-height: 1.6; word-break: break-word; }
 .amsg.busyline { display: flex; align-items: center; gap: 7px; color: var(--fg2); font-size: 13px; }
-/* busy 期间常驻在助手区末尾的"任务执行中"药丸：即使正文已开始流式也保留进度 + 停止入口 */
-.busychip {
-  display: inline-flex; align-items: center; gap: 6px;
-  margin-top: 8px; padding: 4px 10px; border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: var(--accent); font-size: 12px;
-}
-.busychip .icon-btn { width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: none; border: none; color: inherit; cursor: pointer; }
-/* 内核自动重试（限流/断网）时的可见提示：原先 retry 事件被完全忽略，用户只看到"一直加载"不知道在等什么 */
-.busychip .retry-note { color: var(--warn, #b45309); }
 
 /* Markdown 正文（react-markdown 渲染，配色走主题变量） */
 .md { line-height: 1.6; }
@@ -502,7 +492,7 @@ input, textarea { font: inherit; }
 .chev.up { transform: rotate(180deg); }
 
 .menu-panel {
-  position: absolute; top: calc(100% + 6px); right: 0; z-index: 30;
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 30;
   min-width: 260px; max-height: 340px; overflow-y: auto;
   background: var(--bg2); border: none; border-radius: 12px;
   box-shadow: 0 10px 36px var(--shadow); padding: 6px;
@@ -519,13 +509,14 @@ input, textarea { font: inherit; }
 
 /* ================= 模型二级级联菜单 ================= */
 .menu-panel.mp {
-  position: absolute;
+  position: absolute; left: 0; right: auto;
   display: flex; align-items: flex-end; gap: 4px;
   min-width: auto; max-height: 340px; overflow: visible; padding: 6px;
 }
 .mp-col {
   display: flex; flex-direction: column; gap: 2px;
   min-width: 150px; max-width: 220px; max-height: 328px; overflow-y: auto;
+  flex-shrink: 0;
 }
 .mp-item {
   display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
@@ -537,13 +528,16 @@ input, textarea { font: inherit; }
 .mp-name { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .mp-arrow { margin-left: auto; flex-shrink: 0; opacity: 0.55; }
 .mp-empty { padding: 10px 8px; font-size: 12.5px; color: var(--fg2); }
-/* 二级模型列：绝对定位悬浮在一级列左侧，展开/收起不影响一级列宽度与位置 */
+/* 一级列底部的「配置模型」：上方分隔线，与提供商列表隔开 */
+.mp-config {
+  margin-top: 4px; padding-top: 9px;
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 7px 7px; color: var(--fg2);
+}
+/* 二级模型列：与一级列并排（正常流布局），展开时面板自动变宽，不遮挡聊天区 */
 .mp-col2-float {
-  position: absolute; right: calc(100% + 2px); bottom: 6px; z-index: 31;
   display: flex; flex-direction: column; gap: 2px;
   width: 220px; max-height: 328px; overflow-y: auto;
-  background: var(--bg2); border-radius: 12px;
-  box-shadow: 0 10px 36px var(--shadow); padding: 6px;
 }
 
 /* ================= 按钮 ================= */
