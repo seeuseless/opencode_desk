@@ -622,6 +622,8 @@ input, textarea { font: inherit; }
   box-shadow: inset 0 0 0 1px var(--field-line);
 }
 .send-round:hover:not(:disabled) { filter: brightness(1.05); }
+/* 停止态：填充主色，与发送态明显区分 */
+.send-round.stop { background: var(--accent); color: var(--on-accent); box-shadow: none; }
 .send-round:disabled { opacity: 0.4; cursor: default; }
 
 /* ================= 自绘下拉 ================= */

@@ -1073,14 +1073,15 @@ export function ChatView(p: Props) {
             )}
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
-            {anyBusy && (
+            {anyBusy ? (
               <button className="send-round stop" title="停止所有任务" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
+            ) : (
+              <button className="send-round" disabled={!input.trim()} onClick={send} title="发送">
+                <Send size={15} />
+              </button>
             )}
-            <button className="send-round" disabled={!input.trim()} onClick={send} title="发送">
-              <Send size={15} />
-            </button>
           </div>
         </div>
       </div>
