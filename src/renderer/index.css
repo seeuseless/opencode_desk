@@ -147,6 +147,10 @@
   --field-line: #dbdbdb;
 }
 :root[data-theme='light'] .send-round { color: var(--fg2); }
+/* 简约浅：停止按钮取消蓝色填充，改中性灰底 + 红色图标（中断语义），不破坏与发送态的区分 */
+:root[data-theme='light'] .send-round.stop {
+  background: var(--bg3); color: var(--err); box-shadow: inset 0 0 0 1px var(--field-line);
+}
 
 /* ================= 基础 ================= */
 * { box-sizing: border-box; margin: 0; padding: 0; }
