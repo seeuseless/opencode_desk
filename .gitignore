@@ -20,3 +20,12 @@ dist
 
 # ZCode 工具目录
 .zcode/
+
+# 禁止上传 .git 目录内容
+/.git/
+
+# 禁止生成 nul / null 文件
+/nul
+/nul.*
+/null
+/null.*

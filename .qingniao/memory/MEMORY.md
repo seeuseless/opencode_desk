@@ -19,6 +19,7 @@
 
 ## 约定
 - 用户回复「1」= 写 git 提交日志并 push（全局约定，跨项目）
+- 禁止上传 `.git` 目录下文件；禁止生成 `nul` / `null` 文件（已在 `.gitignore` 加 `/.git/`、`/nul*`、`/null*` 规则兜底）
 - 应用 `Menu.setApplicationMenu(null)`：Ctrl+R 等加速键无效，改完代码窗口不会自动重载；验证新 UI 要重启 `npm run dev`
 
 ## 踩坑记录

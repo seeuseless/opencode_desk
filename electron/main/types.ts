@@ -95,7 +95,7 @@ export interface DeviceCfg {
  * 以后上线换域名只改这一个值（或用环境变量 QINGNIAO_PLATFORM_URL 覆盖，便于临时切环境）。
  */
 export interface PlatformCfg {
-  /** 平台地址，如 http://192.168.0.78:9002 */
+  /** 平台地址，如 http://127.0.0.1:9002 */
   baseUrl: string
   /** 登录换来的长期授权 token（10 年有效，可在平台后台吊销） */
   token: string
@@ -130,7 +130,7 @@ export interface Settings {
   platform: PlatformCfg
 }
 
-export const DEFAULT_PLATFORM_URL = 'http://192.168.0.78:9002'
+export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:9002'
 
 export const DEFAULT_SETTINGS: Settings = {
   providers: [],

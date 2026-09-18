@@ -98,7 +98,7 @@ export function AccountPanel(p: Props) {
           <div className="acct-manual">
             <label>
               平台地址
-              <span className="lab-tip">填平台部署的根地址，如 http://192.168.0.78:9000</span>
+              <span className="lab-tip">填平台部署的根地址，如 http://127.0.0.1:9000</span>
               <input value={url} spellCheck={false} onChange={(e) => setUrl(e.target.value)} />
             </label>
             <button className="ghost" disabled={p.platformBusy || !url.trim()} onClick={() => p.onSetBaseUrl(url.trim())}>
