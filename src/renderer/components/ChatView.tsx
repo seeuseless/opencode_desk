@@ -5,9 +5,9 @@ import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
-  Square, Terminal, Trash2, Wrench, X
+  Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import { load, save } from '../store'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -51,6 +51,23 @@ function parseModel(key: string): ModelSel | undefined {
   if (!key) return undefined
   const i = key.indexOf('/')
   return { providerID: key.slice(0, i), modelID: key.slice(i + 1) }
+}
+
+/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文）：AI 可见、界面不渲染 */
+function isCtxOnly(txt: string): boolean {
+  return txt.startsWith(MEMORY_PREFIX) || txt.startsWith(BROWSER_CTX_PREFIX)
+}
+
+/** 浏览器收藏条目：URL 去重；title 取页面标题，拿不到时用域名兜底 */
+type Bookmark = { url: string; title: string }
+
+/** 从 URL 提取主机名做收藏显示名兜底；解析失败退回原串 */
+function hostOf(u: string): string {
+  try {
+    return new URL(u).hostname
+  } catch {
+    return u
+  }
 }
 
 /** 任务被中断后的自动重试：间隔 10 秒，最多 10 次；耗尽后交给界面上的手动重试按钮 */
@@ -236,6 +253,12 @@ export function ChatView(p: Props) {
   const [floatOpen, setFloatOpen] = useState(false)
   /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
   const [manualBrowser, setManualBrowser] = useState(false)
+  /** 面板当前页 URL（含用户手输导航，BrowserPanel 回传）：浏览器对话的上下文锚点 */
+  const [panelUrl, setPanelUrl] = useState('')
+  /** 浏览器收藏夹：地址栏星标收藏 / 取消，全屏时顶部收藏条展示（localStorage 持久化） */
+  const [marks, setMarks] = useState<Bookmark[]>(() => load<Bookmark[]>('qingniao.bookmarks', []))
+  /** 已注入的浏览器上下文（会话 + URL）：没变过就不再重复注入，避免每条消息都塞一份 */
+  const browserCtxRef = useRef<{ sid: string; url: string } | null>(null)
   /** 浮动聊天卡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
   const [floatPos, setFloatPos] = useState<{ r: number; b: number } | null>(() => {
     const v = load<{ r: number; b: number } | null>('qingniao.floatPos', null)
@@ -309,6 +332,17 @@ export function ChatView(p: Props) {
       }
     })
   }, [])
+
+  // 收藏夹落盘：状态即事实源，变化即写
+  useEffect(() => {
+    save('qingniao.bookmarks', marks)
+  }, [marks])
+
+  /** 收藏 / 取消收藏当前页：按 URL 去重，title 为页面标题（拿不到时调用方传域名兜底） */
+  function toggleMark(url: string, title: string) {
+    if (!url) return
+    setMarks((ms) => (ms.some((m) => m.url === url) ? ms.filter((m) => m.url !== url) : [...ms, { url, title }]))
+  }
 
   function closeBrowserPanel() {
     setBrowserOpen(false)
@@ -567,6 +601,8 @@ export function ChatView(p: Props) {
       const list = await oc.messages(sid, dir)
       setMsgs(hydrate(list.filter((m) => m.info.id !== uid), shown.current, texts.current))
     } catch { /* 保留现状，由重发接续 */ }
+    // 撤回可能带走了已注入的浏览器上下文消息：清掉记录，重发时按需重新注入
+    browserCtxRef.current = null
     void runPrompt(newText, sid, dir)
   }
 
@@ -1054,6 +1090,27 @@ export function ChatView(p: Props) {
         return
       }
     }
+    // 浏览器对话上下文：面板开着且有页面时，先把「当前页面」以仅上下文注入，
+    // 让本轮对话默认针对这个 URL（网页浏览场景）而不是本地项目；URL 没变就不重复注入
+    if ((browserOpen || manualBrowser || browserMax) && panelUrl) {
+      const bc = browserCtxRef.current
+      if (!bc || bc.sid !== sid || bc.url !== panelUrl) {
+        try {
+          await oc.injectContext(
+            sid,
+            dir,
+            BROWSER_CTX_PREFIX +
+              '用户正在内置浏览器里看下面这个页面，本轮对话默认针对该页面（网页浏览场景，不是本地项目开发）：\n' +
+              `- 当前页面：${panelUrl}\n` +
+              '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）。\n' +
+              '不要读写项目文件或执行终端命令，除非用户明确要求；回答优先基于当前页面的实际内容。'
+          )
+          browserCtxRef.current = { sid, url: panelUrl }
+        } catch {
+          /* 注入失败不阻塞对话，AI 仍可自行用工具探页面 */
+        }
+      }
+    }
     markBusy(sid, true, dir)
     inflight.current = { sid, text }
     atBottomRef.current = true
@@ -1132,12 +1189,12 @@ export function ChatView(p: Props) {
     oc.rejectQuestion(req.id, dirRef.current).catch(() => { /* 已应答/已失效 */ })
   }
 
-  // 可见消息数：项目记忆是「仅上下文」注入（AI 可见、界面不渲染），不能算进「有内容」，
-  // 否则注入记忆后 msgs 非空、空态引导就不显示了
+  // 可见消息数：项目记忆、浏览器页面上下文都是「仅上下文」注入（AI 可见、界面不渲染），
+  // 不能算进「有内容」，否则注入记忆后 msgs 非空、空态引导就不显示了
   const visibleMsgCount = msgs.filter((m) => {
     if (m.info.role !== 'user') return true
     const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
-    return !txt.startsWith(MEMORY_PREFIX)
+    return !isCtxOnly(txt)
   }).length
 
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
@@ -1156,7 +1213,7 @@ export function ChatView(p: Props) {
           <div className="float-head" title="拖动移动位置 · 双击复位"
             onPointerDown={startFloatDrag}
             onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}>
-            <span className="float-hint" title="输入任务，AI 会直接操作这个浏览器">
+            <span className="float-hint" title={panelUrl ? `当前页面：${panelUrl}` : undefined}>
               <span className="float-hint-dot" />
               AI 可对话操作此浏览器
             </span>
@@ -1191,15 +1248,19 @@ export function ChatView(p: Props) {
           {visibleMsgCount === 0 && !busy && (
             <div className="empty">
               <div className="empty-title">新对话</div>
-              <div>在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令</div>
+              {(manualBrowser || browserMax) && panelUrl ? (
+                <div>在下方输入框提问，AI 会针对当前浏览器页面作答并直接操作这个浏览器</div>
+              ) : (
+                <div>在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令</div>
+              )}
               <div>Enter 发送 · Shift+Enter 换行 · 处理中可随时停止，已发送的消息可编辑后重发</div>
             </div>
           )}
           {msgs.map((m) => {
             if (m.info.role === 'user') {
               const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
-              // 项目记忆是「仅上下文」注入，AI 可见但界面不渲染，保持对话顶部干净
-              if (txt.startsWith(MEMORY_PREFIX)) return null
+              // 「仅上下文」注入（项目记忆 / 浏览器页面上下文），AI 可见但界面不渲染，保持对话顶部干净
+              if (isCtxOnly(txt)) return null
               return <UserBubble key={m.info.id} text={txt} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
             }
             return (
@@ -1317,7 +1378,15 @@ export function ChatView(p: Props) {
             value={input}
             rows={2}
             readOnly={desktopCtl}
-            placeholder={desktopCtl ? 'AI 正在控制桌面，输入已暂时锁定' : busy ? '当前任务执行中，输入新需求可加入队列' : 'Enter 发送 / Shift+Enter 换行'}
+            placeholder={
+              desktopCtl
+                ? 'AI 正在控制桌面，输入已暂时锁定'
+                : busy
+                  ? '当前任务执行中，输入新需求可加入队列'
+                  : panelUrl && (manualBrowser || browserMax)
+                    ? '针对当前浏览器页面提问，AI 会直接操作这个浏览器'
+                    : 'Enter 发送 / Shift+Enter 换行'
+            }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -1374,7 +1443,7 @@ export function ChatView(p: Props) {
       </div>
     </main>
     {(browserOpen || manualBrowser) && (
-      <BrowserPanel url={browserView.url} max={browserMax} slot={tbSlot} />
+      <BrowserPanel url={browserView.url} max={browserMax} slot={tbSlot} onUrl={setPanelUrl} marks={marks} onToggleMark={toggleMark} />
     )}
     {browserMax && (
       <button
@@ -1391,17 +1460,28 @@ export function ChatView(p: Props) {
     </div>
   )
 }
-
 /** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
-function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTMLElement | null }) {
+function BrowserPanel({ url, max, slot, onUrl, marks, onToggleMark }: {
+  url: string
+  max: boolean
+  slot: HTMLElement | null
+  /** 页面导航（AI / 手输 / 页内跳转）回传当前 URL：浏览器对话上下文与星标判断的数据源 */
+  onUrl: (u: string) => void
+  marks: Bookmark[]
+  onToggleMark: (url: string, title: string) => void
+}) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
   /** 面板打开时的目标地址：有值才挂载 webview（空地址挂 webview 行为不可控）；之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
   const [src, setSrc] = useState(url)
+  /** 当前页标题：收藏时作显示名（page-title-updated 事件跟踪） */
+  const [title, setTitle] = useState('')
   /** 左缘拖出的面板宽度（px）；null = 默认 40% */
   const [width, setWidth] = useState<number | null>(null)
   /** webview 历史状态：驱动前进/后退按钮可用性 */
   const [nav, setNav] = useState({ back: false, fwd: false })
+  /** 当前页是否已收藏：星标填充态 */
+  const starred = marks.some((m) => m.url === addr)
   const wvRef = useRef<WebviewTag | null>(null)
   const panelRef = useRef<HTMLElement | null>(null)
   /** 调宽拖拽护罩：拖动期间盖住 webview，指针事件留在主文档 */
@@ -1427,16 +1507,22 @@ function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTM
     if (wvRef.current) {
       wvRef.current.removeEventListener('did-navigate', onWvNav)
       wvRef.current.removeEventListener('did-navigate-in-page', onWvNav)
+      wvRef.current.removeEventListener('page-title-updated', onWvTitle)
     }
     wvRef.current = wv
     if (wv) {
       wv.addEventListener('did-navigate', onWvNav)
       wv.addEventListener('did-navigate-in-page', onWvNav)
+      wv.addEventListener('page-title-updated', onWvTitle)
     }
   }
   const onWvNav = (e: { url: string }): void => {
     setAddr(e.url)
+    onUrl(e.url)
     syncNav()
+  }
+  const onWvTitle = (e: { title: string }): void => {
+    setTitle(e.title)
   }
 
   function loadAddr(v: string) {
@@ -1486,6 +1572,13 @@ function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTM
           if (e.key === 'Enter') loadAddr((e.target as HTMLInputElement).value)
         }}
       />
+      <button
+        className={'icon-btn bp-star' + (starred ? ' starred' : '')}
+        title={starred ? '取消收藏' : '收藏此页面（全屏时顶部显示收藏条）'}
+        onClick={() => onToggleMark(addr, title || hostOf(addr))}
+      >
+        <Star size={14} fill={starred ? 'currentColor' : 'none'} />
+      </button>
     </div>
   )
 
@@ -1499,6 +1592,31 @@ function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTM
         style={width != null && !max ? { width, maxWidth: 'none' } : undefined}
       >
         {!max && <div className="bp-resizer" onPointerDown={startResize} />}
+        {/* 全屏时的收藏夹条：点击直达，hover 出现取消收藏；无网址的浏览模式入口也能一键开收藏页 */}
+        {max && marks.length > 0 && (
+          <div className="bp-marks">
+            {marks.map((m) => (
+              <div
+                key={m.url}
+                className={'bp-mark' + (m.url === addr ? ' on' : '')}
+                title={m.url}
+                onClick={() => loadAddr(m.url)}
+              >
+                <span className="bp-mark-t">{m.title}</span>
+                <button
+                  className="bp-mark-x"
+                  title="取消收藏"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleMark(m.url, '')
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {src ? (
           <webview
             ref={bindWv}

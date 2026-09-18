@@ -1045,6 +1045,32 @@ input, textarea { font: inherit; }
 /* 地址栏是可手输的 input：透明底融入胶囊，回车即导航 */
 .bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; color: var(--side-fg2); white-space: nowrap; }
 .bp-url:focus { color: var(--side-fg); }
+/* 地址栏星标：收藏当前页，已收藏时填充主题色 */
+.bp-star.starred { color: var(--accent); }
+/* 全屏时的收藏夹条：页面标题胶囊横向排布，点击直达，hover 出现取消收藏；超宽横向滚动且不显滚动条 */
+.bp-marks {
+  flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+  overflow-x: auto; scrollbar-width: none;
+}
+.bp-marks::-webkit-scrollbar { display: none; }
+.bp-mark {
+  display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;
+  max-width: 180px; padding: 3px 4px 3px 10px; border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  color: var(--fg2); font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.bp-mark:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); color: var(--fg); }
+/* 当前打开的收藏页高亮 */
+.bp-mark.on { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.bp-mark-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.bp-mark-x {
+  width: 18px; height: 18px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; border-radius: 50%;
+  color: inherit; opacity: 0.55; cursor: pointer;
+}
+.bp-mark-x:hover { opacity: 1; background: color-mix(in srgb, var(--fg) 12%, transparent); }
 /* webview 需显式尺寸，flex:1 撑满面板剩余空间 */
 .bp-wv { flex: 1; min-height: 0; width: 100%; border: none; background: #fff; }
 /* 无网址时的占位：浏览模式入口场景，引导用户去地址栏输入 */

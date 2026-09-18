@@ -77,6 +77,12 @@ export interface ModelSel {
  */
 export const MEMORY_PREFIX = '␞␞项目记忆␞␞\n'
 
+/**
+ * 浏览器上下文注入标记：内置浏览器开着且有页面时，发消息前把「当前页面 URL + 对话聚焦浏览器」
+ * 以 noReply 注入。与项目记忆同一机制——AI 可见、界面不渲染，ChatView 渲染时据此跳过。
+ */
+export const BROWSER_CTX_PREFIX = '␞␞浏览器上下文␞␞\n'
+
 /** 内核 question 工具的提问请求（question.v2.asked 事件推送，阻塞等待用户应答） */
 export interface QuestionAsk {
   id: string
