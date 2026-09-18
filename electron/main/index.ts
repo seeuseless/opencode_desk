@@ -433,7 +433,8 @@ ipcMain.on('win:max', () => {
   if (!mainWin) return
   mainWin.isMaximized() ? mainWin.unmaximize() : mainWin.maximize()
 })
-ipcMain.on('win:close', () => mainWin?.close())
+// 右上角 X = 最小化驻留任务栏（长任务继续跑，回来点任务栏即恢复）；真退出走 Alt+F4 / 任务栏关闭（window-all-closed）
+ipcMain.on('win:close', () => mainWin?.minimize())
 ipcMain.handle('win:isMax', () => mainWin?.isMaximized() ?? false)
 
 app.whenReady().then(async () => {

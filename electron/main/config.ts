@@ -174,10 +174,23 @@ export function writeOpencodeConfig(s: Settings): void {
       mcp[m.name] = { type: 'local', command: argv, enabled: m.enabled }
     }
   }
+  // 桌面控制开启时注入工具路由约定：浏览器操作默认走桌面真实浏览器，panel_* 仅限用户点名面板时
+  const instructions: string[] = []
+  if (s.computerUse) {
+    const routing = join(opencodeConfigDir(), 'qingniao-tools.md')
+    writeFileSync(
+      routing,
+      '# 工具路由约定\n' +
+        '- 「打开网页 / 上网 / 操作浏览器」默认指用户桌面上的真实浏览器：用 computer 工具（截屏 + 键鼠）完成，不要用 panel_*。\n' +
+        '- panel_* 只控制青鸟窗口右侧的内嵌面板浏览器，仅当用户明确要求「在面板 / 内置浏览器里打开」时使用。'
+    )
+    instructions.push(routing)
+  }
   const cfg = {
     $schema: 'https://opencode.ai/config.json',
     provider,
-    mcp
+    mcp,
+    instructions
   }
   writeFileSync(opencodeConfigPath(), JSON.stringify(cfg, null, 2))
 }

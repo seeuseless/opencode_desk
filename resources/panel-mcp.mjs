@@ -9,7 +9,7 @@ const base = 'http://127.0.0.1:' + (process.argv[2] || '39521')
 const TOOLS = [
   {
     name: 'panel_navigate',
-    description: '在面板浏览器中打开网址——它与用户界面右侧的面板是同一个浏览器，共享用户已登录的会话。打开后先 panel_snapshot 获取页面元素再操作。',
+    description: '在应用内右侧的面板浏览器中打开网址。注意：这只控制青鸟窗口内的面板浏览器，不是用户桌面上的浏览器——用户要打开或操作桌面上的浏览器/软件时，改用 computer 工具。面板与用户看的是同一个浏览器（共享登录态），打开后先 panel_snapshot 获取页面元素再操作。',
     inputSchema: { type: 'object', properties: { url: { type: 'string', description: '完整网址，http(s):// 开头' } }, required: ['url'] }
   },
   {

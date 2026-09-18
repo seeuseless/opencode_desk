@@ -7,6 +7,7 @@ import {
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { load, save } from '../store'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { ProjectPicker } from './ProjectPicker'
@@ -36,6 +37,8 @@ interface Props {
   onPickDir: () => void
   /** 切换当前激活项目（点击左侧项目下拉中的某项） */
   onSwitchProject: (id: string) => void
+  /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
+  browserToggleSignal: number
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -164,7 +167,8 @@ export function ChatView(p: Props) {
   const [input, setInput] = useState('')
   /** 处理中的会话集合：可能多任务并行（A 在跑，切去 B 又发一轮），每个会话独立记账 */
   const [busySet, setBusySet] = useState<Record<string, boolean>>({})
-  const [elapsed, setElapsed] = useState(0)
+  // 执行中每秒跳一次表（只当刷新信号用）：已用时按本轮真实开始时间算，见 busySince
+  const [, tick] = useState(0)
   const [error, setError] = useState('')
   /** 队列项记录发起时的会话：消费时回原会话执行，不跟当前视图走 */
   const [queue, setQueue] = useState<{ sid: string; text: string }[]>([])
@@ -212,6 +216,8 @@ export function ChatView(p: Props) {
   const pollFingerprint = useRef('')
   // 各 busy 会话所属项目路径：多项目并行时停止/重试都要带 directory，否则内核找不到该会话
   const busyDir = useRef<Record<string, string | undefined>>({})
+  // 各 busy 会话本轮开始时间：「已用时」按它起算，切走再切回不会从头计
+  const busySince = useRef<Record<string, number>>({})
   // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
   const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
   const diffsBusy = useRef<Set<string>>(new Set())
@@ -223,6 +229,16 @@ export function ChatView(p: Props) {
   const [browserMax, setBrowserMax] = useState(false)
   /** 放大时右下角浮动聊天卡是否展开 */
   const [floatOpen, setFloatOpen] = useState(false)
+  /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
+  const [manualBrowser, setManualBrowser] = useState(false)
+  /** 浮动聊天卡位置（视口坐标）：null = 默认右下角；拖过后存档，下次打开还在原位 */
+  const [floatPos, setFloatPos] = useState<{ x: number; y: number } | null>(() => {
+    const v = load<{ x: number; y: number } | null>('qingniao.floatPos', null)
+    // 存档可能来自更大的窗口/显示器：夹回当前视口内，保证拖拽条摸得着
+    if (!v) return null
+    return { x: Math.max(8, Math.min(v.x, window.innerWidth - 80)), y: Math.max(8, Math.min(v.y, window.innerHeight - 80)) }
+  })
+  const mainRef = useRef<HTMLElement | null>(null)
   const browserDismissedIn = useRef('')
 
   const browserView = useMemo(() => {
@@ -252,12 +268,13 @@ export function ChatView(p: Props) {
   }, [msgs])
 
   useEffect(() => {
+    if (manualBrowser) return
     if (browserView.active) {
       if (browserDismissedIn.current !== p.sessionId) setBrowserOpen(true)
     } else {
       setBrowserOpen(false)
     }
-  }, [browserView.active, p.sessionId])
+  }, [browserView.active, p.sessionId, manualBrowser])
 
   // 主进程「AI 要用面板浏览器」事件（panel_* 工具在面板关着时触发）：清掉本会话的关闭记录并打开
   useEffect(() => {
@@ -271,8 +288,28 @@ export function ChatView(p: Props) {
 
   function closeBrowserPanel() {
     setBrowserOpen(false)
+    setManualBrowser(false)
     setBrowserMax(false)
     browserDismissedIn.current = p.sessionId
+  }
+
+  /** 浏览模式：面板放大全屏 + 右下角浮动对话卡，用户自己在地址栏输网址 */
+  function openBrowseMode() {
+    setBrowserOpen(false)
+    setManualBrowser(true)
+    setBrowserMax(true)
+    setFloatOpen(true)
+  }
+
+  /** 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关） */
+  function toggleBrowserFromHeader() {
+    if (browserOpen || manualBrowser) {
+      closeBrowserPanel()
+      return
+    }
+    setBrowserOpen(false)
+    setManualBrowser(true)
+    setBrowserMax(false)
   }
 
   /** 放大/还原：进入放大时自动展开右下角的浮动聊天卡 */
@@ -280,6 +317,32 @@ export function ChatView(p: Props) {
     const next = !browserMax
     setBrowserMax(next)
     if (next) setFloatOpen(true)
+  }
+
+  /** 拖动浮动聊天卡（顶部拖拽条）：pointer capture 防止划过 webview 丢事件，松手记住位置 */
+  function startFloatDrag(e: ReactPointerEvent) {
+    const el = mainRef.current
+    if (!el) return
+    e.preventDefault()
+    const rect = el.getBoundingClientRect()
+    const dx = e.clientX - rect.left
+    const dy = e.clientY - rect.top
+    let last = floatPos
+    const move = (ev: PointerEvent) => {
+      last = {
+        x: Math.max(8, Math.min(ev.clientX - dx, window.innerWidth - rect.width - 8)),
+        y: Math.max(8, Math.min(ev.clientY - dy, window.innerHeight - rect.height - 8))
+      }
+      setFloatPos(last)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      if (last) save('qingniao.floatPos', last)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    e.currentTarget.setPointerCapture(e.pointerId)
   }
 
   // 中断自动重试登记表：sid → { 重试次数, 定时器 }；无定时器 = 次数耗尽，等用户手动点重试
@@ -320,6 +383,13 @@ export function ChatView(p: Props) {
   } else if (Object.keys(termStart.current).length) {
     termStart.current = {}
   }
+  // 桌面控制进行中（computer-use 的 computer 工具在跑）：AI 的键鼠可能点进本应用，
+  // 锁定聊天输入，防止它的按键落进对话
+  const desktopCtl =
+    busy &&
+    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
+      (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
+    )
 
   /** busySet 的同步镜像 + 修改入口：事件回调（effect 只注册一次）里要用最新值 */
   const busySetRef = useRef<Record<string, boolean>>({})
@@ -331,10 +401,13 @@ export function ChatView(p: Props) {
     const next = { ...busySetRef.current }
     if (running) {
       next[sid] = true
+      // 本轮开始时间：已用时的起算点（新一轮 prompt 覆盖旧值，同轮内切会话不受影响）
+      busySince.current[sid] = Date.now()
       // 记录会话所属项目：多项目并行时停止/重试必须带同一 directory，否则内核找不到该会话
       busyDir.current[sid] = dir ?? dirRef.current
     } else {
       delete next[sid]
+      delete busySince.current[sid]
     }
     busySetRef.current = next
     setBusySet(next)
@@ -674,6 +747,12 @@ export function ChatView(p: Props) {
     if (p.focusSignal > 0) taRef.current?.focus()
   }, [p.focusSignal])
 
+  // 标题栏「内置浏览器」按钮：每 +1 开/关一次右侧面板
+  useEffect(() => {
+    if (p.browserToggleSignal > 0) toggleBrowserFromHeader()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.browserToggleSignal])
+
   useEffect(() => {
     const el = scrollRef.current
     // 用户在往上翻时不打扰，贴底时才跟随
@@ -694,11 +773,10 @@ export function ChatView(p: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }
 
-  // 执行中每秒累计用时
+  // 执行中每秒刷新一次（用时数值由 busySince 起算）
   useEffect(() => {
     if (!busy) return
-    setElapsed(0)
-    const t = setInterval(() => setElapsed((v) => v + 1), 1000)
+    const t = setInterval(() => tick((v) => v + 1), 1000)
     return () => clearInterval(t)
   }, [busy])
 
@@ -986,9 +1064,24 @@ export function ChatView(p: Props) {
     return !txt.startsWith(MEMORY_PREFIX)
   }).length
 
+  // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
+  const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
+
   return (
     <div className="chat-row">
-    <main className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}>
+    <main
+      ref={mainRef}
+      className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}
+      style={browserMax && floatOpen && floatPos ? { left: floatPos.x, top: floatPos.y, right: 'auto', bottom: 'auto' } : undefined}
+    >
+      {browserMax && floatOpen && (
+        <div
+          className="float-drag"
+          title="拖动移动位置 · 双击复位"
+          onPointerDown={startFloatDrag}
+          onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}
+        />
+      )}
       <div
         className="msgs"
         ref={scrollRef}
@@ -1047,8 +1140,8 @@ export function ChatView(p: Props) {
                   {asks.length > 0
                     ? '等待你回答'
                     : msgs.some((m) => m.info.role === 'assistant' && !turnBase.current.has(m.info.id))
-                      ? `处理中，已用时 ${fmtElapsed(elapsed)}`
-                      : `正在思考，已用时 ${fmtElapsed(elapsed)}`}
+                      ? `处理中，已用时 ${turnElapsed}`
+                      : `正在思考，已用时 ${turnElapsed}`}
                 </>
               )}
             </div>
@@ -1139,7 +1232,8 @@ export function ChatView(p: Props) {
             className="ctext"
             value={input}
             rows={2}
-            placeholder={busy ? '当前任务执行中，输入新需求可加入队列' : 'Enter 发送 / Shift+Enter 换行'}
+            readOnly={desktopCtl}
+            placeholder={desktopCtl ? 'AI 正在控制桌面，输入已暂时锁定' : busy ? '当前任务执行中，输入新需求可加入队列' : 'Enter 发送 / Shift+Enter 换行'}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -1160,7 +1254,7 @@ export function ChatView(p: Props) {
               }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                send()
+                if (!desktopCtl) send()
               }
             }}
           />
@@ -1177,6 +1271,9 @@ export function ChatView(p: Props) {
                 {terms.filter((x) => x.status === 'running').length}
               </button>
             )}
+            <button className="icon-btn" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
+              <Globe size={14} />
+            </button>
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
             {anyBusy ? (
@@ -1192,7 +1289,7 @@ export function ChatView(p: Props) {
         </div>
       </div>
     </main>
-    {browserOpen && (
+    {(browserOpen || manualBrowser) && (
       <BrowserPanel
         url={browserView.url}
         max={browserMax}
@@ -1223,8 +1320,8 @@ function BrowserPanel({
 }) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
-  /** webview 挂载时的初始地址：src 只在挂载时定一次，之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
-  const [src0] = useState(url)
+  /** 面板打开时的目标地址：有值才挂载 webview（空地址挂 webview 行为不可控）；之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
+  const [src, setSrc] = useState(url)
   /** 左缘拖出的面板宽度（px）；null = 默认 40% */
   const [width, setWidth] = useState<number | null>(null)
   /** webview 历史状态：驱动前进/后退按钮可用性 */
@@ -1235,7 +1332,8 @@ function BrowserPanel({
   useEffect(() => {
     if (url && url !== addr) {
       setAddr(url)
-      wvRef.current?.loadURL(url)
+      if (wvRef.current) wvRef.current.loadURL(url)
+      else setSrc(url) // webview 未挂载：带 src 挂载即完成首航
     }
     // 只跟随 AI 的新导航；addr 是用户手输值，不作为依赖
   }, [url])
@@ -1267,7 +1365,8 @@ function BrowserPanel({
     const u = /^\w+:\/\//.test(v.trim()) ? v.trim() : 'https://' + v.trim()
     if (!u) return
     setAddr(u)
-    wvRef.current?.loadURL(u)
+    if (wvRef.current) wvRef.current.loadURL(u)
+    else setSrc(u) // webview 未挂载：带 src 挂载即完成首航
   }
 
   /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
@@ -1326,13 +1425,17 @@ function BrowserPanel({
           <X size={14} />
         </button>
       </div>
-      <webview
-        ref={bindWv}
-        className="bp-wv"
-        src={src0}
-        partition="persist:webpanel"
-        allowpopups={false}
-      />
+      {src ? (
+        <webview
+          ref={bindWv}
+          className="bp-wv"
+          src={src}
+          partition="persist:webpanel"
+          allowpopups={false}
+        />
+      ) : (
+        <div className="bp-nourl">在上方地址栏输入网址后回车打开</div>
+      )}
     </aside>
   )
 }

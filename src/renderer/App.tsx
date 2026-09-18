@@ -35,6 +35,8 @@ export default function App() {
   const [lastActive, setLastActive] = useState<Record<string, number>>({})
   /** 自增计数：触发 ChatView 聚焦输入框 */
   const [focusTick, setFocusTick] = useState(0)
+  /** 自增计数：标题栏「内置浏览器」按钮开/关右侧面板 */
+  const [browserSignal, setBrowserSignal] = useState(0)
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -319,7 +321,7 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Titlebar />
+      <Titlebar onToggleBrowser={() => setBrowserSignal((v) => v + 1)} />
       <div className="app">
         <Sidebar
           projects={orderedProjects}
@@ -359,6 +361,7 @@ export default function App() {
               })
             }
             focusSignal={focusTick}
+            browserToggleSignal={browserSignal}
             onOpenSettings={() => setView('settings')}
             onPickDir={addProject}
             onSwitchProject={(id) => {
