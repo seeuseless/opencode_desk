@@ -198,15 +198,6 @@ input, textarea { font: inherit; }
 
 /* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
 .tb-browser-slot { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; height: 100%; }
-/* 浏览器打开时的提示条：放在槽位左侧，文案说明对话可指挥 AI 操作浏览器 */
-.tb-hint {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 11.5px; color: var(--side-fg2); white-space: nowrap;
-  padding: 2px 8px; border-radius: 999px;
-  background: var(--side-hover);
-  -webkit-app-region: no-drag;
-}
-.tb-hint-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--side-logo); flex-shrink: 0; }
 
 /* ================= 侧栏（跟随左侧面板色） ================= */
 .side {
@@ -692,9 +683,9 @@ input, textarea { font: inherit; }
 .mi-check { width: 16px; flex-shrink: 0; color: var(--accent); display: inline-flex; }
 
 /* ================= 模型二级级联菜单 ================= */
+/* 一级列以触发按钮为中心（触发器靠右，left:0 会顶出窗口）；二级模型列浮在左侧 */
 .menu-panel.mp {
-  position: absolute; left: 0; right: auto;
-  display: flex; align-items: flex-start; gap: 4px;
+  position: absolute; left: 50%; right: auto; transform: translateX(-50%);
   min-width: auto; max-height: 340px; overflow: visible; padding: 6px;
 }
 .mp-col {
@@ -718,10 +709,13 @@ input, textarea { font: inherit; }
   border-top: 1px solid var(--line);
   border-radius: 0 0 7px 7px; color: var(--fg2);
 }
-/* 二级模型列：与一级列并排（正常流布局），展开时面板自动变宽，不遮挡聊天区 */
+/* 二级模型列：浮在一级列左侧（右侧靠窗口边会被遮住），独立卡片造型与面板同风格 */
 .mp-col2-float {
+  position: absolute; top: 0; right: calc(100% + 4px);
   display: flex; flex-direction: column; gap: 2px;
   width: 220px; max-height: 60vh; overflow-y: auto;
+  background: var(--bg2); border-radius: 12px;
+  box-shadow: 0 10px 36px var(--shadow); padding: 6px;
 }
 
 /* ================= 项目下拉（pp 前缀，风格对齐 mp） ================= */
@@ -1025,7 +1019,7 @@ input, textarea { font: inherit; }
 .chat-fab:hover { filter: brightness(1.05); }
 /* 浮动卡顶部 header 条：左侧文案提示 + 右端关闭按钮，整条可拖动移卡，双击复位 */
 .float-head {
-  height: 28px; flex-shrink: 0; position: relative;
+  height: 36px; flex-shrink: 0; position: relative;
   display: flex; align-items: center; gap: 8px;
   padding: 0 10px; cursor: move; touch-action: none;
 }
