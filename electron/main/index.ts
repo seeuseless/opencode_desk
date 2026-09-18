@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, dialog, ipcMain, session, shell, type WebContents } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type WebContents } from 'electron'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
@@ -450,9 +450,38 @@ ipcMain.on('win:max', () => {
   if (!mainWin) return
   mainWin.isMaximized() ? mainWin.unmaximize() : mainWin.maximize()
 })
-// 右上角 X = 最小化驻留任务栏（长任务继续跑，回来点任务栏即恢复）；真退出走 Alt+F4 / 任务栏关闭（window-all-closed）
-ipcMain.on('win:close', () => mainWin?.minimize())
+// 右上角 X = 隐藏到系统托盘（长任务继续跑，点托盘图标即恢复）；真退出走托盘菜单「退出」/ Alt+F4
+ipcMain.on('win:close', () => mainWin?.hide())
 ipcMain.handle('win:isMax', () => mainWin?.isMaximized() ?? false)
+
+// ---------- 系统托盘：右上角 X 隐藏后驻留，点图标恢复窗口 ----------
+let tray: Tray | null = null
+
+function showMainWin(): void {
+  if (!mainWin || mainWin.isDestroyed()) return
+  if (!mainWin.isVisible()) mainWin.show()
+  mainWin.restore()
+  mainWin.focus()
+}
+
+function createTray(): void {
+  if (tray) return
+  const iconPath = app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(app.getAppPath(), 'resources', 'icon.png')
+  const image = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty()
+  tray = new Tray(image)
+  tray.setToolTip('青鸟 QingNiao')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '打开青鸟', click: showMainWin },
+      { type: 'separator' },
+      { label: '退出', click: () => app.quit() }
+    ])
+  )
+  tray.on('click', showMainWin)
+  tray.on('double-click', showMainWin)
+}
 
 app.whenReady().then(async () => {
   // Windows 任务栏图标归属（否则 dev 模式可能沿用 Electron 默认图标）
@@ -491,6 +520,8 @@ app.whenReady().then(async () => {
     return
   }
   createWindow()
+
+  createTray() // 右上角 X 隐藏后驻留托盘，点图标恢复
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

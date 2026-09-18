@@ -46,7 +46,7 @@ export function Titlebar({
           <Maximize2 size={14} />
         )}
       </button>
-      <button className="icon-btn tb-btn" title="最小化" onClick={() => window.qingniao.winClose()}>
+      <button className="icon-btn tb-btn" title="隐藏到托盘" onClick={() => window.qingniao.winClose()}>
         <X size={15} />
       </button>
     </header>
