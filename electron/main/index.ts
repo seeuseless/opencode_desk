@@ -2,9 +2,11 @@ import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, saveSettings, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, saveSettings, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { relay } from './relay.ts'
+import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 
 /**
@@ -12,6 +14,7 @@ import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
  * 1. 拉起 OpenCode 内核（`opencode serve`，REST + SSE），配置与会话存储隔离在 ~/.qingniaoai
  * 2. 渲染进程 REST 门面由 adapter 透传（OpenCode 原生 API，无协议翻译）
  * 3. 应用级 IPC：目录选择、设置读写（保存即重启内核）、provider 模型列表拉取
+ * 4. 移动端中转通道（relay.ts）：手机扫码 → 平台 → 本机内核，手机在 4G 下也能遥控这台电脑
  */
 
 let mainWin: BrowserWindow | null = null
@@ -76,6 +79,80 @@ ipcMain.handle('dialog:pickDir', async () => {
 ipcMain.handle('openExternal', (_e, url: string) => {
   if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
 })
+
+// 左侧文件夹右键菜单的「打开文件夹」：在系统文件管理器里定位项目目录
+// 返回空串表示成功（shell.openPath 的约定），失败时返回原因交给渲染层弹提示
+ipcMain.handle('folder:open', async (_e, target: string) => {
+  const p = String(target ?? '').trim()
+  if (!p) return '路径为空'
+  if (!existsSync(p)) return '文件夹不存在或已被移动'
+  return shell.openPath(p)
+})
+
+// ---------- 移动端接入（平台中转） ----------
+// 通道在本进程里（见 relay.ts）：开关只写设置 + 起停通道，不需要重启内核。
+// 状态里带二维码点阵：渲染层自己画 SVG——CSP 是 default-src 'self'，加载不了跨源图片。
+ipcMain.handle('mobile:get', () => relay.status())
+ipcMain.handle('mobile:set', (_e, on: boolean) => {
+  setMobileEnabled(!!on)
+  relay.apply()
+
+  return relay.status()
+})
+// 换一张二维码：平台把那台设备的 token 换掉，旧码立即作废（通道不用重启）
+ipcMain.handle('mobile:rotate', () => relay.rotate())
+// 主进程读不到渲染层 localStorage，项目列表只能由渲染层推过来
+ipcMain.handle('mobile:setProjects', (_e, list: { id: string; path: string; name: string }[]) => {
+  relay.setProjects(list)
+
+  return true
+})
+
+// ---------- 平台（青鸟服务端）----------
+// 登录是浏览器里完成的：桌面端只负责打开登录页、接住 qingniao:// 回调、把 token 落盘并同步模型。
+// 平台地址统一由 config.platformBaseUrl() 解析（环境变量 > 设置 > 默认值），这里不再存第二份。
+// 每次平台状态变化都 apply 一次中转通道：登录了要注册设备、退出了要停通道。
+ipcMain.handle('platform:get', () => platform.status())
+ipcMain.handle('platform:login', () => platform.openLogin())
+ipcMain.handle('platform:logout', async () => {
+  const st = await platform.logout()
+  relay.apply()
+
+  return st
+})
+ipcMain.handle('platform:setBaseUrl', (_e, url: string) => {
+  const st = platform.setBaseUrl(String(url ?? ''))
+  relay.apply()
+
+  return st
+})
+// 拿授权码换 token（手动粘贴那条路；协议回调走 platform.handleCallback）
+ipcMain.handle('platform:code', async (_e, code: string) => {
+  const st = await platform.acceptCode(String(code ?? ''))
+  relay.apply()
+
+  return st
+})
+// 手动同步模型清单：拉完重启内核，让模型选择立刻反映平台改动
+ipcMain.handle('platform:sync', async () => {
+  const st = await platform.sync()
+  await adapter.restart()
+  return st
+})
+// 按需静默刷新：只在计价变化时用（选择器点开「内置模型」就调一次）。
+// 与上面那条的区别是「模型增删才重启内核」，界面列表原地替换，不闪不空。
+ipcMain.handle('platform:refresh', () => platform.refresh())
+
+// ---------- 账号与用量（设置 → 账号 / 使用量）----------
+// 都是「会员自己看自己的账」：token 从设置里取，未登录一律返回 null，由界面渲染成未登录态。
+ipcMain.handle('platform:account', () => platform.account())
+ipcMain.handle('platform:usage', (_e, range?: { from?: string; to?: string }) =>
+  platform.usageSummary(range?.from, range?.to)
+)
+ipcMain.handle('platform:usageLogs', (_e, type?: 'consume' | 'grant' | 'adjust', page?: number) =>
+  platform.usageLogs(type, page)
+)
+ipcMain.handle('platform:usageRecords', (_e, page?: number) => platform.usageRecords(page))
 
 // ---------- 面板浏览器控制端点 ----------
 // AI 经 panel_* MCP 工具操控右侧面板里的 webview：与用户看的是同一个浏览器（persist:webpanel
@@ -223,6 +300,8 @@ ipcMain.handle('kernel:health', () => adapter.isHealthy())
 ipcMain.handle('settings:save', async (_e, s: Settings) => {
   saveSettings(s)
   await adapter.restart()
+  // 「远程服务」这个总开关也在设置里：关掉它要顺手把中转通道停掉（一个请求都不再发）
+  relay.apply()
 })
 
 /** 拉取 OpenAI 兼容端点的模型列表：GET {baseURL}/models */
@@ -483,6 +562,30 @@ function createTray(): void {
   tray.on('double-click', showMainWin)
 }
 
+// ---------- 单实例锁 + qingniao:// 协议 ----------
+// 网页登录成功后跳 qingniao://auth?code=xxx。Windows 上这表现为「又启动了一个进程」，
+// 参数里带着那个 URL，所以必须锁单实例：第二个进程把 URL 交给已在跑的实例后立刻退出。
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const url = argv.find((a) => a.startsWith(AUTH_PROTOCOL + ':'))
+    if (url) void platform.handleCallback(url)
+    showMainWin()
+  })
+  // macOS：应用已在运行时由系统直接投递 open-url
+  app.on('open-url', (e, url) => {
+    e.preventDefault()
+    if (url.startsWith(AUTH_PROTOCOL + ':')) void platform.handleCallback(url)
+  })
+  // 注册协议：安装版注册自身；dev 下要注册 electron 可执行文件 + 当前入口脚本
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) app.setAsDefaultProtocolClient(AUTH_PROTOCOL, process.execPath, [resolve(process.argv[1])])
+  } else {
+    app.setAsDefaultProtocolClient(AUTH_PROTOCOL)
+  }
+}
+
 app.whenReady().then(async () => {
   // Windows 任务栏图标归属（否则 dev 模式可能沿用 Electron 默认图标）
   app.setAppUserModelId('com.qingniao.desktop')
@@ -494,9 +597,11 @@ app.whenReady().then(async () => {
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
-  // 事件桥统一走这里：窗口销毁后静默丢弃，避免 "Object has been destroyed" 未处理拒绝
+  // 事件桥统一走这里：窗口销毁后静默丢弃，避免 "Object has been destroyed" 未处理拒绝。
+  // 同时喂给中转通道——手机上的「实时」就是靠这里把内核事件推上平台的。
   adapter.pushEvent = (e) => {
     if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('opencode:event', e)
+    relay.onKernelEvent(e)
   }
   // 内核异常退出/断连：提示渲染层并自动重启内核
   adapter.onUnhealthy = () => {
@@ -523,12 +628,25 @@ app.whenReady().then(async () => {
 
   createTray() // 右上角 X 隐藏后驻留托盘，点图标恢复
 
+  // 设备注册是异步的（要向平台换一张设备 token），注册完才知道二维码内容，
+  // 所以状态一变就主动推给渲染层——否则登录后面板一直停在「二维码生成中…」。
+  relay.onChange = () => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('mobile:changed', relay.status())
+  }
+
+  // 移动端中转通道：登录了就注册设备（二维码随即可用），开关开着才真的开始认领指令。
+  relay.apply()
+
+  // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
+  void platform.refreshOnBoot()
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
 app.on('window-all-closed', () => {
+  relay.stop()
   adapter.stop()
   app.quit()
 })

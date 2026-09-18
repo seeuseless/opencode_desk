@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { Settings, SkillDraft, SkillItem, SkillScope } from '../main/types'
+import type {
+  DeskStatus,
+  PlatformAccount,
+  PlatformStatus,
+  Settings,
+  SkillDraft,
+  SkillItem,
+  SkillScope,
+  UsageLog,
+  UsagePage,
+  UsageRecord,
+  UsageSummary
+} from '../main/types'
 
 /** 暴露给渲染进程的最小桥：REST 代理 + 事件订阅 + 应用级能力 */
 const api = {
@@ -43,6 +55,60 @@ const api = {
     ipcRenderer.invoke('skills:openDir', req),
   /** 用系统默认浏览器打开网页地址（浏览面板「在外部打开」用） */
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('openExternal', url),
+  /** 在系统文件管理器里打开某个文件夹（左栏项目右键菜单「打开文件夹」）；返回空串表示成功 */
+  openFolder: (path: string): Promise<string> => ipcRenderer.invoke('folder:open', path),
+  /** 移动端接入状态：开关、二维码（{平台域名}/ide/device/{token}）、通道是否在跑（左栏手机面板用） */
+  mobileStatus: (): Promise<DeskStatus> => ipcRenderer.invoke('mobile:get'),
+  /** 开/关「允许移动端连接此设备」：开则手机扫码后能操作这台电脑 */
+  mobileSet: (on: boolean): Promise<DeskStatus> => ipcRenderer.invoke('mobile:set', on),
+  /** 换一张二维码（平台侧把那台设备的 token 换掉，旧码立即作废） */
+  mobileRotate: (): Promise<DeskStatus> => ipcRenderer.invoke('mobile:rotate'),
+  /** 把项目列表推给主进程：手机端读不到渲染层 localStorage，只能由这里送 */
+  mobileSetProjects: (list: { id: string; path: string; name: string }[]): Promise<boolean> =>
+    ipcRenderer.invoke('mobile:setProjects', list),
+  /** 移动端接入状态变化（设备注册完成、通道报错）：主进程主动推过来 */
+  onMobileChanged: (cb: (s: DeskStatus) => void): (() => void) => {
+    const handler = (_: unknown, s: DeskStatus): void => cb(s)
+    ipcRenderer.on('mobile:changed', handler)
+    return () => ipcRenderer.removeListener('mobile:changed', handler)
+  },
+  /** 平台（青鸟服务端）状态：地址、登录用户、可用模型数（左下角登录入口用） */
+  platformStatus: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:get'),
+  /** 打开平台的青鸟登录页（系统浏览器），登录成功后靠 qingniao:// 回调本机 */
+  platformLogin: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:login'),
+  /** 退出登录：平台侧吊销 token，本地清空并重启内核 */
+  platformLogout: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:logout'),
+  /** 改平台地址（上线换域名），地址变了需重新登录 */
+  platformSetBaseUrl: (url: string): Promise<PlatformStatus> => ipcRenderer.invoke('platform:setBaseUrl', url),
+  /** 手动粘贴授权码完成登录（浏览器唤不起应用时的兜底路径） */
+  platformSubmitCode: (code: string): Promise<PlatformStatus> => ipcRenderer.invoke('platform:code', code),
+  /** 重新拉取平台模型清单并重启内核（平台后台改了模型后用） */
+  platformSync: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:sync'),
+  /**
+   * 静默刷新模型清单（不重启内核，除非模型增删）。
+   * 选择器点开「内置模型」时调一次：限免/折扣是平台随时会改的，界面不能拿登录那一刻的旧快照。
+   */
+  platformRefreshModels: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:refresh'),
+  /** 账号信息：登录用户、当前授权、积分余额、本机设备名（设置 → 账号） */
+  platformAccount: (): Promise<PlatformAccount | null> => ipcRenderer.invoke('platform:account'),
+  /**
+   * 用量汇总：总量 / 今日 / 昨日 + 区间内按天与按模型明细。
+   * 不传区间时平台按最近 30 天算（设置 → 使用量）
+   */
+  platformUsage: (range?: { from?: string; to?: string }): Promise<UsageSummary | null> =>
+    ipcRenderer.invoke('platform:usage', range),
+  /** 积分流水（发放 / 消耗 / 调整），按页取（一页 20 条） */
+  platformUsageLogs: (type?: 'consume' | 'grant' | 'adjust', page?: number): Promise<UsagePage<UsageLog>> =>
+    ipcRenderer.invoke('platform:usageLogs', type, page),
+  /** 每次消耗明细（一次调用一行），按页取（一页 20 条） */
+  platformUsageRecords: (page?: number): Promise<UsagePage<UsageRecord>> =>
+    ipcRenderer.invoke('platform:usageRecords', page),
+  /** 协议回调换了登录态：主进程主动推过来，用于刷新左下角入口 */
+  onPlatformChanged: (cb: (s: PlatformStatus) => void): (() => void) => {
+    const handler = (_: unknown, s: PlatformStatus): void => cb(s)
+    ipcRenderer.on('platform:changed', handler)
+    return () => ipcRenderer.off('platform:changed', handler)
+  },
   winMin: () => ipcRenderer.send('win:min'),
   winMax: () => ipcRenderer.send('win:max'),
   winClose: () => ipcRenderer.send('win:close'),

@@ -84,6 +84,11 @@ class Adapter {
   bin = ''
   workspace = ''
 
+  /** 内核 REST 基地址（如 http://127.0.0.1:39421）。桌面移动端服务反代要用；未启动时为空串 */
+  get baseUrl(): string {
+    return this.base
+  }
+
   /** 内核退出/健康探测失败时回调（index.ts 注入：推送渲染层提示 + 自动重启） */
   onUnhealthy: (() => void) | null = null
 

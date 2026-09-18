@@ -1,11 +1,46 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, ProviderCfg, Settings } from '../../electron/main/types'
-import { MODEL_DEFAULTS } from '../../electron/main/types'
+import { MODEL_DEFAULTS, isBuiltinModel } from '../../electron/main/types'
 
-export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope } from '../../electron/main/types'
+export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus } from '../../electron/main/types'
+export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount } from '../../electron/main/types'
 export { MODEL_DEFAULTS } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
+
+/** 平台 provider 在内核里的 ID，与 electron/main/config.ts 的 PLATFORM_PROVIDER_ID 保持一致 */
+export const PLATFORM_PROVIDER_ID = 'qingniao'
+
+/**
+ * 对话区的模型清单：平台「内置模型」永远排最前（二级列的就是后台启用的内置模型，跟随后台排序），
+ * 用户自建的提供商接在后面。
+ *
+ * 两个过滤条件缺一不可：
+ *   remote —— 全局关了远程服务时，平台这套（登录/内置模型）整个不该出现；
+ *   builtin —— 后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
+ *              它们不属于「内置」，混进来会让人以为模型比实际多。
+ *
+ * 设置页绝不能吃这份列表——它保存时会把 providers 整体写回磁盘，
+ * 而平台那条是登录态虚拟出来的，混进去会被落成一份假配置。
+ */
+export function chatProviders(s: SettingsCfg): ProviderCfg[] {
+  const builtin = s.platform.models.filter(isBuiltinModel)
+  const platform =
+    s.remote && s.platform.token && builtin.length
+      ? [
+          {
+            id: PLATFORM_PROVIDER_ID,
+            name: '内置模型',
+            baseURL: s.platform.baseUrl.replace(/\/+$/, '') + '/api/ide/v1',
+            apiKey: '',
+            enabled: true,
+            models: builtin
+          }
+        ]
+      : []
+
+  return [...platform, ...s.providers]
+}
 
 async function call<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T> {
   const r = await window.qingniao.call(path, opts)

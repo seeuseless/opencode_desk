@@ -4,12 +4,16 @@ import { Sidebar, type Project } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
 import { Titlebar } from './components/Titlebar'
-import { oc, type ProviderCfg, type Session, type SettingsCfg } from './oc'
+import { Modal } from './components/Modal'
+import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import { load, save } from './store'
 import { CUSTOM_ID, THEMES } from './theme'
 import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
 
 type View = 'chat' | 'settings'
+
+/** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
+export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'remote'
 
 const sortSessions = (list: Session[]) =>
   [...list].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
@@ -44,9 +48,23 @@ export default function App() {
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
-  const [settings, setSettings] = useState<SettingsCfg>({ providers: [], mcps: [], browser: false, computerUse: false })
+  const [settings, setSettings] = useState<SettingsCfg>({
+    providers: [],
+    mcps: [],
+    browser: false,
+    computerUse: false,
+    remote: true,
+    mobile: false,
+    platform: { baseUrl: '', token: '', user: null, models: [], device: null }
+  })
   const [settingsReady, setSettingsReady] = useState(false)
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
+  /** 设置页标签：放在 App 里，左栏账号入口才能一键跳到「账号」 */
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('theme')
+  /** 平台登录态：左下角账号入口与账号页共用一份，登录/退出后由主进程推更新 */
+  const [platformSt, setPlatformSt] = useState<PlatformStatus | null>(null)
+  /** 登录/退出进行中（按钮转圈，避免重复点） */
+  const [platformBusy, setPlatformBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const workspaceRef = useRef('')
   /** sessionsMap 的最新镜像：App 级 SSE 监听（只注册一次）里查"某 busy 会话属于哪个目录"用，避免闭包拿到旧值 */
@@ -54,6 +72,11 @@ export default function App() {
   sessionsMapRef.current = sessionsMap
   /** 正在拉取历史的会话 id：点击当帧就标记，会话行高亮不必等数据回来 */
   const [loadingSids, setLoadingSids] = useState<Record<string, boolean>>({})
+  /** 移动端接入服务状态（开关/局域网地址/二维码/已配对设备），由主进程持有，左栏手机面板展示 */
+  const [mobile, setMobile] = useState<DeskStatus | null>(null)
+  const [mobileBusy, setMobileBusy] = useState(false)
+  /** 操作失败提示（如「打开文件夹」找不到目录），用自绘弹窗而非原生 alert */
+  const [notice, setNotice] = useState('')
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -318,6 +341,63 @@ export default function App() {
     }
   }
 
+  // 移动端接入：服务/设备身份都在主进程，这里只负责展示与开关。
+  // 启动读一次状态；之后设备注册完成、通道报错都由主进程推过来（登录后二维码就靠这条推上来的）。
+  useEffect(() => {
+    void window.qingniao
+      .mobileStatus()
+      .then(setMobile)
+      .catch(() => undefined)
+
+    return window.qingniao.onMobileChanged(setMobile)
+  }, [])
+
+  // 项目列表要推给主进程：移动端服务读不到渲染层 localStorage，没这份清单就不知道能操作哪些目录
+  useEffect(() => {
+    void window.qingniao.mobileSetProjects(projects.map((x) => ({ id: x.id, path: x.path, name: x.name })))
+  }, [projects])
+
+  async function mobileAction(fn: () => Promise<DeskStatus>): Promise<void> {
+    setMobileBusy(true)
+    try {
+      setMobile(await fn())
+    } finally {
+      setMobileBusy(false)
+    }
+  }
+
+  // 平台登录态：启动读一次；登录/退出的变化由主进程推过来（协议回调发生在主进程，渲染层看不到）。
+  // 登录态一变，模型清单跟着变（「内置模型」分组要靠它），设备身份也一起变（二维码跟着变），所以都回读一遍。
+  useEffect(() => {
+    void window.qingniao
+      .platformStatus()
+      .then(setPlatformSt)
+      .catch(() => undefined)
+
+    return window.qingniao.onPlatformChanged((s) => {
+      setPlatformSt(s)
+      void window.qingniao.getSettings().then(setSettings)
+      void window.qingniao.mobileStatus().then(setMobile).catch(() => undefined)
+    })
+  }, [])
+
+  async function platformAction(fn: () => Promise<PlatformStatus>): Promise<void> {
+    setPlatformBusy(true)
+    try {
+      setPlatformSt(await fn())
+      setSettings(await window.qingniao.getSettings())
+      setMobile(await window.qingniao.mobileStatus())
+    } finally {
+      setPlatformBusy(false)
+    }
+  }
+
+  /** 左栏右键「打开文件夹」：在系统文件管理器里定位项目目录，失败时用自绘弹窗说明原因 */
+  async function openFolder(proj: Project): Promise<void> {
+    const err = await window.qingniao.openFolder(proj.path)
+    if (err) setNotice(err)
+  }
+
   // 展示顺序：最近有对话活动的文件夹排最前
   const orderedProjects = [...projects].sort(
     (a, b) => (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
@@ -348,8 +428,23 @@ export default function App() {
           onPickSession={pickSessionFor}
           onDeleteSession={deleteSessionOf}
           onOpenSettings={() => setView('settings')}
+          onOpenFolder={openFolder}
+          mobile={mobile}
+          mobileBusy={mobileBusy}
+          onMobileToggle={(on) => void mobileAction(() => window.qingniao.mobileSet(on))}
+          onMobileRotate={() => void mobileAction(() => window.qingniao.mobileRotate())}
+          platform={platformSt}
+          platformBusy={platformBusy}
+          onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
+          onOpenAccount={() => {
+            setSettingsTab('account')
+            setView('settings')
+          }}
+          /** 远程服务总开关：关掉后登录入口与手机图标一并消失（设置里读的同一份值） */
+          remote={settings.remote !== false}
         />
         <div className="content">
+        {/* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */}
         {activeProject ? (
           <ChatView
             project={activeProject}
@@ -357,7 +452,7 @@ export default function App() {
             sessionId={sessionId}
             model={model}
             onModelChange={setModel}
-            settings={settings.providers}
+            settings={chatProviders(settings)}
             settingsReady={settingsReady}
             onDraftCreated={onDraftCreated}
             onRefreshSessions={refreshSessions}
@@ -399,10 +494,29 @@ export default function App() {
             onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
             projectPath={activeProject?.path ?? null}
             projectName={activeProject?.name ?? null}
+            tab={settingsTab}
+            onTab={setSettingsTab}
+            platform={platformSt}
+            platformBusy={platformBusy}
+            onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
+            onLogout={() => void platformAction(() => window.qingniao.platformLogout())}
+            onSetBaseUrl={(url) => void platformAction(() => window.qingniao.platformSetBaseUrl(url))}
+            onSubmitCode={(code) => void platformAction(() => window.qingniao.platformSubmitCode(code))}
           />
         )}
         </div>
       </div>
+
+      {notice && (
+        <Modal title="操作没成功" onClose={() => setNotice('')}>
+          <p className="confirm-text">{notice}</p>
+          <div className="actions">
+            <button className="primary" onClick={() => setNotice('')}>
+              知道了
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }

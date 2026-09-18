@@ -7,7 +7,7 @@ import {
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, PLATFORM_PROVIDER_ID, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import { load, save } from '../store'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -490,15 +490,28 @@ export function ChatView(p: Props) {
   /** 同理，onBusy prop 取最新引用，防事件闭包用到旧函数 */
   const onBusyRef = useRef(p.onBusy)
   onBusyRef.current = p.onBusy
-  function markBusy(sid: string, running: boolean, dir?: string) {
+  /**
+   * 不是本端发起的回合（手机扫码发来的消息、别的入口）。
+   *
+   * 这种回合同样要认领 busy，否则「处理中」不亮、session.idle 也会被当成无关事件跳过，
+   * 整轮结束界面都不刷新。但**不能**让自动续跑去接管它：用户正在手机上驱动这条会话，
+   * 电脑这边再自动重发一条就是凭空多出来的一轮。
+   */
+  const foreignSids = useRef<Set<string>>(new Set())
+  function markBusy(sid: string, running: boolean, dir?: string, foreign = false) {
     if (!sid) return
     const next = { ...busySetRef.current }
     if (running) {
       next[sid] = true
       // 本轮开始时间：已用时的起算点（新一轮 prompt 覆盖旧值，同轮内切会话不受影响）
       busySince.current[sid] = Date.now()
-      // 记录会话所属项目：多项目并行时停止/重试必须带同一 directory，否则内核找不到该会话
-      busyDir.current[sid] = dir ?? dirRef.current
+      if (foreign) foreignSids.current.add(sid)
+      else foreignSids.current.delete(sid)
+      // 记录会话所属项目：多项目并行时停止/重试必须带同一 directory，否则内核找不到该会话。
+      // 外部回合拿不到项目路径（可能是另一个项目里的会话），只有正好在本端打开时敢认，
+      // 其余宁可不带路径——写错目录会让停止按钮打到别的会话上。
+      const d = dir ?? (foreign ? (sid === sidRef.current ? dirRef.current : undefined) : dirRef.current)
+      if (d) busyDir.current[sid] = d
     } else {
       delete next[sid]
       delete busySince.current[sid]
@@ -525,6 +538,8 @@ export function ChatView(p: Props) {
    */
   function scheduleRetry(sid: string, msgs?: MessageView[]) {
     if (!sid || navigator.onLine === false) return
+    // 手机发起的回合：本端不是发起者，自动续跑等于替用户重复发一条消息
+    if (foreignSids.current.has(sid)) return
     if (retries.current.get(sid)?.timer != null) return
     const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
     const start = (list: MessageView[]) => {
@@ -628,10 +643,42 @@ export function ChatView(p: Props) {
     // 「停止」只对当前正在跑的任务生效，不打断用户排队的后续指令
   }
 
-  // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型
+  // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
+  // 平台「内置模型」的计价信息（限免/折扣/倍率）一并带过去，二级列表里要打标签、写倍率。
   const groups: ModelGroup[] = p.settings
     .filter((x) => x.enabled && x.id && x.models.length)
-    .map((c) => ({ id: c.id, label: c.name || c.id, models: c.models.map((m) => ({ mid: m.id })) }))
+    .map((c) => ({
+      id: c.id,
+      label: c.name || c.id,
+      models: c.models.map((m) => ({
+        mid: m.id,
+        name: m.name,
+        free: m.free,
+        discount: m.discount,
+        ratio: m.ratio,
+        effRatio: m.effRatio
+      }))
+    }))
+
+  /**
+   * 正在后台刷新计价的分组 id。
+   *
+   * 平台「内置模型」的限免/折扣随时会被后台改，登录那一刻的快照不足信——所以用户点开这个分组时
+   * 顺手对一次。刷新是静默的：列表照旧显示旧值，回来的新值原地替换（不清空、不转整屏 loading）。
+   */
+  const [refreshingGroup, setRefreshingGroup] = useState('')
+  async function refreshGroupPrices(id: string): Promise<void> {
+    if (id !== PLATFORM_PROVIDER_ID) return
+    setRefreshingGroup(id)
+    try {
+      // 计价刷新只改本地缓存并广播，模型增删才重启内核，这里等它一下不会打断对话
+      await window.qingniao.platformRefreshModels()
+    } catch {
+      /* 平台不可达：继续用旧价格，不打断选择 */
+    } finally {
+      setRefreshingGroup('')
+    }
+  }
 
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
@@ -641,9 +688,7 @@ export function ChatView(p: Props) {
     const valid =
       i > 0 && groups.some((g) => g.id === p.model.slice(0, i) && g.models.some((m) => m.mid === p.model.slice(i + 1)))
     if (!valid) p.onModelChange(groups[0] ? `${groups[0].id}/${groups[0].models[0].mid}` : '')
-  }, [p.model, p.settings, p.settingsReady])
-
-  // 切换项目/会话：先清旧内容再拉历史（项目切换瞬间 sessionId 为空）
+  }, [p.model, p.settings, p.settingsReady])  // 切换项目/会话：先清旧内容再拉历史（项目切换瞬间 sessionId 为空）
   useEffect(() => {
     if (justCreated.current && justCreated.current === p.sessionId) {
       justCreated.current = ''
@@ -675,6 +720,10 @@ export function ChatView(p: Props) {
         if (info) roles.current.set(info.id, info.role)
       } else if (e.type === 'message.part.delta') {
         const pr = e.properties as { sessionID: string; messageID: string; partID: string; field: string; delta: string }
+        // 手机扫码发起的回合：本端不是发起者，busy 只能从事件里认领。
+        // 认领了才会显示「处理中」、才会跑流式兜底轮询、session.idle 才不会被跳过。
+        // delta 只属于助手消息（用户消息是整段快照），所以不会把「我刚发的话」误判成在跑。
+        if (pr.sessionID && !busySetRef.current[pr.sessionID]) markBusy(pr.sessionID, true, undefined, true)
         if (pr.sessionID !== sidRef.current) return
         if (pr.field === 'text' || pr.field === 'reasoning')
           setMsgs((prev) => appendDelta(prev, pr, texts.current, roles.current, shown.current, startTicker))
@@ -709,7 +758,12 @@ export function ChatView(p: Props) {
         setAsks((prev) => prev.filter((x) => x.id !== pr.requestID))
       } else if (e.type === 'session.idle') {
         const idleSid = (e.properties as { sessionID?: string }).sessionID
-        if (!idleSid || !busySetRef.current[idleSid]) return
+        if (!idleSid) return
+        const owned = !!busySetRef.current[idleSid]
+        // 手机发起的回合本端从没 busy 过，但这一轮的内容（用户消息 + AI 回复）必须落进界面，
+        // 所以「本端正在看的会话」即使不是自己发起的，也要在 idle 时拉一次完整历史；
+        // 与己无关的会话照旧直接跳过（不然每个任务跑完都要多拉一份历史）。
+        if (!owned && idleSid !== sidRef.current) return
         // 处理中的会话空闲：无论用户是否切走都要清该会话的 busy（防切回时残留"正在思考"）
         markBusy(idleSid, false)
         const isCurrent = idleSid === sidRef.current
@@ -1432,7 +1486,14 @@ export function ChatView(p: Props) {
               </button>
             )}
             <span className="spacer" />
-            <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
+            <ModelPicker
+              groups={groups}
+              value={p.model}
+              onChange={p.onModelChange}
+              onOpenSettings={p.onOpenSettings}
+              onExpandGroup={(id) => void refreshGroupPrices(id)}
+              refreshingGroup={refreshingGroup}
+            />
             {anyBusy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />

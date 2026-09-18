@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, Check, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Server, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
+import { UsagePanel } from './UsagePanel'
+import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
 import type { CustomColors } from '../themeColors'
-import type { McpCfg, Modality, ModelCfg, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
+import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
 import { MODEL_DEFAULTS } from '../oc'
+import type { SettingsTab } from '../App'
 
 /** 输入类型可选项（输出固定为文本，无需配置） */
 const MODALITY_LABELS: { key: Modality; label: string }[] = [
@@ -26,6 +29,16 @@ interface Props {
   /** 当前活动项目路径：项目级技能写在 <项目>/.opencode/skills 下（没有项目时该组不可用） */
   projectPath?: string | null
   projectName?: string | null
+  /** 当前标签页由 App 持有：左栏账号入口要能直接跳到「账号」 */
+  tab: SettingsTab
+  onTab: (t: SettingsTab) => void
+  /** 平台登录态（账号 / 使用量两页共用） */
+  platform: PlatformStatus | null
+  platformBusy: boolean
+  onLogin: () => void
+  onLogout: () => void
+  onSetBaseUrl: (url: string) => void
+  onSubmitCode: (code: string) => void
 }
 
 /** 自定义主题可调的 4 个基础色：标签 + 变量键 */
@@ -40,14 +53,23 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
 const swatchOf = (t: ThemeMeta, custom: CustomColors): string[] =>
   t.id === CUSTOM_ID ? [custom.accent, custom.sideBg, custom.bg] : t.swatches
 
-/** 设置页左侧导航：主题 / 模型 / MCP / 技能 */
-type TabId = 'theme' | 'providers' | 'mcp' | 'skills'
+/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 远程服务 */
+type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
+  { id: 'account', label: '账号', icon: CircleUser },
   { id: 'theme', label: '主题', icon: Palette },
   { id: 'providers', label: '模型', icon: Cpu },
   { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Globe },
+  // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
+  { id: 'usage', label: '使用量', icon: BarChart3 },
+  // 总开关放最后：平时不用碰，关掉后「账号 / 使用量」两页会一起消失
+  { id: 'remote', label: '远程服务', icon: Server }
 ]
+
+/** 依赖平台接口的两页：关了远程服务就没有存在意义，连同导航一起收起 */
+const REMOTE_TABS: TabId[] = ['account', 'usage']
 
 interface Draft {
   isNew: boolean
@@ -107,13 +129,23 @@ export function SettingsView(p: Props) {
   const [formMsg, setFormMsg] = useState<{ text: string; bad: boolean } | null>(null)
   const [confirmDel, setConfirmDel] = useState<ProviderCfg | null>(null)
   const [showKey, setShowKey] = useState(false)
-  const [tab, setTab] = useState<TabId>('theme')
+  // 标签页由 App 持有（左栏「账号」入口要能直接跳过来），这里只读不存
+  const tab = p.tab
+  const setTab = p.onTab
+  /** 远程服务总开关：默认开（老配置没有这个键也当开） */
+  const remote = p.settings.remote !== false
+  const tabs = TABS.filter((t) => remote || !REMOTE_TABS.includes(t.id))
   /** 磁盘上扫到的技能（全局 + 当前项目），进入技能页时刷新 */
   const [skills, setSkills] = useState<SkillItem[]>([])
   const [skDraft, setSkDraft] = useState<SkillForm | null>(null)
   const [skDel, setSkDel] = useState<SkillItem | null>(null)
   /** 技能落盘后要重启内核（技能是启动时加载的），期间按钮转「保存并重启内核…」 */
   const [skBusy, setSkBusy] = useState(false)
+
+  // 关掉远程服务时正停在「账号 / 使用量」上：那两页已经不可见了，退回主题页免得白屏
+  useEffect(() => {
+    if (!remote && REMOTE_TABS.includes(tab)) setTab('theme')
+  }, [remote, tab, setTab])
 
   function openNew() {
     setFormMsg(null)
@@ -387,7 +419,7 @@ export function SettingsView(p: Props) {
     <main className="main settings">
       <div className="set-layout">
         <nav className="set-menu">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               type="button"
               key={t.id}
@@ -563,6 +595,58 @@ export function SettingsView(p: Props) {
           {skillGroup('builtin', '内置技能', '')}
           {skillGroup('global', '全局技能', '~/.qingniaoai/opencode/skills')}
           {skillGroup('project', '项目技能', p.projectName ? `${p.projectName} · .opencode/skills` : '<项目>/.opencode/skills')}
+        </section>
+        )}
+
+        {tab === 'usage' && (
+          <UsagePanel
+            loggedIn={!!p.platform?.loggedIn}
+            platformBusy={p.platformBusy}
+            onLogin={p.onLogin}
+          />
+        )}
+
+        {tab === 'account' && (
+          <AccountPanel
+            loggedIn={!!p.platform?.loggedIn}
+            platformBusy={p.platformBusy}
+            baseUrl={p.platform?.baseUrl ?? ''}
+            onLogin={p.onLogin}
+            onLogout={p.onLogout}
+            onSetBaseUrl={p.onSetBaseUrl}
+            onSubmitCode={p.onSubmitCode}
+          />
+        )}
+
+        {tab === 'remote' && (
+        <section>
+          <h3>
+            <Server size={15} /> 远程服务
+          </h3>
+          <p className="sec-tip">
+            青鸟的平台账号能力（登录、内置模型、积分与用量、手机扫码操作这台电脑）全部依赖它，默认开启。
+            关掉后：界面上的登录入口、手机图标、内置模型一并消失，设置里的「账号 / 使用量」两页也收起，
+            青鸟不再向平台发任何请求，只用本机自己配置的模型提供商。
+          </p>
+          <div className="prow">
+            <Switch checked={remote} onChange={(v) => void p.onSave({ ...p.settings, remote: v })} />
+            <div className="prow-main">
+              <div className="prow-name">
+                <Server size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+                启用远程服务
+              </div>
+              <div className="prow-url">
+                {remote
+                  ? '已启用：可以使用平台账号、内置模型与手机端连接'
+                  : '已关闭：只使用本机配置的模型提供商'}
+              </div>
+            </div>
+          </div>
+          {!remote && p.platform?.loggedIn && (
+            <p className="sec-tip warn">
+              当前平台账号仍处于登录状态。要让这台机器彻底与平台断开，建议在上方重新开启后到「账号」里退出登录。
+            </p>
+          )}
         </section>
         )}
         </div>

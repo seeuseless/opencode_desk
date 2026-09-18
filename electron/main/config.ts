@@ -1,8 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { McpCfg, ModelCfg, Modality, ProviderCfg, Settings } from './types.ts'
-import { MODEL_DEFAULTS, MODALITIES } from './types.ts'
+import type { DeviceCfg, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings } from './types.ts'
+import { DEFAULT_PLATFORM_URL, MODEL_DEFAULTS, MODALITIES, isBuiltinModel } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -23,16 +23,32 @@ export const opencodeStateDir = () => join(storeDir(), 'state')
 export const opencodeConfigPath = () => join(opencodeConfigDir(), 'opencode.json')
 export const qingniaoHome = storeDir
 
+/** 非负数字（倍率），非法/缺失一律 undefined——只有平台模型才带这些字段 */
+function ratioOr(v: unknown): number | undefined {
+  const n = Number(v)
+  return Number.isFinite(n) && n >= 0 ? n : undefined
+}
+
 /** 单条模型记录归一化：兼容旧版字符串数组与手改文件的缺字段，缺失一律落默认参数 */
 function normalizeModel(m: unknown): ModelCfg | null {
   if (typeof m === 'string') return { id: m, context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
   if (!m || typeof (m as ModelCfg).id !== 'string' || !(m as ModelCfg).id.trim()) return null
   const r = m as Partial<ModelCfg>
+  const ratio = ratioOr(r.ratio)
+  const effRatio = ratioOr(r.effRatio)
   return {
     id: r.id!.trim(),
+    name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : undefined,
     context: Number(r.context) > 0 ? Number(r.context) : MODEL_DEFAULTS.context,
     output: Number(r.output) > 0 ? Number(r.output) : MODEL_DEFAULTS.output,
-    input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => MODALITIES.includes(x)) : [...MODEL_DEFAULTS.input]
+    input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => MODALITIES.includes(x)) : [...MODEL_DEFAULTS.input],
+    // 计价信息（限免/折扣/倍率）只做展示用，原样透传；没有的键不落盘，省得第三方模型也带一堆 null
+    ...(typeof r.free === 'boolean' ? { free: r.free } : {}),
+    ...(r.discount === null || typeof r.discount === 'number' ? { discount: (r.discount ?? null) as number | null } : {}),
+    ...(ratio === undefined ? {} : { ratio }),
+    ...(effRatio === undefined ? {} : { effRatio }),
+    // 平台后台那一列「内置」：对话区「内置模型」分组按它过滤，只留平台官方提供的
+    ...(typeof r.builtin === 'boolean' ? { builtin: r.builtin } : {})
   }
 }
 
@@ -62,8 +78,38 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
         }))
     : []
   // 内置浏览器默认开启：没记录过开关的新/旧配置都开，用户显式关过（false）才保持关；
-  // 桌面控制涉及键鼠操控，默认关
-  return { providers, mcps, browser: raw?.browser !== false, computerUse: raw?.computerUse === true }
+  // 桌面控制涉及键鼠操控，默认关；移动端连接会把服务暴露到局域网，默认关
+  // 平台登录态：地址、token、用户、模型清单都是纯数据；缺字段一律落默认
+  const rawPlatform = (raw?.platform ?? {}) as Partial<PlatformCfg>
+  const rawDevice = rawPlatform.device as Partial<DeviceCfg> | null | undefined
+  const device: DeviceCfg | null =
+    rawDevice && typeof rawDevice.token === 'string' && rawDevice.token && typeof rawDevice.secret === 'string'
+      ? {
+          id: Number(rawDevice.id) || 0,
+          name: String(rawDevice.name ?? '青鸟'),
+          token: String(rawDevice.token),
+          secret: String(rawDevice.secret),
+          url: String(rawDevice.url ?? '')
+        }
+      : null
+  const platform: PlatformCfg = {
+    baseUrl: String(rawPlatform.baseUrl ?? DEFAULT_PLATFORM_URL).trim().replace(/\/+$/, '') || DEFAULT_PLATFORM_URL,
+    token: String(rawPlatform.token ?? ''),
+    user: rawPlatform.user && typeof rawPlatform.user === 'object' ? rawPlatform.user : null,
+    models: Array.isArray(rawPlatform.models) ? rawPlatform.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : [],
+    syncedAt: Number(rawPlatform.syncedAt) > 0 ? Number(rawPlatform.syncedAt) : undefined,
+    device
+  }
+  return {
+    providers,
+    mcps,
+    browser: raw?.browser !== false,
+    computerUse: raw?.computerUse === true,
+    // 远程服务默认开：只有显式存过 false 才关（老配置没有这个键，自然落到开）
+    remote: raw?.remote !== false,
+    mobile: raw?.mobile === true,
+    platform
+  }
 }
 
 /** 旧数据目录一次性迁移（codexdesk / qingniao / justdo 时代的设置） */
@@ -97,22 +143,103 @@ export function saveSettings(s: Settings): void {
   writeOpencodeConfig(loadSettings())
 }
 
+/**
+ * 只改「允许移动端连接」这一个开关并落盘——**不重启内核**。
+ * 这个开关跟 provider/MCP 那套内核配置无关，走 saveSettings 会让内核白重启一次，
+ * 手机正连着的时候直接断流。
+ */
+export function setMobileEnabled(on: boolean): void {
+  const s = loadSettings()
+  if (s.mobile === on) return
+  s.mobile = on
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(normalize(s), null, 2))
+}
+
 /** provider 密钥经环境变量注入（opencode.json 的 {env:...} 插值） */
 export function envKey(providerID: string): string {
   return 'QN_KEY_' + providerID.toUpperCase().replace(/[^A-Z0-9]/g, '_')
 }
 
+/** 平台 provider 的固定 ID 与名称（第三方 provider 与它并存，互不覆盖） */
+export const PLATFORM_PROVIDER_ID = 'qingniao'
+export const PLATFORM_PROVIDER_NAME = '青鸟平台'
+
+/**
+ * 生效的平台地址 —— 全应用只此一处：
+ * 环境变量 QINGNIAO_PLATFORM_URL > 设置里的 platform.baseUrl > 内置默认值。
+ * 上线换域名时改设置（或打包时给环境变量）即可，登录入口与网关 baseURL 自动跟着变。
+ */
+export function platformBaseUrl(s?: Settings): string {
+  const fromEnv = (process.env.QINGNIAO_PLATFORM_URL || '').trim()
+  const raw = fromEnv || (s ?? loadSettings()).platform.baseUrl || DEFAULT_PLATFORM_URL
+  return raw.replace(/\/+$/, '')
+}
+
+/** 平台登录页地址（浏览器可直开） */
+export function platformLoginUrl(s?: Settings): string {
+  return platformBaseUrl(s) + '/ide/login'
+}
+
+/**
+ * 平台登录态 → 一个虚拟 provider（指向平台的 OpenAI 兼容网关）。
+ *
+ * 两种情况下返回 null，此时内核里不会出现平台条目：
+ *   1. 关了「远程服务」（全局总开关，见 Settings.remote）；
+ *   2. 未登录，或平台没下发任何「内置」模型。
+ *
+ * 只收内置模型：平台后台为了适配各家上游会挂一批同名第三方模型
+ * （builtin=false），那是给后台运维看的，不该混进用户的「内置模型」里。
+ */
+export function platformProvider(s: Settings): ProviderCfg | null {
+  if (!s.remote) return null
+  const models = s.platform.models.filter(isBuiltinModel)
+  if (!s.platform.token || !models.length) return null
+
+  return {
+    id: PLATFORM_PROVIDER_ID,
+    name: PLATFORM_PROVIDER_NAME,
+    baseURL: platformBaseUrl(s) + '/api/ide/v1',
+    apiKey: s.platform.token,
+    enabled: true,
+    models
+  }
+}
+
+/** 只改平台登录态并落盘（是否重启内核交给调用方决定） */
+export function setPlatform(patch: Partial<PlatformCfg>): Settings {
+  const next = normalize({ ...loadSettings(), platform: { ...loadSettings().platform, ...patch } })
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(next, null, 2))
+  writeOpencodeConfig(next)
+  return next
+}
+
+/** 退出登录：清 token、用户信息、模型清单与设备身份（设备是绑在账号上的） */
+export function clearPlatform(): Settings {
+  return setPlatform({ token: '', user: null, models: [], syncedAt: undefined, device: null })
+}
+
 export function providerEnv(s: Settings): Record<string, string> {
   const env: Record<string, string> = {}
+  const platform = platformProvider(s)
+  if (platform) env[envKey(platform.id)] = platform.apiKey
   for (const p of s.providers) {
     if (p.enabled && p.apiKey) env[envKey(p.id)] = p.apiKey
   }
   return env
 }
 
-/** 真正会写入 opencode.json 的 provider（writeOpencodeConfig 与 defaultModel 的唯一判定源） */
+/**
+ * 真正会写入 opencode.json 的 provider（writeOpencodeConfig 与 defaultModel 的唯一判定源）。
+ * 平台 provider 固定排在最前：平台登录后它就是默认首选，第三方配置照旧并排列在后面。
+ */
 export function usableProviders(s: Settings): ProviderCfg[] {
-  return s.providers.filter((p) => p.enabled && p.id.trim() && p.baseURL.trim() && p.models.length > 0)
+  const manual = s.providers.filter(
+    (p) => p.enabled && p.id.trim() && p.id !== PLATFORM_PROVIDER_ID && p.baseURL.trim() && p.models.length > 0
+  )
+  const platform = platformProvider(s)
+  return platform ? [platform, ...manual] : manual
 }
 
 /** 面板浏览器 MCP 的启动信息（主进程启动时注入：脚本路径 + 控制端点端口），writeOpencodeConfig 用 */
@@ -138,10 +265,15 @@ export function writeOpencodeConfig(s: Settings): void {
         apiKey: '{env:' + envKey(id) + '}'
       },
       // 每模型接入参数：上下文窗口/最大输出 → limit，输入类型 → modalities.input（输出固定文本）
+      // name 只在有展示名时写（平台模型对外 ID 是 qn-xxx，靠它显示人话）
       models: Object.fromEntries(
         p.models.map((m) => [
           m.id,
-          { limit: { context: m.context, output: m.output }, modalities: { input: m.input, output: ['text'] } }
+          {
+            ...(m.name ? { name: m.name } : {}),
+            limit: { context: m.context, output: m.output },
+            modalities: { input: m.input, output: ['text'] }
+          }
         ])
       )
     }
