@@ -117,11 +117,11 @@ export interface Settings {
   /** 桌面控制（computer-use-mcp），依赖本机 npx；开启后 AI 可截屏并操控键鼠 */
   computerUse: boolean
   /**
-   * 全局总开关：是否启用「远程服务」（平台账号那套）。
+   * 全局总开关：是否启用「远程服务」（平台账号那套），只改全局配置文件，不在设置界面里。
    *
-   * 开（默认）＝ 登录、内置模型、积分与用量、手机扫码操作这台电脑全都可用；
-   * 关 ＝ 这些入口在界面上整块消失，青鸟退回「只用本机自配的模型提供商」，
-   * 也不再向平台发任何请求。企业内网、纯离线环境会关掉它。
+   * 关（默认）＝ 这些入口在界面上整块消失，青鸟退回「只用本机自配的模型提供商」，
+   * 也不再向平台发任何请求。企业内网、纯离线环境的默认部署形态；要打开需手动改配置。
+   * 开 ＝ 登录、内置模型、积分与用量、手机扫码操作这台电脑全都可用。
    */
   remote: boolean
   /** 允许移动端连接本机：开则手机扫码后能操作这台电脑（默认关闭） */
@@ -137,7 +137,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mcps: [],
   browser: true,
   computerUse: false,
-  remote: true,
+  remote: false,
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null }
 }

@@ -105,8 +105,8 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     mcps,
     browser: raw?.browser !== false,
     computerUse: raw?.computerUse === true,
-    // 远程服务默认开：只有显式存过 false 才关（老配置没有这个键，自然落到开）
-    remote: raw?.remote !== false,
+    // 远程服务默认关：只有显式存过 true 才开（老配置没有这个键，自然落到关）
+    remote: raw?.remote === true,
     mobile: raw?.mobile === true,
     platform
   }

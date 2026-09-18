@@ -13,7 +13,7 @@ import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './t
 type View = 'chat' | 'settings'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'remote'
+export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account'
 
 /**
  * 外部（对话框里的「配置模型」等）请求打开设置页时带的目标页。
@@ -61,7 +61,7 @@ export default function App() {
     mcps: [],
     browser: false,
     computerUse: false,
-    remote: true,
+    remote: false,
     mobile: false,
     platform: { baseUrl: '', token: '', user: null, models: [], device: null }
   })
@@ -466,8 +466,8 @@ export default function App() {
           platformBusy={platformBusy}
           onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
           onOpenAccount={() => openSettingsAt('account')}
-          /** 远程服务总开关：关掉后登录入口与手机图标一并消失（设置里读的同一份值） */
-          remote={settings.remote !== false}
+          /** 远程服务总开关（全局配置）：关掉后登录入口与手机图标一并消失 */
+          remote={settings.remote}
         />
         <div className="content">
         {/* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */}

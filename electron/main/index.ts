@@ -300,7 +300,7 @@ ipcMain.handle('kernel:health', () => adapter.isHealthy())
 ipcMain.handle('settings:save', async (_e, s: Settings) => {
   saveSettings(s)
   await adapter.restart()
-  // 「远程服务」这个总开关也在设置里：关掉它要顺手把中转通道停掉（一个请求都不再发）
+  // 「远程服务」这个全局总开关（只能改配置文件）：关掉它要顺手把中转通道停掉（一个请求都不再发）
   relay.apply()
 })
 

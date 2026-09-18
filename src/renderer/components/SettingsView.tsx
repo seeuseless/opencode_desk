@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Server, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
@@ -64,7 +64,7 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
 const swatchOf = (t: ThemeMeta, custom: CustomColors): string[] =>
   t.id === CUSTOM_ID ? [custom.accent, custom.sideBg, custom.bg] : t.swatches
 
-/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 远程服务 */
+/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
@@ -74,9 +74,7 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Globe },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
-  { id: 'usage', label: '使用量', icon: BarChart3 },
-  // 总开关放最后：平时不用碰，关掉后「账号 / 使用量」两页会一起消失
-  { id: 'remote', label: '远程服务', icon: Server }
+  { id: 'usage', label: '使用量', icon: BarChart3 }
 ]
 
 /** 依赖平台接口的两页：关了远程服务就没有存在意义，连同导航一起收起 */
@@ -154,8 +152,8 @@ export function SettingsView(p: Props) {
   // 标签页由 App 持有（左栏「账号」入口要能直接跳过来），这里只读不存
   const tab = p.tab
   const setTab = p.onTab
-  /** 远程服务总开关：默认开（老配置没有这个键也当开） */
-  const remote = p.settings.remote !== false
+  /** 远程服务总开关（全局配置，不在此界面上）：关掉则「账号 / 使用量」两页不可见 */
+  const remote = p.settings.remote
   const tabs = TABS.filter((t) => remote || !REMOTE_TABS.includes(t.id))
   /**
    * 保存设置并重启内核：正在跑的任务会一起结束，所以先弹窗确认。
@@ -716,49 +714,6 @@ export function SettingsView(p: Props) {
           />
         )}
 
-        {tab === 'remote' && (
-        <section>
-          <h3>
-            <Server size={15} /> 远程服务
-          </h3>
-          <p className="sec-tip">
-            青鸟的平台账号能力（登录、内置模型、积分与用量、手机扫码操作这台电脑）全部依赖它，默认开启。
-            关掉后：界面上的登录入口、手机图标、内置模型一并消失，设置里的「账号 / 使用量」两页也收起，
-            青鸟不再向平台发任何请求，只用本机自己配置的模型提供商。
-          </p>
-          <div className="prow">
-            <Switch
-              checked={remote}
-              onChange={(v) =>
-                applySettings(
-                  { ...p.settings, remote: v },
-                  {
-                    note: v
-                      ? '将开启平台账号能力（登录、内置模型、积分与用量、手机端连接）。'
-                      : '将关闭平台账号能力，界面上的登录入口、手机图标、内置模型一并消失。'
-                  }
-                )
-              }
-            />
-            <div className="prow-main">
-              <div className="prow-name">
-                <Server size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
-                启用远程服务
-              </div>
-              <div className="prow-url">
-                {remote
-                  ? '已启用：可以使用平台账号、内置模型与手机端连接'
-                  : '已关闭：只使用本机配置的模型提供商'}
-              </div>
-            </div>
-          </div>
-          {!remote && p.platform?.loggedIn && (
-            <p className="sec-tip warn">
-              当前平台账号仍处于登录状态。要让这台机器彻底与平台断开，建议在上方重新开启后到「账号」里退出登录。
-            </p>
-          )}
-        </section>
-        )}
         </div>
       </div>
 
