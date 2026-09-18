@@ -379,6 +379,8 @@ export function ChatView(p: Props) {
 
   /** 拖动浮动聊天卡（顶部拖拽条）：pointer capture 防止划过 webview 丢事件，松手记住位置 */
   function startFloatDrag(e: ReactPointerEvent) {
+    // 点关闭按钮不启动拖拽：下面 setPointerCapture 会把松手后的 click 重定向到 header，按钮收不到
+    if ((e.target as HTMLElement).closest('.float-close')) return
     const el = mainRef.current
     if (!el) return
     e.preventDefault()

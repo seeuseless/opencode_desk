@@ -12,8 +12,14 @@
 - 操作在 `panelOp(action, body)`：navigate / snapshot / click / type，type 时 ref 来自 snapshot
 - snapshot 给可见元素打 `data-qref` 编号（SNAP_JS），输出 AI 可读清单
 
+## 浏览器对话与收藏夹
+- 内置浏览器开着且有页面时，发消息前会 noReply 注入 `BROWSER_CTX_PREFIX`（␞␞浏览器上下文␞␞）上下文：当前页面 URL + 「对话针对页面、用 panel_* 工具、别动项目文件」；按 sid+url 去重（browserCtxRef），编辑重发（resendMessage）时清空记录强制重注。与 MEMORY_PREFIX 同机制：AI 可见、界面不渲染（isCtxOnly）
+- 面板当前 URL 由 BrowserPanel 经 `onUrl` 回传（did-navigate，含用户手输导航），存 ChatView 的 panelUrl
+- 收藏夹：地址栏星标（页面标题作显示名，hostOf 兜底域名），localStorage `qingniao.bookmarks`；全屏时面板顶部渲染 bp-marks 收藏条
+
 ## 约定
 - 用户回复「1」= 写 git 提交日志并 push（全局约定，跨项目）
+- 应用 `Menu.setApplicationMenu(null)`：Ctrl+R 等加速键无效，改完代码窗口不会自动重载；验证新 UI 要重启 `npm run dev`
 
 ## 踩坑记录
 ### 2026-09-18 panel_type 受控输入「填完就消失」

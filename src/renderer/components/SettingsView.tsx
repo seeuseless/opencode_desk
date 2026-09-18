@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, Check, Copy, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, Check, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
@@ -326,20 +326,6 @@ export function SettingsView(p: Props) {
     }
   }
 
-  /** 内置技能只读：另存为副本（预填到新建弹窗，落到全局目录）后即可编辑 */
-  async function duplicateSkill(s: SkillItem) {
-    setFormMsg(null)
-    const d = await window.qingniao.readSkill({ scope: 'global', projectPath: p.projectPath, name: s.name })
-    setSkDraft({
-      isNew: true,
-      scope: 'global',
-      originalName: '',
-      name: s.name + '-copy',
-      description: d.description,
-      body: d.body
-    })
-  }
-
   /** 技能分组：内置随安装包分发（只读），全局对所有项目生效，项目级只在当前项目下被内核发现 */
   function skillGroup(kind: 'builtin' | SkillScope, title: string, hint: string) {
     const usable = kind !== 'builtin' && (kind === 'global' || !!p.projectPath)
@@ -348,7 +334,7 @@ export function SettingsView(p: Props) {
       <div className="sk-sec" key={kind}>
         <div className="sk-head">
           <span className="sk-title">{title}</span>
-          <span className="sk-hint">{hint}</span>
+          {hint && <span className="sk-hint">{hint}</span>}
           <span className="spacer" />
           {kind !== 'builtin' && (
             <>
@@ -361,7 +347,7 @@ export function SettingsView(p: Props) {
             </>
           )}
         </div>
-        {!usable && <div className="plist-empty">还没有打开项目，项目级技能需在具体项目下创建</div>}
+        {!usable && kind !== 'builtin' && <div className="plist-empty">未打开项目</div>}
         {usable && list.length === 0 && (
           <div className="plist-empty hint">
             {kind === 'global' ? '还没有全局技能' : `「${p.projectName ?? '当前项目'}」下还没有技能`}
@@ -381,11 +367,7 @@ export function SettingsView(p: Props) {
               </div>
               <div className="sk-desc">{s.error ?? s.description}</div>
             </div>
-            {kind === 'builtin' ? (
-              <button className="icon-btn" title="另存为副本后编辑" onClick={() => void duplicateSkill(s)}>
-                <Copy size={15} />
-              </button>
-            ) : (
+            {kind !== 'builtin' && (
               <>
                 <button className="icon-btn" title="编辑" onClick={() => void openSkill(s)}>
                   <Pencil size={15} />
@@ -578,12 +560,7 @@ export function SettingsView(p: Props) {
           <h3>
             技能（Skills）
           </h3>
-          <p className="sec-tip">
-            技能是磁盘上的 SKILL.md：模型平时只看到「名称 + 描述」两行，判断需要了才读全文，因此不占常驻上下文。
-            适合把「这个项目的活该怎么干」沉淀下来——提交规范、发布流程、界面约定之类。
-            技能只在启动时加载，保存或删除后会自动重启内核生效（与 MCP 变更同一机制）。描述写得越具体，模型越能判断准。
-          </p>
-          {skillGroup('builtin', '内置技能', '随青鸟安装，不可直接修改，可另存为副本后编辑')}
+          {skillGroup('builtin', '内置技能', '')}
           {skillGroup('global', '全局技能', '~/.qingniaoai/opencode/skills')}
           {skillGroup('project', '项目技能', p.projectName ? `${p.projectName} · .opencode/skills` : '<项目>/.opencode/skills')}
         </section>
