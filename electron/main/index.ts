@@ -150,14 +150,31 @@ async function panelOp(action: string, body: Record<string, unknown>): Promise<u
   if (action === 'type') {
     const ref = Number(body.ref)
     const text = String(body.text ?? '')
+    // 合成事件填值：React/Vue 等受控输入监听原生 keydown/input 事件，直接赋值 + 合成 input 事件时
+    // 框架的 value 追踪器不更新，页面表现像「填完一点就消失」。这里用各标签的原生 setter 绕过追踪器，
+    // 再补发 input/change。textarea 没有原生 setter 可用，直接赋值。
     const ok = await wc.executeJavaScript(
       `(() => { const el = document.querySelector('[data-qref="${ref}"]'); if (!el) return false; el.focus();
-        el.value = ${JSON.stringify(text)};
-        el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
-        ${body.submit ? 'el.form?.requestSubmit?.(); el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, which: 13, bubbles: true }));' : ''}
+        const setNative = (v) => {
+          const proto = el.tagName === 'TEXTAREA' ? null : (el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype)
+          if (proto) Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v); else el.value = v
+          el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+        if (el.tagName === 'SELECT') {
+          for (const o of el.options) if (o.value === ${JSON.stringify(text)} || (o.textContent || '').trim() === ${JSON.stringify(text)}) { setNative(o.value); return true }
+          for (const o of el.options) if ((o.textContent || '').includes(${JSON.stringify(text)})) { setNative(o.value); return true }
+        }
+        // 模拟逐字键入：清空再填值，部分受控组件靠 input 事件序列更新内部 state
+        setNative(''); setNative(${JSON.stringify(text)})
         return true })()`,
       true
     )
+    if (body.submit) {
+      await wc.executeJavaScript(
+        `(() => { const el = document.querySelector('[data-qref="${ref}"]'); if (!el) return false; el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })); el.form?.requestSubmit?.(); return true })()`,
+        true
+      )
+    }
     if (!ok) throw new Error(`元素 [${ref}] 不存在，页面可能已变化，请重新 snapshot`)
     return { ok: true }
   }

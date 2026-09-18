@@ -2111,6 +2111,8 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
       ? (tool === 'write' ? toolIn!.content : tool === 'edit' ? (toolIn!.newString ?? toolIn!.new_string) : (toolIn!.patchText ?? toolIn!.patch_text)) as string
       : ''
     const rawOut = cnOutput(st === 'error' ? str(part.state?.error) : str(part.state?.output))
+    // 读取「文件不存在」是探索型正常结果（AI 常在写前探测路径），不当错误标红
+    const readMiss = st === 'error' && tool === 'read' && /^File not found:/i.test(str(part.state?.error ?? ''))
     // 写入类工具：内核算好的整轮差量优先（带 +/- 行），工具自身输出仅作回退
     const fd = isFileTool(tool) ? (matchedDiff(metaDiffs(part), part) ?? matchedDiff(diffs, part)) : undefined
     let body: ReactNode
@@ -2153,6 +2155,7 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
         target={toolTarget(part, projectPath)}
         preview={preview}
         body={body}
+        hideErr={readMiss}
         stats={fd && (fd.additions || fd.deletions) ? { additions: fd.additions, deletions: fd.deletions } : undefined}
         spin={st === 'running' && tool !== 'bash' && tool !== 'shell' && tool !== 'execute'}
       />
@@ -2185,6 +2188,7 @@ function StepLine({
   status,
   preview,
   body,
+  hideErr,
   stats,
   spin = true
 }: {
@@ -2194,6 +2198,8 @@ function StepLine({
   status: string
   preview?: string
   body?: ReactNode
+  /** 该错误无需标红（如 read 文件不存在属正常探索），隐藏右侧错误图标 */
+  hideErr?: boolean
   /** 写入类工具的整轮增减行数（+ 绿 / - 红） */
   stats?: { additions: number; deletions: number }
   /** running 时图标位是否转圈：终端类长跑命令不转，避免看起来像一直加载 */
@@ -2232,7 +2238,7 @@ function StepLine({
             )}
           </span>
         )}
-        {status === 'error' && <AlertCircle size={13} className="step-err" />}
+        {status === 'error' && !hideErr && <AlertCircle size={13} className="step-err" />}
         {expandable && <ChevronDown size={13} className={'step-chev' + (open ? ' up' : '')} />}
       </button>
       {running && preview && (
