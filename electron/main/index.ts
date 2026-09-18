@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, saveSettings, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, saveSettings, setDesktopMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -289,6 +289,13 @@ function panelMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'panel-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'panel-mcp.mjs')
+}
+
+/** 桌面辅助 MCP（app_running）脚本位置（随安装包分发） */
+function desktopMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'desktop-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'desktop-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -594,6 +601,7 @@ app.whenReady().then(async () => {
   const panelPort = await startPanelApi() // 面板浏览器控制端点：MCP 配置要带上端口，先于内核配置
   syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前
   setPanelMcp({ path: panelMcpPath(), port: panelPort })
+  setDesktopMcp({ path: desktopMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace

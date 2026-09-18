@@ -25,6 +25,9 @@ extraResources:
   # 面板浏览器 MCP 脚本（AI 操控右侧面板 webview 的工具端）
   - from: resources/panel-mcp.mjs
     to: panel-mcp.mjs
+  # 桌面辅助 MCP 脚本（app_running 查进程，防桌面控制重复启动应用实例）
+  - from: resources/desktop-mcp.mjs
+    to: desktop-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"

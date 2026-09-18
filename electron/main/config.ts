@@ -247,6 +247,11 @@ let panelMcp: { path: string; port: number } | undefined
 export function setPanelMcp(v: { path: string; port: number }): void {
   panelMcp = v
 }
+/** 桌面辅助 MCP（app_running 查进程）脚本路径，桌面控制开启时注册 */
+let desktopMcp: { path: string } | undefined
+export function setDesktopMcp(v: { path: string }): void {
+  desktopMcp = v
+}
 
 /**
  * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器与桌面控制）。
@@ -295,6 +300,10 @@ export function writeOpencodeConfig(s: Settings): void {
       command: ['npx', '-y', 'computer-use-mcp'],
       enabled: true
     }
+    // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
+    if (desktopMcp) {
+      mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
+    }
   }
   for (const m of s.mcps) {
     if (m.type === 'remote') {
@@ -315,9 +324,10 @@ export function writeOpencodeConfig(s: Settings): void {
       '# 工具路由约定\n' +
         '- 「打开网页 / 上网 / 操作浏览器」默认指用户桌面上的真实浏览器：用 computer 工具（截屏 + 键鼠）完成，不要用 panel_*。\n' +
         '- panel_* 只控制青鸟窗口右侧的内嵌面板浏览器，仅当用户明确要求「在面板 / 内置浏览器里打开」时使用。\n' +
-        '- 「打开某应用」先截屏看任务栏：该应用图标已在任务栏 = 已经在运行，直接点任务栏图标唤起它，\n' +
-        '  不要再用 Win+R / 双击桌面图标去启动第二个实例；只有任务栏和系统托盘都没有时才走启动流程，\n' +
-        '  启动后再次截屏确认窗口是否真的出现。'
+        '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
+        '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
+        '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
+        '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
     )
     instructions.push(routing)
   }
