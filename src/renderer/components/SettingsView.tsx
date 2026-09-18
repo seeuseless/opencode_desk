@@ -7,7 +7,7 @@ import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
 import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
-import { MODEL_DEFAULTS } from '../oc'
+import { MODEL_DEFAULTS, chatProviders, modelSupportsImage } from '../oc'
 import type { SettingsTab } from '../App'
 
 /**
@@ -38,6 +38,8 @@ interface Props {
   /** 当前活动项目路径：项目级技能写在 <项目>/.opencode/skills 下（没有项目时该组不可用） */
   projectPath?: string | null
   projectName?: string | null
+  /** 对话区当前所选模型（'pid/mid'，'' = 跟随内核默认）：桌面控制页用它判断有无视觉能力 */
+  model: string
   /** 当前标签页由 App 持有：左栏账号入口要能直接跳到「账号」 */
   tab: SettingsTab
   onTab: (t: SettingsTab) => void
@@ -150,6 +152,8 @@ export function SettingsView(p: Props) {
   const setTab = p.onTab
   /** 远程服务总开关（全局配置，不在此界面上）：关掉则「账号 / 使用量」两页不可见 */
   const remote = p.settings.remote
+  /** 桌面控制已开但当前模型不收图片：发送时会被 ChatView 拦下，这里提前在同处说明 */
+  const cuNoVision = p.settings.computerUse && !modelSupportsImage(chatProviders(p.settings), p.model)
   const tabs = TABS.filter((t) => remote || !REMOTE_TABS.includes(t.id))
   /**
    * 保存设置并重启内核：正在跑的任务会一起结束，所以先弹窗确认。
@@ -655,6 +659,11 @@ export function SettingsView(p: Props) {
                 桌面控制
               </div>
               <div className="prow-url">AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入）</div>
+              {cuNoVision && (
+                <div className="prow-warn bad">
+                  当前对话模型不支持图片输入，发任务时会被拦下。请在对话下方换用视觉模型，或关闭本开关。
+                </div>
+              )}
             </div>
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}

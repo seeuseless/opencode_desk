@@ -479,6 +479,7 @@ export default function App() {
             model={model}
             onModelChange={setModel}
             settings={chatProviders(settings)}
+            computerUse={settings.computerUse}
             settingsReady={settingsReady}
             onDraftCreated={onDraftCreated}
             onRefreshSessions={refreshSessions}
@@ -520,6 +521,7 @@ export default function App() {
             onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
             projectPath={activeProject?.path ?? null}
             projectName={activeProject?.name ?? null}
+            model={model}
             tab={settingsTab}
             onTab={setSettingsTab}
             req={settingsReq}

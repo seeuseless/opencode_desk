@@ -7,7 +7,7 @@ import {
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, PLATFORM_PROVIDER_ID, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, PLATFORM_PROVIDER_ID, modelSupportsImage, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import { load, save } from '../store'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -23,6 +23,8 @@ interface Props {
   model: string
   onModelChange: (key: string) => void
   settings: ProviderCfg[]
+  /** 桌面控制（computer-use）开关：开着但选了不支持图片输入的模型时，拦下发送并提示换模型 */
+  computerUse: boolean
   /** 设置已加载完成（区分"提供商还没加载"与"真的没有提供商"，防止启动时清掉存档模型） */
   settingsReady: boolean
   /** 草稿首发：内核会话此刻才创建 */
@@ -1112,6 +1114,12 @@ export function ChatView(p: Props) {
   }
 
   async function runPrompt(text: string, sidOverride?: string, dirOverride?: string) {
+    // 桌面控制是「截图→操作→再截图」的闭环，模型不收图片就只能盲打，成功率极低：
+    // 与其让它降级硬撑，不如当场拦下并指路换模型（草稿场景也走这里，不会先建半截会话）
+    if (p.computerUse && !modelSupportsImage(p.settings, p.model)) {
+      setError('桌面控制需要支持图片输入的模型（AI 靠读屏截图决定下一步操作），当前模型收不到图片。请在下方模型选择器换用视觉模型，或到 设置 → MCP 关闭「桌面控制」。')
+      return
+    }
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {

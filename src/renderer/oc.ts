@@ -42,6 +42,19 @@ export function chatProviders(s: SettingsCfg): ProviderCfg[] {
   return [...platform, ...s.providers]
 }
 
+/**
+ * 所选模型是否支持图片输入（桌面控制 / 内置浏览器截图回传的硬依赖）。
+ * key 为 'pid/mid'，'' = 跟随内核默认，无法判定，返回 true 不拦。
+ */
+export function modelSupportsImage(list: ProviderCfg[], key: string): boolean {
+  if (!key) return true
+  const i = key.indexOf('/')
+  if (i <= 0) return true
+  const m = list.find((x) => x.id === key.slice(0, i))?.models.find((x) => x.id === key.slice(i + 1))
+  if (!m) return true
+  return (m.input ?? MODEL_DEFAULTS.input).includes('image')
+}
+
 async function call<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T> {
   const r = await window.qingniao.call(path, opts)
   if (r.status >= 400) {
