@@ -32,7 +32,7 @@ interface Props {
   onBusy: (sid: string, running: boolean) => void
   /** 自增信号：点 + / 点任务时自动聚焦输入框 */
   focusSignal: number
-  /** 跳转到设置页（配置模型） */
+  /** 跳转到设置页并定位到「模型」那一页（模型选择器里的「配置模型」） */
   onOpenSettings?: () => void
   /** 点击左端项目文件夹：弹出系统选目录对话框 */
   onPickDir: () => void

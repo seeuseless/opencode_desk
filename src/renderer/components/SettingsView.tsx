@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Server, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
@@ -9,6 +9,15 @@ import type { CustomColors } from '../themeColors'
 import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
 import { MODEL_DEFAULTS } from '../oc'
 import type { SettingsTab } from '../App'
+
+/**
+ * 外部请求的定位（对话框里的「配置模型」等）。tick 自增是为了「用户本来就停在模型页」
+ * 时再点一次也能重新定位——只靠 tab 值判别不出「又点了一次」。
+ */
+export interface SettingsReq {
+  tab: SettingsTab
+  tick: number
+}
 
 /** 输入类型可选项（输出固定为文本，无需配置） */
 const MODALITY_LABELS: { key: Modality; label: string }[] = [
@@ -32,6 +41,8 @@ interface Props {
   /** 当前标签页由 App 持有：左栏账号入口要能直接跳到「账号」 */
   tab: SettingsTab
   onTab: (t: SettingsTab) => void
+  /** 外部请求的定位（对话框「配置模型」等）：tick 变化即执行一次，见下方 effect */
+  req: SettingsReq | null
   /** 平台登录态（账号 / 使用量两页共用） */
   platform: PlatformStatus | null
   platformBusy: boolean
@@ -128,6 +139,8 @@ export function SettingsView(p: Props) {
   const [fetching, setFetching] = useState(false)
   const [formMsg, setFormMsg] = useState<{ text: string; bad: boolean } | null>(null)
   const [confirmDel, setConfirmDel] = useState<ProviderCfg | null>(null)
+  /* 重启内核前给一次确认（自绘弹窗，不用原生 confirm）：保留没有运行任务时的「稍后再说」 */
+  const [pending, setPending] = useState<{ next: SettingsCfg; keepTab?: SettingsTab; note: string } | null>(null)
   const [showKey, setShowKey] = useState(false)
   // 标签页由 App 持有（左栏「账号」入口要能直接跳过来），这里只读不存
   const tab = p.tab
@@ -135,17 +148,56 @@ export function SettingsView(p: Props) {
   /** 远程服务总开关：默认开（老配置没有这个键也当开） */
   const remote = p.settings.remote !== false
   const tabs = TABS.filter((t) => remote || !REMOTE_TABS.includes(t.id))
+  /**
+   * 保存设置并重启内核：正在跑的任务会一起结束，所以先弹窗确认。
+   *
+   * 不弹原生 confirm（本项目自绘控件，风格要统一），且必须带「稍后再说」：
+   * 有任务在跑时强行保存/重启会把用户正在等的这轮直接掐掉。
+   *
+   * restoreTab：从对话区「配置模型」跳过来的场景，取消后要退回原来那一页，
+   * 否则用户停在模型页却没做任何事，会以为设置被改了。
+   */
+  function applySettings(next: SettingsCfg, opts: { note: string; keepTab?: SettingsTab; restoreTab?: SettingsTab } | null) {
+    if (!opts) {
+      void p.onSave(next)
+      return
+    }
+    setPending({ next, keepTab: opts.keepTab, note: opts.note })
+    // 立即切到目标页，让用户先看到自己点进去的地方（弹窗取消时再退回 restoreTab）
+    if (opts.keepTab) setTab(opts.keepTab)
+  }
   /** 磁盘上扫到的技能（全局 + 当前项目），进入技能页时刷新 */
   const [skills, setSkills] = useState<SkillItem[]>([])
   const [skDraft, setSkDraft] = useState<SkillForm | null>(null)
   const [skDel, setSkDel] = useState<SkillItem | null>(null)
   /** 技能落盘后要重启内核（技能是启动时加载的），期间按钮转「保存并重启内核…」 */
   const [skBusy, setSkBusy] = useState(false)
+  /** 右侧正文滚动容器：外部跳页后置顶，避免停在上一页的半截位置 */
+  const body = useRef<HTMLDivElement>(null)
 
   // 关掉远程服务时正停在「账号 / 使用量」上：那两页已经不可见了，退回主题页免得白屏
   useEffect(() => {
     if (!remote && REMOTE_TABS.includes(tab)) setTab('theme')
   }, [remote, tab, setTab])
+
+  /**
+   * 外部请求的定位：只在 tick 变化时跑一次（不进依赖，否则用户手动切页会被立刻拉回来）。
+   *
+   * 关掉远程服务时「账号 / 使用量」两页不存在，回落主题页，别停在一页空白上；
+   * 切页后置顶滚动，否则从模型页跳到技能页会停在半截位置。
+   */
+  useEffect(() => {
+    if (!p.req) return
+    const t = !remote && REMOTE_TABS.includes(p.req.tab) ? 'theme' : p.req.tab
+    setTab(t)
+    setConfirmDel(null)
+    setDraft(null)
+    setMcpDraft(null)
+    setPending(null)
+    setSkDel(null)
+    requestAnimationFrame(() => body.current?.scrollTo({ top: 0 }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.req?.tick])
 
   function openNew() {
     setFormMsg(null)
@@ -224,7 +276,10 @@ export function SettingsView(p: Props) {
   }
 
   async function toggle(i: number) {
-    await p.onSave({ ...p.settings, providers: providers.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) })
+    applySettings(
+      { ...p.settings, providers: providers.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) },
+      { note: `将${providers[i].enabled ? '停用' : '启用'}「${providers[i].name}」。` }
+    )
   }
 
   async function doRemove() {
@@ -277,19 +332,33 @@ export function SettingsView(p: Props) {
   }
 
   async function toggleMcp(i: number) {
-    await p.onSave({ ...p.settings, mcps: p.settings.mcps.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) })
+    const m = p.settings.mcps[i]
+    applySettings(
+      { ...p.settings, mcps: p.settings.mcps.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) },
+      { note: `将${m.enabled ? '停用' : '启用'} MCP「${m.name}」。` }
+    )
   }
 
   async function removeMcp(i: number) {
-    await p.onSave({ ...p.settings, mcps: p.settings.mcps.filter((_, k) => k !== i) })
+    const m = p.settings.mcps[i]
+    applySettings(
+      { ...p.settings, mcps: p.settings.mcps.filter((_, k) => k !== i) },
+      { note: `将删除 MCP「${m.name}」。` }
+    )
   }
 
   async function toggleBrowser() {
-    await p.onSave({ ...p.settings, browser: !p.settings.browser })
+    applySettings(
+      { ...p.settings, browser: !p.settings.browser },
+      { note: `将${p.settings.browser ? '关闭' : '开启'}内置浏览器。` }
+    )
   }
 
   async function toggleComputerUse() {
-    await p.onSave({ ...p.settings, computerUse: !p.settings.computerUse })
+    applySettings(
+      { ...p.settings, computerUse: !p.settings.computerUse },
+      { note: `将${p.settings.computerUse ? '关闭' : '开启'}桌面控制（computer-use）。` }
+    )
   }
 
   // ---------- 技能（Skills）----------
@@ -430,7 +499,7 @@ export function SettingsView(p: Props) {
             </button>
           ))}
         </nav>
-        <div className="setbody">
+        <div className="setbody" ref={body}>
         {tab === 'theme' && (
         <section>
           <h3>
@@ -629,7 +698,19 @@ export function SettingsView(p: Props) {
             青鸟不再向平台发任何请求，只用本机自己配置的模型提供商。
           </p>
           <div className="prow">
-            <Switch checked={remote} onChange={(v) => void p.onSave({ ...p.settings, remote: v })} />
+            <Switch
+              checked={remote}
+              onChange={(v) =>
+                applySettings(
+                  { ...p.settings, remote: v },
+                  {
+                    note: v
+                      ? '将开启平台账号能力（登录、内置模型、积分与用量、手机端连接）。'
+                      : '将关闭平台账号能力，界面上的登录入口、手机图标、内置模型一并消失。'
+                  }
+                )
+              }
+            />
             <div className="prow-main">
               <div className="prow-name">
                 <Server size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
@@ -965,6 +1046,45 @@ export function SettingsView(p: Props) {
             <button className="ghost" onClick={() => setConfirmDel(null)}>取消</button>
             <button className="primary danger-btn" onClick={doRemove}>
               删除
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 保存设置 = 重启内核：跑着的任务会一起结束，先让用户确认；不想现在重启的可以「稍后再说」 */}
+      {pending && (
+        <Modal
+          title="保存并重启内核"
+          onClose={() => {
+            const back = pending.keepTab
+            setPending(null)
+            if (back) setTab(back)
+          }}
+        >
+          <p className="confirm-text">
+            {pending.note}保存会重启内核，<b>正在处理的任务会一同结束</b>。确定现在保存吗？
+          </p>
+          <div className="actions">
+            <button
+              className="ghost"
+              onClick={() => {
+                const back = pending.keepTab
+                setPending(null)
+                if (back) setTab(back)
+              }}
+            >
+              稍后再说
+            </button>
+            <button
+              className="primary"
+              disabled={p.saving}
+              onClick={() => {
+                const next = pending.next
+                setPending(null)
+                void p.onSave(next)
+              }}
+            >
+              {p.saving ? '保存并重启内核…' : '保存并重启'}
             </button>
           </div>
         </Modal>

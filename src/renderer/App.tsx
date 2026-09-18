@@ -15,6 +15,14 @@ type View = 'chat' | 'settings'
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
 export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'remote'
 
+/**
+ * 外部（对话框里的「配置模型」等）请求打开设置页时带的目标页。
+ *
+ * tick 必须自增：用户可能本来就停在模型页，再点一次「配置模型」时 tab 值没变，
+ * 只看 tab 判别不出"又点了一次"；tick 一变就一定会重新定位。
+ */
+type SettingsReq = { tab: SettingsTab; tick: number }
+
 const sortSessions = (list: Session[]) =>
   [...list].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
 
@@ -61,6 +69,8 @@ export default function App() {
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
   /** 设置页标签：放在 App 里，左栏账号入口才能一键跳到「账号」 */
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('theme')
+  /** 外部请求的定位（带自增 tick，重复点同一个入口也能重新跳） */
+  const [settingsReq, setSettingsReq] = useState<SettingsReq | null>(null)
   /** 平台登录态：左下角账号入口与账号页共用一份，登录/退出后由主进程推更新 */
   const [platformSt, setPlatformSt] = useState<PlatformStatus | null>(null)
   /** 登录/退出进行中（按钮转圈，避免重复点） */
@@ -201,6 +211,25 @@ export default function App() {
   const activeProject = projects.find((x) => x.id === activeId)
 
   /**
+   * 打开设置页并定位到某一页（对话框里的「配置模型」、左栏账号入口都走这里）。
+   *
+   * 设置页是盖在内容区之上的覆盖层，而左侧任务列表始终可点：用户点任务想回对话，
+   * 若只切了内容区、覆盖层还留着，看着就像"点了没反应"——所以下面所有要进对话的动作
+   * 都走 toChat()，顺手把这条定位请求清掉。
+   */
+  function openSettingsAt(t: SettingsTab) {
+    setSettingsTab(t)
+    setSettingsReq((r) => ({ tab: t, tick: (r?.tick ?? 0) + 1 }))
+    setView('settings')
+  }
+
+  /** 进对话：收起设置覆盖层（点任务 / 点项目 / 新建会话都用它） */
+  function toChat() {
+    setSettingsReq(null)
+    setView('chat')
+  }
+
+  /**
    * 点击文件夹：切换展开状态；点到别的项目时同步激活并进草稿态——
    * 否则右侧还挂着旧项目的会话（sessionId 未清），发消息会串进别的任务里。
    */
@@ -213,7 +242,7 @@ export default function App() {
       setActiveId(id)
       save('qingniao.activeProject', id)
       setSessionId('')
-      setView('chat')
+      toChat()
     }
   }
 
@@ -225,7 +254,7 @@ export default function App() {
     save('qingniao.activeProject', id)
     setExpanded((e) => ({ ...e, [id]: true }))
     setSessionId('')
-    setView('chat')
+    toChat()
     setFocusTick((t) => t + 1)
   }
 
@@ -234,7 +263,7 @@ export default function App() {
     setActiveId(proj.id)
     save('qingniao.activeProject', proj.id)
     setSessionId(sid)
-    setView('chat')
+    toChat()
     setFocusTick((t) => t + 1)
     const projList = sessionsMap[proj.path]
     if (!projList?.some((s) => s.id === sid)) {
@@ -272,7 +301,7 @@ export default function App() {
     save('qingniao.activeProject', proj.id)
     setExpanded((e) => ({ ...e, [proj.id]: true }))
     setSessionId('')
-    setView('chat')
+    toChat()
   }
 
   /** 移除项目：允许移除到空列表（不再兜底造一个「工作台」） */
@@ -427,7 +456,7 @@ export default function App() {
           onAddProject={addProject}
           onPickSession={pickSessionFor}
           onDeleteSession={deleteSessionOf}
-          onOpenSettings={() => setView('settings')}
+          onOpenSettings={() => openSettingsAt('providers')}
           onOpenFolder={openFolder}
           mobile={mobile}
           mobileBusy={mobileBusy}
@@ -436,10 +465,7 @@ export default function App() {
           platform={platformSt}
           platformBusy={platformBusy}
           onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
-          onOpenAccount={() => {
-            setSettingsTab('account')
-            setView('settings')
-          }}
+          onOpenAccount={() => openSettingsAt('account')}
           /** 远程服务总开关：关掉后登录入口与手机图标一并消失（设置里读的同一份值） */
           remote={settings.remote !== false}
         />
@@ -468,19 +494,19 @@ export default function App() {
             browserToggleSignal={browserSignal}
             browserMaxSignal={browserMaxSignal}
             onBrowserUi={setBrowserUi}
-            onOpenSettings={() => setView('settings')}
+            onOpenSettings={() => openSettingsAt('providers')}
             onPickDir={addProject}
             onSwitchProject={(id) => {
               if (id === activeId) return
               setActiveId(id)
               save('qingniao.activeProject', id)
               setSessionId('')
-              setView('chat')
+              toChat()
               setFocusTick((t) => t + 1)
             }}
           />
         ) : (
-          <Welcome onAddProject={addProject} onOpenSettings={() => setView('settings')} />
+          <Welcome onAddProject={addProject} onOpenSettings={() => openSettingsAt('providers')} />
         )}
         {view === 'settings' && (
           <SettingsView
@@ -496,6 +522,7 @@ export default function App() {
             projectName={activeProject?.name ?? null}
             tab={settingsTab}
             onTab={setSettingsTab}
+            req={settingsReq}
             platform={platformSt}
             platformBusy={platformBusy}
             onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
