@@ -4,7 +4,7 @@ import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
-import { getThemeList, CUSTOM_ID, type ThemeMeta } from '../theme'
+import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
 import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
 import { MODEL_DEFAULTS } from '../oc'
@@ -59,10 +59,6 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'fg', label: '正文文字' },
   { key: 'sideBg', label: '左侧面板底色' },
 ]
-
-/** 主题卡片用色块预览：内置取色卡，自定义实时取当前自定义的 4 色 */
-const swatchOf = (t: ThemeMeta, custom: CustomColors): string[] =>
-  t.id === CUSTOM_ID ? [custom.accent, custom.sideBg, custom.bg] : t.swatches
 
 /** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 */
 type TabId = SettingsTab
@@ -532,22 +528,34 @@ export function SettingsView(p: Props) {
           <h3>
             <Layers size={15} /> 主题
           </h3>
+          <p className="sec-tip">
+            内置配色即时切换，实时应用到整个界面；选择「自定义」可用四种基础色自由搭配。
+          </p>
           <div className="theme-grid">
-            {getThemeList().map((t) => (
-              <button
-                type="button"
-                key={t.id}
-                className={'theme-card' + (p.theme === t.id ? ' on' : '')}
-                onClick={() => p.onTheme(t.id)}
-              >
-                <span className="swatches">
-                  {swatchOf(t, p.custom).map((c) => (
-                    <i key={c} style={{ background: c }} />
-                  ))}
-                </span>
-                {t.name}
-              </button>
-            ))}
+            {getThemeList().map((t) => {
+              // 预览色：内置为 [侧栏 / 内容底 / 主色]，自定义取当前四色
+              const [side, body, accent] = t.id === CUSTOM_ID
+                ? [p.custom.sideBg, p.custom.bg, p.custom.accent]
+                : [t.swatches[0], t.swatches[2], t.swatches[1]]
+              const on = p.theme === t.id
+              return (
+                <button
+                  type="button"
+                  key={t.id}
+                  className={'theme-card' + (on ? ' on' : '')}
+                  onClick={() => p.onTheme(t.id)}
+                >
+                  <span className="theme-preview">
+                    <i className="pv-side" style={{ background: side }} />
+                    <i className="pv-body" style={{ background: body }}>
+                      <b style={{ background: accent }} />
+                    </i>
+                  </span>
+                  <span className="theme-name">{t.name}</span>
+                  {on && <span className="theme-mark"><Check size={11} strokeWidth={3} /></span>}
+                </button>
+              )
+            })}
           </div>
           {p.theme === CUSTOM_ID && (
             <div className="custom-editor">
@@ -559,6 +567,7 @@ export function SettingsView(p: Props) {
                     value={p.custom[f.key]}
                     onChange={(e) => p.onCustom(f.key, e.target.value)}
                   />
+                  <span className="cc-val">{p.custom[f.key]}</span>
                 </label>
               ))}
               <button type="button" className="ghost cc-reset" onClick={p.onResetCustom}>
