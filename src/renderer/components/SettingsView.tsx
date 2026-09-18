@@ -636,6 +636,7 @@ export function SettingsView(p: Props) {
             内置浏览器基于 Playwright MCP、桌面控制基于 computer-use-mcp（首次使用需本机有 Node.js，会自动经 npx 拉起）；
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
+          <div className="mcp-list">
           <div className="prow">
             <Switch checked={p.settings.browser} onChange={toggleBrowser} />
             <div className="prow-main">
@@ -657,38 +658,35 @@ export function SettingsView(p: Props) {
             </div>
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
-          {p.settings.mcps.length > 0 && (
-            <div className="mcp-list">
-              {p.settings.mcps.map((m, i) => (
-                <div key={m.name} className={'prow' + (m.enabled ? '' : ' off')}>
-                  <Switch checked={m.enabled} onChange={() => toggleMcp(i)} />
-                  <span className="prow-ico">
-                    {m.type === 'remote' ? <Link2 size={15} /> : <Terminal size={15} />}
-                  </span>
-                  <div className="prow-main">
-                    <div className="prow-name">
-                      {m.name}
-                      <span className={'chip kind-' + m.type}>{m.type === 'remote' ? '远程' : '本地'}</span>
-                    </div>
-                    <div className="prow-url">{m.type === 'remote' ? m.url : m.command}</div>
-                  </div>
-                  <button
-                    className="icon-btn"
-                    title="编辑"
-                    onClick={() => {
-                      setFormMsg(null)
-                      setMcpDraft({ isNew: false, index: i, name: m.name, type: m.type, command: m.command, url: m.url })
-                    }}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button className="icon-btn danger" title="删除" onClick={() => removeMcp(i)}>
-                    <Trash2 size={15} />
-                  </button>
+          {p.settings.mcps.map((m, i) => (
+            <div key={m.name} className={'prow' + (m.enabled ? '' : ' off')}>
+              <Switch checked={m.enabled} onChange={() => toggleMcp(i)} />
+              <span className="prow-ico">
+                {m.type === 'remote' ? <Link2 size={15} /> : <Terminal size={15} />}
+              </span>
+              <div className="prow-main">
+                <div className="prow-name">
+                  {m.name}
+                  <span className={'chip kind-' + m.type}>{m.type === 'remote' ? '远程' : '本地'}</span>
                 </div>
-              ))}
+                <div className="prow-url">{m.type === 'remote' ? m.url : m.command}</div>
+              </div>
+              <button
+                className="icon-btn"
+                title="编辑"
+                onClick={() => {
+                  setFormMsg(null)
+                  setMcpDraft({ isNew: false, index: i, name: m.name, type: m.type, command: m.command, url: m.url })
+                }}
+              >
+                <Pencil size={15} />
+              </button>
+              <button className="icon-btn danger" title="删除" onClick={() => removeMcp(i)}>
+                <Trash2 size={15} />
+              </button>
             </div>
-          )}
+          ))}
+          </div>
         </section>
         )}
 
