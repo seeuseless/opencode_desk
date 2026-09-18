@@ -236,19 +236,25 @@ export function ChatView(p: Props) {
   const [floatOpen, setFloatOpen] = useState(false)
   /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
   const [manualBrowser, setManualBrowser] = useState(false)
-  /** 浮动聊天卡位置（视口坐标）：null = 默认右下角；拖过后存档，下次打开还在原位 */
-  const [floatPos, setFloatPos] = useState<{ x: number; y: number } | null>(() => {
-    const v = load<{ x: number; y: number } | null>('qingniao.floatPos', null)
-    // 存档可能来自更大的窗口/显示器：夹回当前视口内，保证拖拽条摸得着
-    if (!v) return null
-    return { x: Math.max(8, Math.min(v.x, window.innerWidth - 80)), y: Math.max(8, Math.min(v.y, window.innerHeight - 80)) }
+  /** 浮动聊天卡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
+  const [floatPos, setFloatPos] = useState<{ r: number; b: number } | null>(() => {
+    const v = load<{ r: number; b: number } | null>('qingniao.floatPos', null)
+    // 存档可能来自更大的窗口：夹回当前视口，保证拖拽条摸得着；旧版 x/y 坐标直接弃用走默认位
+    if (!v || typeof v.r !== 'number' || typeof v.b !== 'number') return null
+    return {
+      r: Math.max(8, Math.min(v.r, window.innerWidth - 40)),
+      b: Math.max(8, Math.min(v.b, window.innerHeight - 40))
+    }
   })
   const mainRef = useRef<HTMLElement | null>(null)
-  /** 右下角对话气泡位置：null = 默认右下角；拖过后存档，下次还在原位 */
-  const [fabPos, setFabPos] = useState<{ x: number; y: number } | null>(() => {
-    const v = load<{ x: number; y: number } | null>('qingniao.fabPos', null)
-    if (!v) return null
-    return { x: Math.max(8, Math.min(v.x, window.innerWidth - 60)), y: Math.max(8, Math.min(v.y, window.innerHeight - 60)) }
+  /** 右下角对话气泡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
+  const [fabPos, setFabPos] = useState<{ r: number; b: number } | null>(() => {
+    const v = load<{ r: number; b: number } | null>('qingniao.fabPos', null)
+    if (!v || typeof v.r !== 'number' || typeof v.b !== 'number') return null
+    return {
+      r: Math.max(8, Math.min(v.r, window.innerWidth - 52)),
+      b: Math.max(8, Math.min(v.b, window.innerHeight - 52))
+    }
   })
   const fabRef = useRef<HTMLButtonElement | null>(null)
   /** 气泡刚被拖过：松手后的 click 不再触发展开/收起 */
@@ -344,13 +350,14 @@ export function ChatView(p: Props) {
     e.preventDefault()
     setDragShield(true)
     const rect = el.getBoundingClientRect()
-    const dx = e.clientX - rect.left
-    const dy = e.clientY - rect.top
+    // 记指针到卡片右/下边缘的距离，拖动中反算 right/bottom——存相对窗口边缘的偏移，缩放不跑位
+    const offR = rect.right - e.clientX
+    const offB = rect.bottom - e.clientY
     let last = floatPos
     const move = (ev: PointerEvent) => {
       last = {
-        x: Math.max(8, Math.min(ev.clientX - dx, window.innerWidth - rect.width - 8)),
-        y: Math.max(8, Math.min(ev.clientY - dy, window.innerHeight - rect.height - 8))
+        r: Math.max(8, Math.min(window.innerWidth - ev.clientX - offR, window.innerWidth - rect.width - 8)),
+        b: Math.max(8, Math.min(window.innerHeight - ev.clientY - offB, window.innerHeight - rect.height - 8))
       }
       setFloatPos(last)
     }
@@ -372,15 +379,15 @@ export function ChatView(p: Props) {
     e.preventDefault()
     setDragShield(true)
     const rect = el.getBoundingClientRect()
-    const dx = e.clientX - rect.left
-    const dy = e.clientY - rect.top
+    const offR = rect.right - e.clientX
+    const offB = rect.bottom - e.clientY
     let last = fabPos
     let moved = false
     const move = (ev: PointerEvent) => {
       moved = true
       last = {
-        x: Math.max(8, Math.min(ev.clientX - dx, window.innerWidth - rect.width - 8)),
-        y: Math.max(8, Math.min(ev.clientY - dy, window.innerHeight - rect.height - 8))
+        r: Math.max(8, Math.min(window.innerWidth - ev.clientX - offR, window.innerWidth - rect.width - 8)),
+        b: Math.max(8, Math.min(window.innerHeight - ev.clientY - offB, window.innerHeight - rect.height - 8))
       }
       setFabPos(last)
     }
@@ -1141,7 +1148,7 @@ export function ChatView(p: Props) {
     <main
       ref={mainRef}
       className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}
-      style={browserMax && floatOpen && floatPos ? { left: floatPos.x, top: floatPos.y, right: 'auto', bottom: 'auto' } : undefined}
+      style={browserMax && floatOpen && floatPos ? { right: floatPos.r, bottom: floatPos.b } : undefined}
     >
       {browserMax && floatOpen && (
         <>
@@ -1371,7 +1378,7 @@ export function ChatView(p: Props) {
         ref={fabRef}
         className="chat-fab"
         title={floatOpen ? '收起对话（可拖动换位置）' : '打开对话（可拖动换位置）'}
-        style={fabPos ? { left: fabPos.x, top: fabPos.y, right: 'auto', bottom: 'auto' } : undefined}
+        style={fabPos ? { right: fabPos.r, bottom: fabPos.b } : undefined}
         onPointerDown={startFabDrag}
         onClick={() => { if (!fabDragged.current) setFloatOpen((v) => !v) }}
       >
