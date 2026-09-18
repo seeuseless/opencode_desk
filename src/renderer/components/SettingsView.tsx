@@ -141,6 +141,15 @@ export function SettingsView(p: Props) {
   const [confirmDel, setConfirmDel] = useState<ProviderCfg | null>(null)
   /* 重启内核前给一次确认（自绘弹窗，不用原生 confirm）：保留没有运行任务时的「稍后再说」 */
   const [pending, setPending] = useState<{ next: SettingsCfg; keepTab?: SettingsTab; note: string } | null>(null)
+  /**
+   * 本组件自己发起的保存是否在跑。
+   *
+   * **不要用 p.saving 驱动按钮文案**：它是 App 里「所有设置保存」共用的一个开关，
+   * 只要有任何一次保存在进行，提供商弹窗、MCP 弹窗、确认框里的按钮都会一起变成
+   * 「保存并重启内核…」——用户根本没点那个按钮却看到它在转，就是这里来的。
+   * 各动作各自的忙碌态（busySelf / skBusy）才反映「我刚点的那个操作」。
+   */
+  const [busySelf, setBusySelf] = useState(false)
   const [showKey, setShowKey] = useState(false)
   // 标签页由 App 持有（左栏「账号」入口要能直接跳过来），这里只读不存
   const tab = p.tab
@@ -252,7 +261,7 @@ export function SettingsView(p: Props) {
   }
 
   async function saveDraft() {
-    if (!draft) return
+    if (!draft || busySelf) return
     const id = (draft.id.trim() || slugify(draft.name)).toLowerCase()
     if (!draft.baseURL.trim()) {
       setFormMsg({ text: '请填写 Base URL', bad: true })
@@ -271,8 +280,14 @@ export function SettingsView(p: Props) {
       models: parseModels(draft.modelsText).map((mid) => draft.cfgs[mid] ?? { id: mid, ...defaultModelCfg() })
     }
     const list = draft.isNew ? [...providers, cfg] : providers.map((x, i) => (i === draft.index ? cfg : x))
-    await p.onSave({ ...p.settings, providers: list })
-    setDraft(null)
+    // 关弹窗放 finally：保存失败时表单要留住（让用户改完再试），但绝不能卡在「保存中」不动
+    setBusySelf(true)
+    try {
+      await p.onSave({ ...p.settings, providers: list })
+      setDraft(null)
+    } finally {
+      setBusySelf(false)
+    }
   }
 
   async function toggle(i: number) {
@@ -283,9 +298,17 @@ export function SettingsView(p: Props) {
   }
 
   async function doRemove() {
-    if (!confirmDel) return
-    await p.onSave({ ...p.settings, providers: providers.filter((x) => x.id !== confirmDel.id) })
-    setConfirmDel(null)
+    if (!confirmDel || busySelf) return
+    // 关弹窗一定要放 finally：p.onSave 内部会重启内核，重启失败（或主进程拒绝）时若把
+    // setConfirmDel(null) 留在 await 之后，弹窗会一直挂在屏幕上——用户看到的就是「点了删除没反应」。
+    const id = confirmDel.id
+    setBusySelf(true)
+    try {
+      await p.onSave({ ...p.settings, providers: providers.filter((x) => x.id !== id) })
+    } finally {
+      setBusySelf(false)
+      setConfirmDel(null)
+    }
   }
 
   // ---------- MCP ----------
@@ -326,9 +349,15 @@ export function SettingsView(p: Props) {
       enabled: mcpDraft.isNew ? true : list[mcpDraft.index].enabled
     }
     const next = mcpDraft.isNew ? [...list, cfg] : list.map((x, i) => (i === mcpDraft.index ? cfg : x))
-    await p.onSave({ ...p.settings, mcps: next })
-    setMcpDraft(null)
-    setFormMsg(null)
+    // 同 saveDraft：关弹窗放 finally，失败时表单留住但不卡在「保存中」
+    setBusySelf(true)
+    try {
+      await p.onSave({ ...p.settings, mcps: next })
+      setMcpDraft(null)
+      setFormMsg(null)
+    } finally {
+      setBusySelf(false)
+    }
   }
 
   async function toggleMcp(i: number) {
@@ -840,8 +869,8 @@ export function SettingsView(p: Props) {
           </div>
           <div className="actions">
             <button className="ghost" onClick={() => setDraft(null)}>取消</button>
-            <button className="primary" disabled={p.saving} onClick={saveDraft}>
-              {p.saving ? '保存并重启内核…' : '保存'}
+            <button className="primary" disabled={busySelf} onClick={saveDraft}>
+              {busySelf ? '保存并重启内核…' : '保存'}
             </button>
           </div>
         </Modal>
@@ -922,8 +951,8 @@ export function SettingsView(p: Props) {
 
             <div className="actions">
               <button className="ghost" onClick={() => setMcpDraft(null)}>取消</button>
-              <button className="primary" disabled={p.saving} onClick={saveMcpDraft}>
-                {p.saving ? '保存并重启内核…' : '保存'}
+              <button className="primary" disabled={busySelf} onClick={saveMcpDraft}>
+                {busySelf ? '保存并重启内核…' : '保存'}
               </button>
             </div>
           </div>
@@ -1038,14 +1067,14 @@ export function SettingsView(p: Props) {
       )}
 
       {confirmDel && (
-        <Modal title="删除提供商" onClose={() => setConfirmDel(null)}>
+        <Modal title="删除提供商" onClose={() => !busySelf && setConfirmDel(null)}>
           <p className="confirm-text">
             确定删除「{confirmDel.name}」及其 {confirmDel.models.length} 个模型吗？内核会重启，正在使用该提供商的会话将不可继续。
           </p>
           <div className="actions">
-            <button className="ghost" onClick={() => setConfirmDel(null)}>取消</button>
-            <button className="primary danger-btn" onClick={doRemove}>
-              删除
+            <button className="ghost" disabled={busySelf} onClick={() => setConfirmDel(null)}>取消</button>
+            <button className="primary danger-btn" disabled={busySelf} onClick={doRemove}>
+              {busySelf ? '删除并重启内核…' : '删除'}
             </button>
           </div>
         </Modal>
@@ -1077,14 +1106,14 @@ export function SettingsView(p: Props) {
             </button>
             <button
               className="primary"
-              disabled={p.saving}
+              disabled={busySelf}
               onClick={() => {
                 const next = pending.next
                 setPending(null)
                 void p.onSave(next)
               }}
             >
-              {p.saving ? '保存并重启内核…' : '保存并重启'}
+              保存并重启
             </button>
           </div>
         </Modal>
