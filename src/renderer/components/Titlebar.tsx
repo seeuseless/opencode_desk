@@ -26,6 +26,12 @@ export function Titlebar({
         <span className="tb-en">QingNiao</span>
       </span>
       <span className="tb-browser-slot" />
+      {browserOpen && (
+        <span className="tb-hint" title="左侧对话随时输入任务，AI 会操作这个浏览器">
+          <span className="tb-hint-dot" />
+          对话里随时指挥 AI 操作浏览器
+        </span>
+      )}
       <button className="icon-btn tb-btn" title="内置浏览器" onClick={onToggleBrowser}>
         <PanelRight size={15} />
       </button>

@@ -198,6 +198,15 @@ input, textarea { font: inherit; }
 
 /* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
 .tb-browser-slot { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; height: 100%; }
+/* 浏览器打开时的提示条：放在槽位左侧，文案说明对话可指挥 AI 操作浏览器 */
+.tb-hint {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--side-fg2); white-space: nowrap;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--side-hover);
+  -webkit-app-region: no-drag;
+}
+.tb-hint-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--side-logo); flex-shrink: 0; }
 
 /* ================= 侧栏（跟随左侧面板色） ================= */
 .side {
@@ -1014,29 +1023,33 @@ input, textarea { font: inherit; }
 }
 .chat-fab:active { cursor: grabbing; }
 .chat-fab:hover { filter: brightness(1.05); }
-/* 浮动卡右上角关闭：叠在拖拽条右端 */
+/* 浮动卡顶部 header 条：左侧文案提示 + 右端关闭按钮，整条可拖动移卡，双击复位 */
+.float-head {
+  height: 28px; flex-shrink: 0; position: relative;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 10px; cursor: move; touch-action: none;
+}
+/* 提示文案：小圆点 + 说明，让浮动卡里的人知道这是「可指挥 AI 操作浏览器」的对话 */
+.float-hint { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--fg2); white-space: nowrap; }
+.float-hint-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .float-close {
-  position: absolute; top: 0; right: 0; z-index: 2;
-  width: 28px; height: 18px; display: flex; align-items: center; justify-content: center;
-  background: none; border: none; color: var(--fg2); cursor: pointer;
+  margin-left: auto; z-index: 2;
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  border-radius: 7px; background: none; border: none; color: var(--fg2); cursor: pointer;
 }
 .float-close:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 /* 拖拽护罩：拖动气泡/对话卡/调宽时盖住全窗，指针事件全程留在主文档不被 webview 抢走 */
 .drag-shield { position: fixed; inset: 0; z-index: 100; cursor: grabbing; }
-/* 浮动卡顶部拖拽条：按住移动整卡，双击复位到默认右下角 */
-.float-drag { height: 18px; flex-shrink: 0; cursor: move; touch-action: none; position: relative; }
-.float-drag::after { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 36px; height: 4px; border-radius: 2px; background: var(--line); }
-.float-drag:hover::after { background: var(--fg2); }
 /* 浏览器工具栏（portal 到标题栏中间）：胶囊造型融入面板配色；内部交互须免拖拽区 */
 .bp-head {
-  display: flex; align-items: center; gap: 4px;
-  width: min(760px, 56%); height: 28px; padding: 0 6px;
-  border-radius: 8px; background: var(--side-solid);
+  display: flex; align-items: center; gap: 5px;
+  width: min(760px, 56%); height: 34px; padding: 0 8px;
+  border-radius: 10px; background: var(--side-solid);
   -webkit-app-region: no-drag;
 }
-.bp-head .icon-btn { width: 24px; height: 24px; border-radius: 6px; }
+.bp-head .icon-btn { width: 28px; height: 28px; border-radius: 8px; }
 /* 地址栏是可手输的 input：透明底融入胶囊，回车即导航 */
-.bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--side-fg2); white-space: nowrap; }
+.bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; color: var(--side-fg2); white-space: nowrap; }
 .bp-url:focus { color: var(--side-fg); }
 /* webview 需显式尺寸，flex:1 撑满面板剩余空间 */
 .bp-wv { flex: 1; min-height: 0; width: 100%; border: none; background: #fff; }

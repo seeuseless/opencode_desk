@@ -586,7 +586,8 @@ export function ChatView(p: Props) {
       })
     }
     inflight.current = null
-    setQueue([])
+    // 队列里的消息保留，停止后队列消费 effect（busy 变 false）会自动发出队首任务；
+    // 「停止」只对当前正在跑的任务生效，不打断用户排队的后续指令
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型
@@ -1152,15 +1153,17 @@ export function ChatView(p: Props) {
     >
       {browserMax && floatOpen && (
         <>
-          <div
-            className="float-drag"
-            title="拖动移动位置 · 双击复位"
+          <div className="float-head" title="拖动移动位置 · 双击复位"
             onPointerDown={startFloatDrag}
-            onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}
-          />
-          <button className="float-close" title="收起对话" onClick={() => setFloatOpen(false)}>
-            <X size={12} />
-          </button>
+            onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}>
+            <span className="float-hint" title="输入任务，AI 会直接操作这个浏览器">
+              <span className="float-hint-dot" />
+              AI 可对话操作此浏览器
+            </span>
+            <button className="float-close" title="收起对话" onClick={() => setFloatOpen(false)}>
+              <X size={16} />
+            </button>
+          </div>
         </>
       )}
       <div
@@ -1358,7 +1361,7 @@ export function ChatView(p: Props) {
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
             {anyBusy ? (
-              <button className="send-round stop" title="停止所有任务" onClick={() => void stopAll()}>
+              <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
             ) : (
@@ -1468,10 +1471,10 @@ function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTM
   const head = (
     <div className="bp-head">
       <button className="icon-btn" disabled={!nav.back} title="后退" onClick={() => wvRef.current?.goBack()}>
-        <ArrowLeft size={14} />
+        <ArrowLeft size={15} />
       </button>
       <button className="icon-btn" disabled={!nav.fwd} title="前进" onClick={() => wvRef.current?.goForward()}>
-        <ArrowRight size={14} />
+        <ArrowRight size={15} />
       </button>
       <input
         className="bp-url"
