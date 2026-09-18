@@ -182,6 +182,8 @@ function humanizeError(raw: string): string {
   if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return 'API Key 无效或未通过认证，请到设置里检查该提供商的密钥。'
   if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return '请求过于频繁，已被限流，请稍候片刻再试。'
   if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return '请求的模型在该端点不存在或不可用，请更换模型。'
+  // 图生图/文生图模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-image-* 提示走 /v1/images/generations）
+  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return '该模型是图像生成模型，不支持对话，无法作为工作模型。请到 设置 → 模型 换用对话模型（桌面控制需选支持图片输入的视觉对话模型）。'
   if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return '无法连接模型端点，请检查 Base URL 与网络。'
   return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
 }
@@ -1147,7 +1149,9 @@ export function ChatView(p: Props) {
           '每轮完成的重要工作，请用一两句话追加到当日文件。'
         if (longMem) memText += '\n\n# 长期记忆\n' + longMem
         if (dailyMem) memText += '\n\n# 今日已做\n' + dailyMem
-        oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不影响正常对话 */ })
+        // 必须 await：与正题 prompt 并发进内核队列时，loop 会在下一步捞到这条 noReply 消息
+        // 并按内核默认模型生成一条答非所问的回复（历史事故：桌面控制中途冒出「我没有桌面工具」）
+        await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不影响正常对话 */ })
         p.onDraftCreated(s)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
