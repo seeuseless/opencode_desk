@@ -196,6 +196,9 @@ input, textarea { font: inherit; }
 .titlebar .icon-btn:hover { background: var(--side-hover); color: var(--side-fg); }
 .tb-close:hover { background: #e0245e; color: #fff; }
 
+/* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
+.tb-browser-slot { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; height: 100%; }
+
 /* ================= 侧栏（跟随左侧面板色） ================= */
 .side {
   width: 260px; min-width: 260px; background: var(--side-bg);
@@ -1000,23 +1003,41 @@ input, textarea { font: inherit; }
   flex: none; border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 12px 40px var(--shadow); overflow: hidden;
 }
-/* 浮动卡的开合气泡按钮 */
+/* 浮动卡的开合气泡按钮：可按住拖到任意位置（click 与拖动按位移区分） */
 .chat-fab {
   position: fixed; right: 16px; bottom: 16px; z-index: 40;
   width: 44px; height: 44px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   background: var(--accent); color: var(--on-accent); border: none;
   box-shadow: 0 6px 20px var(--shadow);
+  cursor: grab; touch-action: none;
 }
+.chat-fab:active { cursor: grabbing; }
 .chat-fab:hover { filter: brightness(1.05); }
+/* 浮动卡右上角关闭：叠在拖拽条右端 */
+.float-close {
+  position: absolute; top: 0; right: 0; z-index: 2;
+  width: 28px; height: 18px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--fg2); cursor: pointer;
+}
+.float-close:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+/* 拖拽护罩：拖动气泡/对话卡/调宽时盖住全窗，指针事件全程留在主文档不被 webview 抢走 */
+.drag-shield { position: fixed; inset: 0; z-index: 100; cursor: grabbing; }
 /* 浮动卡顶部拖拽条：按住移动整卡，双击复位到默认右下角 */
 .float-drag { height: 18px; flex-shrink: 0; cursor: move; touch-action: none; position: relative; }
 .float-drag::after { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 36px; height: 4px; border-radius: 2px; background: var(--line); }
 .float-drag:hover::after { background: var(--fg2); }
-.bp-head { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--line); color: var(--fg2); flex-shrink: 0; }
-/* 地址栏是可手输的 input：透明底融入头部，回车即导航 */
-.bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--fg2); white-space: nowrap; }
-.bp-url:focus { color: var(--fg); }
+/* 浏览器工具栏（portal 到标题栏中间）：胶囊造型融入面板配色；内部交互须免拖拽区 */
+.bp-head {
+  display: flex; align-items: center; gap: 4px;
+  width: min(760px, 56%); height: 28px; padding: 0 6px;
+  border-radius: 8px; background: var(--side-solid);
+  -webkit-app-region: no-drag;
+}
+.bp-head .icon-btn { width: 24px; height: 24px; border-radius: 6px; }
+/* 地址栏是可手输的 input：透明底融入胶囊，回车即导航 */
+.bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 11.5px; color: var(--side-fg2); white-space: nowrap; }
+.bp-url:focus { color: var(--side-fg); }
 /* webview 需显式尺寸，flex:1 撑满面板剩余空间 */
 .bp-wv { flex: 1; min-height: 0; width: 100%; border: none; background: #fff; }
 /* 无网址时的占位：浏览模式入口场景，引导用户去地址栏输入 */

@@ -37,6 +37,10 @@ export default function App() {
   const [focusTick, setFocusTick] = useState(0)
   /** 自增计数：标题栏「内置浏览器」按钮开/关右侧面板 */
   const [browserSignal, setBrowserSignal] = useState(0)
+  /** 自增计数：浏览器打开时标题栏最大化按钮接管面板放大/还原 */
+  const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
+  /** 浏览器面板开合/放大状态镜像（ChatView 上报），驱动标题栏按钮行为与图标 */
+  const [browserUi, setBrowserUi] = useState({ open: false, max: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -321,7 +325,12 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Titlebar onToggleBrowser={() => setBrowserSignal((v) => v + 1)} />
+      <Titlebar
+        onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
+        browserOpen={browserUi.open}
+        browserMax={browserUi.max}
+        onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
+      />
       <div className="app">
         <Sidebar
           projects={orderedProjects}
@@ -362,6 +371,8 @@ export default function App() {
             }
             focusSignal={focusTick}
             browserToggleSignal={browserSignal}
+            browserMaxSignal={browserMaxSignal}
+            onBrowserUi={setBrowserUi}
             onOpenSettings={() => setView('settings')}
             onPickDir={addProject}
             onSwitchProject={(id) => {

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, ExternalLink, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, Maximize2, MessageCircle, Minimize2, Pencil, RotateCw, Search, Send, Sparkles,
+  AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
+  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, MEMORY_PREFIX, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
@@ -39,6 +40,10 @@ interface Props {
   onSwitchProject: (id: string) => void
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
+  /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
+  browserMaxSignal: number
+  /** 上报浏览器面板开合与放大状态（驱动标题栏按钮行为与图标） */
+  onBrowserUi: (s: { open: boolean; max: boolean }) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -239,6 +244,19 @@ export function ChatView(p: Props) {
     return { x: Math.max(8, Math.min(v.x, window.innerWidth - 80)), y: Math.max(8, Math.min(v.y, window.innerHeight - 80)) }
   })
   const mainRef = useRef<HTMLElement | null>(null)
+  /** 右下角对话气泡位置：null = 默认右下角；拖过后存档，下次还在原位 */
+  const [fabPos, setFabPos] = useState<{ x: number; y: number } | null>(() => {
+    const v = load<{ x: number; y: number } | null>('qingniao.fabPos', null)
+    if (!v) return null
+    return { x: Math.max(8, Math.min(v.x, window.innerWidth - 60)), y: Math.max(8, Math.min(v.y, window.innerHeight - 60)) }
+  })
+  const fabRef = useRef<HTMLButtonElement | null>(null)
+  /** 气泡刚被拖过：松手后的 click 不再触发展开/收起 */
+  const fabDragged = useRef(false)
+  /** 拖拽护罩开关：拖动期间盖住 webview 等区域，把指针事件拦在主文档（OOPIF 不受主文档 pointer capture 约束） */
+  const [dragShield, setDragShield] = useState(false)
+  /** 标题栏中间的浏览器工具栏挂载点（Titlebar 渲染的槽位，DOM 提交后查一次） */
+  const [tbSlot, setTbSlot] = useState<HTMLElement | null>(null)
   const browserDismissedIn = useRef('')
 
   const browserView = useMemo(() => {
@@ -324,6 +342,7 @@ export function ChatView(p: Props) {
     const el = mainRef.current
     if (!el) return
     e.preventDefault()
+    setDragShield(true)
     const rect = el.getBoundingClientRect()
     const dx = e.clientX - rect.left
     const dy = e.clientY - rect.top
@@ -338,7 +357,39 @@ export function ChatView(p: Props) {
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      setDragShield(false)
       if (last) save('qingniao.floatPos', last)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  /** 拖动右下角对话气泡：挪一点位置也算拖动，松手后的 click 不触发开合 */
+  function startFabDrag(e: ReactPointerEvent) {
+    const el = fabRef.current
+    if (!el) return
+    e.preventDefault()
+    setDragShield(true)
+    const rect = el.getBoundingClientRect()
+    const dx = e.clientX - rect.left
+    const dy = e.clientY - rect.top
+    let last = fabPos
+    let moved = false
+    const move = (ev: PointerEvent) => {
+      moved = true
+      last = {
+        x: Math.max(8, Math.min(ev.clientX - dx, window.innerWidth - rect.width - 8)),
+        y: Math.max(8, Math.min(ev.clientY - dy, window.innerHeight - rect.height - 8))
+      }
+      setFabPos(last)
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDragShield(false)
+      fabDragged.current = moved
+      if (moved && last) save('qingniao.fabPos', last)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -753,6 +804,23 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserToggleSignal])
 
+  // 浏览器打开时标题栏最大化按钮接管面板放大/还原：每 +1 切换一次
+  useEffect(() => {
+    if (p.browserMaxSignal > 0) toggleBrowserMax()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.browserMaxSignal])
+
+  // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
+  useEffect(() => {
+    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browserOpen, manualBrowser, browserMax])
+
+  // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
+  useEffect(() => {
+    setTbSlot(document.querySelector<HTMLElement>('.tb-browser-slot'))
+  }, [])
+
   useEffect(() => {
     const el = scrollRef.current
     // 用户在往上翻时不打扰，贴底时才跟随
@@ -1069,18 +1137,24 @@ export function ChatView(p: Props) {
 
   return (
     <div className="chat-row">
+    {dragShield && <div className="drag-shield" />}
     <main
       ref={mainRef}
       className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}
       style={browserMax && floatOpen && floatPos ? { left: floatPos.x, top: floatPos.y, right: 'auto', bottom: 'auto' } : undefined}
     >
       {browserMax && floatOpen && (
-        <div
-          className="float-drag"
-          title="拖动移动位置 · 双击复位"
-          onPointerDown={startFloatDrag}
-          onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}
-        />
+        <>
+          <div
+            className="float-drag"
+            title="拖动移动位置 · 双击复位"
+            onPointerDown={startFloatDrag}
+            onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}
+          />
+          <button className="float-close" title="收起对话" onClick={() => setFloatOpen(false)}>
+            <X size={12} />
+          </button>
+        </>
       )}
       <div
         className="msgs"
@@ -1290,15 +1364,17 @@ export function ChatView(p: Props) {
       </div>
     </main>
     {(browserOpen || manualBrowser) && (
-      <BrowserPanel
-        url={browserView.url}
-        max={browserMax}
-        onToggleMax={toggleBrowserMax}
-        onClose={closeBrowserPanel}
-      />
+      <BrowserPanel url={browserView.url} max={browserMax} slot={tbSlot} />
     )}
     {browserMax && (
-      <button className="chat-fab" title={floatOpen ? '收起对话' : '打开对话'} onClick={() => setFloatOpen((v) => !v)}>
+      <button
+        ref={fabRef}
+        className="chat-fab"
+        title={floatOpen ? '收起对话（可拖动换位置）' : '打开对话（可拖动换位置）'}
+        style={fabPos ? { left: fabPos.x, top: fabPos.y, right: 'auto', bottom: 'auto' } : undefined}
+        onPointerDown={startFabDrag}
+        onClick={() => { if (!fabDragged.current) setFloatOpen((v) => !v) }}
+      >
         {floatOpen ? <X size={18} /> : <MessageCircle size={18} />}
       </button>
     )}
@@ -1306,18 +1382,8 @@ export function ChatView(p: Props) {
   )
 }
 
-/** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；可放大占满会话区 */
-function BrowserPanel({
-  url,
-  max,
-  onToggleMax,
-  onClose
-}: {
-  url: string
-  max: boolean
-  onToggleMax: () => void
-  onClose: () => void
-}) {
+/** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
+function BrowserPanel({ url, max, slot }: { url: string; max: boolean; slot: HTMLElement | null }) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
   /** 面板打开时的目标地址：有值才挂载 webview（空地址挂 webview 行为不可控）；之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
@@ -1328,6 +1394,8 @@ function BrowserPanel({
   const [nav, setNav] = useState({ back: false, fwd: false })
   const wvRef = useRef<WebviewTag | null>(null)
   const panelRef = useRef<HTMLElement | null>(null)
+  /** 调宽拖拽护罩：拖动期间盖住 webview，指针事件留在主文档 */
+  const [dragShield, setDragShield] = useState(false)
 
   useEffect(() => {
     if (url && url !== addr) {
@@ -1372,6 +1440,7 @@ function BrowserPanel({
   /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
   function startResize(e: ReactPointerEvent) {
     e.preventDefault()
+    setDragShield(true)
     const panel = panelRef.current
     const row = panel?.parentElement
     if (!panel || !row) return
@@ -1382,61 +1451,57 @@ function BrowserPanel({
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      setDragShield(false)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
+  const head = (
+    <div className="bp-head">
+      <button className="icon-btn" disabled={!nav.back} title="后退" onClick={() => wvRef.current?.goBack()}>
+        <ArrowLeft size={14} />
+      </button>
+      <button className="icon-btn" disabled={!nav.fwd} title="前进" onClick={() => wvRef.current?.goForward()}>
+        <ArrowRight size={14} />
+      </button>
+      <input
+        className="bp-url"
+        value={addr}
+        placeholder="输入网址回车打开"
+        spellCheck={false}
+        onChange={(e) => setAddr(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') loadAddr((e.target as HTMLInputElement).value)
+        }}
+      />
+    </div>
+  )
+
   return (
-    <aside
-      ref={panelRef}
-      className={'browser-panel' + (max ? ' max' : '')}
-      style={width != null && !max ? { width, maxWidth: 'none' } : undefined}
-    >
-      {!max && <div className="bp-resizer" onPointerDown={startResize} />}
-      <div className="bp-head">
-        <button className="icon-btn" disabled={!nav.back} title="后退" onClick={() => wvRef.current?.goBack()}>
-          <ArrowLeft size={14} />
-        </button>
-        <button className="icon-btn" disabled={!nav.fwd} title="前进" onClick={() => wvRef.current?.goForward()}>
-          <ArrowRight size={14} />
-        </button>
-        <input
-          className="bp-url"
-          value={addr}
-          placeholder="输入网址回车打开"
-          spellCheck={false}
-          onChange={(e) => setAddr(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') loadAddr((e.target as HTMLInputElement).value)
-          }}
-        />
-        <span className="spacer" />
-        {addr && (
-          <button className="icon-btn" title="在系统浏览器打开" onClick={() => void window.qingniao.openExternal(addr)}>
-            <ExternalLink size={14} />
-          </button>
+    <>
+      {slot && createPortal(head, slot)}
+      {dragShield && <div className="drag-shield" />}
+      <aside
+        ref={panelRef}
+        className={'browser-panel' + (max ? ' max' : '')}
+        style={width != null && !max ? { width, maxWidth: 'none' } : undefined}
+      >
+        {!max && <div className="bp-resizer" onPointerDown={startResize} />}
+        {src ? (
+          <webview
+            ref={bindWv}
+            className="bp-wv"
+            src={src}
+            partition="persist:webpanel"
+            allowpopups={false}
+          />
+        ) : (
+          <div className="bp-nourl">在顶部地址栏输入网址后回车打开</div>
         )}
-        <button className="icon-btn" title={max ? '还原' : '放大占满'} onClick={onToggleMax}>
-          {max ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-        </button>
-        <button className="icon-btn" title="关闭面板" onClick={onClose}>
-          <X size={14} />
-        </button>
-      </div>
-      {src ? (
-        <webview
-          ref={bindWv}
-          className="bp-wv"
-          src={src}
-          partition="persist:webpanel"
-          allowpopups={false}
-        />
-      ) : (
-        <div className="bp-nourl">在上方地址栏输入网址后回车打开</div>
-      )}
-    </aside>
+      </aside>
+    </>
   )
 }
 
