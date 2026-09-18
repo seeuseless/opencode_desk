@@ -1426,9 +1426,11 @@ export function ChatView(p: Props) {
                 {terms.filter((x) => x.status === 'running').length}
               </button>
             )}
-            <button className="icon-btn" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
-              <Globe size={14} />
-            </button>
+            {!browserMax && (
+              <button className="icon-btn" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
+                <Globe size={14} />
+              </button>
+            )}
             <span className="spacer" />
             <ModelPicker groups={groups} value={p.model} onChange={p.onModelChange} onOpenSettings={p.onOpenSettings} />
             {anyBusy ? (
