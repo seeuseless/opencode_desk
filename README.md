@@ -123,7 +123,7 @@ scripts/                   gen-icon 图标生成、smoke 内核冒烟
 
 ## 许可
 
-[MIT License](./LICENSE) — 版权 © 2026 QingNiao (青鸟)。
+[MIT License](./LICENSE) — 版权 © 2026 SeeUseLESS。
 
 简言之：你可以自由使用、复制、修改、合并、发布、分发、再授权及销售本软件及其副本，
 只需在副本或软件的重要部分中保留原始版权声明与本许可声明。软件按"原样"提供，不作任何保证。
