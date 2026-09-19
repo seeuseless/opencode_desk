@@ -522,6 +522,17 @@ input, textarea { font: inherit; }
 .step-code .d-add { color: var(--ok); }
 .step-code .d-del { color: var(--err); }
 .step-code code { font: inherit; color: inherit; background: none; padding: 0; }
+.step-code.diff-view { padding: 0; background: transparent; overflow-x: auto; }
+.diff-line { display: block; position: relative; padding-left: 30px; min-height: 21px; }
+.diff-line .diff-marker {
+  position: absolute; left: 0; top: 0; width: 22px; text-align: right;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; color: var(--fg2);
+}
+.diff-line.diff-add { background: color-mix(in srgb, var(--ok) 10%, transparent); }
+.diff-line.diff-add .diff-marker, .diff-line.diff-add .diff-content { color: var(--ok); }
+.diff-line.diff-del { background: color-mix(in srgb, var(--err) 9%, transparent); }
+.diff-line.diff-del .diff-marker, .diff-line.diff-del .diff-content { color: var(--err); }
+.diff-line.diff-ctx .diff-content { color: var(--fg2); }
 
 /* 目录条目列表（read 工具读目录） */
 .step-list {

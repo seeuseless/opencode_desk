@@ -78,14 +78,12 @@ const RETRY_MAX = 10
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
 
-/** 会话中断的识别：助手消息自带错误，或回合结束时还残留 running/pending 的工具调用（半截截断）。
- *  关键修正：助手消息已有有效文本产出 → 视为回合正常完成，不算中断；
- *  否则「写 Java 示例」这类纯文本回复（即便有残留 tool part）会被误判为中断，触发不该触发的自动续跑。 */
+/** 会话中断的识别：助手消息自带错误（非用户主动中止），或回合结束时还残留 running/pending 的工具调用（半截截断）。
+ *  running/pending 工具 = 任务没真正跑完（即便已有半截文本，工具还在排队/执行中，回合未结束）；
+ *  用户主动中止（MessageAbortedError）不自动续跑，交给界面上的手动重试。 */
 function isAbortedAssistant(m: MessageView): boolean {
   const err = (m.info as unknown as { error?: { name?: string } }).error
   if (err) return err.name !== 'MessageAbortedError'
-  // 已有正文产出 = 该轮有效完成；残留的 running/pending tool part 属工具未跑完，不是回合被截断
-  if (m.parts.some((x) => x.type === 'text' && (x.text ?? '').length > 0)) return false
   return m.parts.some((x) => x.type === 'tool' && (x.state?.status === 'running' || x.state?.status === 'pending'))
 }
 
@@ -203,8 +201,9 @@ export function ChatView(p: Props) {
   // 执行中每秒跳一次表（只当刷新信号用）：已用时按本轮真实开始时间算，见 busySince
   const [, tick] = useState(0)
   const [error, setError] = useState('')
-  /** 队列项记录发起时的会话：消费时回原会话执行，不跟当前视图走 */
-  const [queue, setQueue] = useState<{ sid: string; text: string }[]>([])
+  /** 每个会话独立的任务队列：切走保留、切回还在，只消费当前视图会话的队列 */
+  const [queues, setQueues] = useState<Record<string, string[]>>({})
+  const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
   const [qCollapsed, setQCollapsed] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
@@ -654,7 +653,7 @@ export function ChatView(p: Props) {
       })
     }
     inflight.current = null
-    // 队列里的消息保留，停止后队列消费 effect（busy 变 false）会自动发出队首任务；
+    // 队列里的消息保留，当前任务停止后队列消费 effect（本会话空闲）会自动发出队首任务；
     // 「停止」只对当前正在跑的任务生效，不打断用户排队的后续指令
   }
 
@@ -747,7 +746,6 @@ export function ChatView(p: Props) {
     shown.current.clear()
     setError('')  // 切任务/切项目：上一条失败反馈属于旧对话，不能跟过来
     setPreviews({})
-    setQueue([])
     setTodos([])
     setAsks([])
     if (!p.sessionId) {
@@ -901,7 +899,8 @@ export function ChatView(p: Props) {
         oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
           .then((list) => {
             const last = list[list.length - 1]
-            if (owned && last && last.info.role === 'assistant' && isAbortedAssistant(last)) scheduleRetry(sid, list)
+            // session.error 到达 = 任务已失败；只要本轮仍在处理中就自动续跑（continuationText 无内容时会自行取消）
+            if (owned) scheduleRetry(sid, list)
             if (!isCurrent) return
             setMsgs(hydrate(list, shown.current, texts.current))
             setError(humanizeError(pr.error?.message ?? '未知错误'))
@@ -946,18 +945,27 @@ export function ChatView(p: Props) {
   }
   useEffect(() => () => { if (ticker.current != null) clearInterval(ticker.current) }, [])
 
-  // 队列消费：本轮结束后自动发下一条；被"立即执行"插队的按下标优先
+  /** 从某会话队列移除第 i 条 */
+  function dropQueueItem(sid: string, i: number) {
+    setQueues((m) => ({ ...m, [sid]: (m[sid] ?? []).filter((_, k) => k !== i) }))
+  }
+
+  // 队列消费：当前会话本轮跑完自动发下一条；被"立即执行"插队的按下标优先。
+  // 每个会话的队列独立，只消费当前视图会话的；切回空闲且排了队的会话时自动续跑
   useEffect(() => {
-    if (busy || !queue.length) return
+    if (busy || !p.sessionId) return
+    const q = queues[p.sessionId]
+    if (!q?.length) return
     let i = 0
     if (hijack.current != null) {
-      i = Math.min(hijack.current, queue.length - 1)
+      i = Math.min(hijack.current, q.length - 1)
       hijack.current = null
     }
-    const item = queue[i]
-    setQueue((q) => q.filter((_, k) => k !== i))
-    void runPrompt(item.text, item.sid || undefined, busyDir.current[item.sid])
-  }, [busy, queue])
+    const sid = p.sessionId
+    const text = q[i]
+    dropQueueItem(sid, i)
+    void runPrompt(text, sid, busyDir.current[sid])
+  }, [busy, p.sessionId, queues])
 
   // 点新任务/点任务：光标自动落进输入框
   useEffect(() => {
@@ -1181,7 +1189,7 @@ export function ChatView(p: Props) {
         window.setTimeout(() => runPrompt(text, sid, busyDir.current[sid]), 900)
         return
       }
-      setQueue((q) => [...q, { sid: sidRef.current, text }])
+      setQueues((m) => ({ ...m, [sidRef.current]: [...(m[sidRef.current] ?? []), text] }))
       return
     }
     await runPrompt(text)
@@ -1275,9 +1283,8 @@ export function ChatView(p: Props) {
     } finally {
       inflight.current = null
       if (!transportLost) {
-        // 本轮所属会话置空闲（若 session.idle 已清过则幂等无副作用；仅当前仍停在本轮会话时清——
-        // 队列插队已在本会话开新轮时不能误清新轮）
-        if (sidRef.current === sid && busySetRef.current[sid]) markBusy(sid, false)
+        // 本轮结束置空闲（若 session.idle 已清过则幂等；用户切走会话后再回来也能清，消除 busy 残留）
+        if (busySetRef.current[sid]) markBusy(sid, false)
         // 已切走（新任务草稿/别的会话）：界面缓冲归切走时加载的新会话所有，绝不清理，避免盖掉正在流式的新任务
         if (sidRef.current !== sid) return
         toolRaw.current.clear()
@@ -1297,18 +1304,19 @@ export function ChatView(p: Props) {
       hijack.current = i
       oc.abort(sidRef.current, busyDir.current[sidRef.current]).catch(() => { /* 已结束 */ })
     } else {
-      const item = queue[i]
-      setQueue((q) => q.filter((_, k) => k !== i))
+      const sid = sidRef.current
+      const text = (queues[sid] ?? [])[i]
+      dropQueueItem(sid, i)
       // 队列里这条消息就是用户的新指令，优先于自动重试续跑
-      cancelRetry(item.sid)
-      void runPrompt(item.text, item.sid || undefined, busyDir.current[item.sid])
+      cancelRetry(sid)
+      void runPrompt(text, sid, busyDir.current[sid])
     }
   }
 
   function queueEdit(i: number) {
-    const item = queue[i]
-    setQueue((q) => q.filter((_, k) => k !== i))
-    setInput(item.text)
+    const sid = sidRef.current
+    setInput((queues[sid] ?? [])[i])
+    dropQueueItem(sid, i)
   }
 
   /** 应答内核提问：提交后内核继续本轮任务；提交期间轮询对账跳过该请求，防止卡片闪回 */
@@ -1436,7 +1444,7 @@ export function ChatView(p: Props) {
               )}
             </div>
           )}
-          {retryState?.pending && !busy && (
+          {retryState?.pending && (
             <div className="amsg retrystatus">
               <LoaderCircle size={13} className="spin" />
               <span>任务已中断，{RETRY_INTERVAL_MS / 1000} 秒后自动重试（第 {retryState.count}/{RETRY_MAX} 次）</span>
@@ -1445,7 +1453,7 @@ export function ChatView(p: Props) {
               </button>
             </div>
           )}
-          {retryState && !retryState.pending && !busy && (
+          {retryState && !retryState.pending && (
             <div className="amsg retryfail">
               <AlertCircle size={13} />
               <span>已自动重试 {RETRY_MAX} 次仍未完成，点右侧按钮让 AI 继续处理</span>
@@ -1465,19 +1473,19 @@ export function ChatView(p: Props) {
         </div>
       )}
 
-      {queue.length > 0 && (
+      {curQueue.length > 0 && (
         <div className="qbar">
           <div className="col">
             <button className="qhead" onClick={() => setQCollapsed((v) => !v)}>
               {qCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-              任务队列 · {queue.length} 条
+              任务队列 · {curQueue.length} 条
               <span className="q-sub">排队等当前任务完成</span>
             </button>
             {!qCollapsed &&
-              queue.map((t, i) => (
-                <div key={i} className="qitem" title={t.text}>
+              curQueue.map((t, i) => (
+                <div key={i} className="qitem" title={t}>
                   <span className="qi-no">{i + 1}</span>
-                  <span className="qi-text">{t.text}</span>
+                  <span className="qi-text">{t}</span>
                   <span className="qacts">
                     <button className="icon-btn" title="立即执行（中断当前任务）" onClick={() => queueSend(i)}>
                       <Send size={13} />
@@ -1485,7 +1493,7 @@ export function ChatView(p: Props) {
                     <button className="icon-btn" title="移回输入框编辑" onClick={() => queueEdit(i)}>
                       <Pencil size={13} />
                     </button>
-                    <button className="icon-btn danger" title="删除" onClick={() => setQueue((q) => q.filter((_, k) => k !== i))}>
+                    <button className="icon-btn danger" title="删除" onClick={() => dropQueueItem(sidRef.current, i)}>
                       <Trash2 size={13} />
                     </button>
                   </span>
@@ -2556,15 +2564,60 @@ function StepLine({
   )
 }
 
+type DiffLine = { key: string; kind: 'add' | 'del' | 'ctx'; marker: string; content: string }
+
+function renderDiffLines(text: string): DiffLine[] {
+  const lines: DiffLine[] = []
+  let hunkAdds = 0
+  let hunkDels = 0
+  let hunkSeen = false
+  text.split('\n').forEach((l, i) => {
+    const hunk = /^@@\s+(?:\d+,\d+\s+)?@@/.exec(l)
+    if (hunk) {
+      lines.push({ key: `hunk-${i}`, kind: 'ctx', marker: '', content: l })
+      return
+    }
+    const add = /^\+/.exec(l)
+    const del = /^-/.exec(l)
+    if (add) {
+      lines.push({ key: `add-${i}`, kind: 'add', marker: '+', content: l.slice(1) })
+      hunkSeen = true
+      hunkAdds += 1
+      return
+    }
+    if (del) {
+      lines.push({ key: `del-${i}`, kind: 'del', marker: '-', content: l.slice(1) })
+      hunkSeen = true
+      hunkDels += 1
+      return
+    }
+    if (hunkSeen && hunkAdds > 0 && hunkDels > 0) {
+      lines.push({ key: `ctx-${i}`, kind: 'ctx', marker: ' ', content: l.startsWith(' ') ? l.slice(1) : l })
+      return
+    }
+    lines.push({ key: `raw-${i}`, kind: 'ctx', marker: '', content: l })
+  })
+  return lines
+}
+
 /** 展开详情代码块：diff 着色 / highlight.js 语法高亮 / 纯文本 */
 function CodeBlock({ text, file, diff }: { text: string; file?: string; diff?: boolean }) {
   if (diff) {
+    const lines = renderDiffLines(text)
+    const hasColor = lines.some((l) => l.kind !== 'ctx')
+    if (!hasColor) {
+      return (
+        <pre className="step-code">
+          <code>{text}</code>
+        </pre>
+      )
+    }
     return (
-      <pre className="step-code">
-        {text.split('\n').map((l, i) => (
-          <span key={i} className={l.startsWith('+') ? 'd-add' : l.startsWith('-') ? 'd-del' : undefined}>
-            {l}
-            {'\n'}
+      <pre className={'step-code diff-view' + (file ? ' has-file' : '')}>
+        {lines.map((l) => (
+          <span key={l.key} className={'diff-line diff-' + l.kind}>
+            <span className="diff-marker">{l.marker || ' '}</span>
+            <span className="diff-content">{l.content || '\u00A0'}</span>
           </span>
         ))}
       </pre>

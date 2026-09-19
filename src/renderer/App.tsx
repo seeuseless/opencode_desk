@@ -331,7 +331,22 @@ export default function App() {
   }
 
   function refreshSessions() {
-    if (activeProject) loadProjectSessions(activeProject)
+    const proj = activeProject
+    if (!proj) return
+    // 任务完成后的刷新只补充新会话，不整表覆盖：内核偶发漏返回/排序延迟时，
+    // 不能把用户已在看的任务行清掉；真正删除会话仍走 loadProjectSessions 的权威同步。
+    oc.sessions(proj.path)
+      .then((raw) => {
+        const list = sortSessions(raw)
+        setSessionsMap((m) => {
+          const existing = m[proj.path] ?? []
+          const merged = [...existing]
+          for (const s of list) if (!merged.some((x) => x.id === s.id)) merged.push(s)
+          return { ...m, [proj.path]: sortSessions(merged) }
+        })
+        touchActive(proj, list)
+      })
+      .catch(() => {})
   }
 
   /** 一轮对话正常结束：把要点追加到项目当日记忆文件（<项目>/.qingniao/memory/YYYY-MM-DD.md），实现「自动记忆」；
