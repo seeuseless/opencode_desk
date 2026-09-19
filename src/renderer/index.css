@@ -428,6 +428,8 @@ input, textarea { font: inherit; }
 .md-video video { width: min(100%, 560px); max-height: 420px; border-radius: 10px; background: #000; display: block; }
 .md-video-bar { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
 .md-file-name { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
+/* 本地图片文件不存在时的占位（不退回远程地址） */
+.md-img-missing { display: inline-flex; align-items: center; gap: 6px; background: var(--bg3); color: var(--fg2); border-radius: 8px; padding: 8px 12px; margin: 6px 0; font-size: 12.5px; }
 .md-btn { display: inline-flex; align-items: center; gap: 4px; background: var(--bg2); border: 1px solid var(--bg3); color: var(--fg); border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer; }
 .md-btn:hover { background: var(--bg3); }
 .md-save-wrap { display: inline-flex; align-items: center; gap: 6px; }

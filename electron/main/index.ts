@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -114,6 +114,7 @@ ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) 
     } else {
       let p = src
       if (/^file:\/\//i.test(p)) p = fileURLToPath(p)
+      p = locateMediaFile(p)
       if (!existsSync(p)) return '文件不存在或已被移动'
       buf = readFileSync(p)
       if (!suggested) suggested = basename(p)
@@ -128,6 +129,34 @@ ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) 
   } catch (err) {
     return String((err as Error).message ?? err)
   }
+})
+
+// 聊天内嵌显示本地图片：渲染层（http 页面）加载不了 file://，由主进程读文件转 data URL
+// 只放行图片扩展名，其他一律返回空串
+const IMG_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.svg': 'image/svg+xml'
+}
+/** 模型转述生图结果时常把目录剥掉只剩裸文件名（"本地文件：xxx.png"）：无目录时到媒体目录兜底解析 */
+function locateMediaFile(p: string): string {
+  if (!p || /[\\/]/.test(p) || existsSync(p)) return p
+  const cand = join(qingniaoHome(), 'media', p)
+  return existsSync(cand) ? cand : p
+}
+ipcMain.handle('media:read', (_e, target: string) => {
+  let p = String(target ?? '').trim()
+  if (/^file:\/\//i.test(p)) p = fileURLToPath(p)
+  p = locateMediaFile(p)
+  const ext = p.split(/[?#]/)[0].toLowerCase().match(/\.[a-z]+$/)?.[0] ?? ''
+  const mime = IMG_MIME[ext]
+  if (!mime || !existsSync(p)) return ''
+  return `data:${mime};base64,${readFileSync(p).toString('base64')}`
 })
 
 // ---------- 移动端接入（平台中转） ----------

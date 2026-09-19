@@ -208,6 +208,8 @@ export function ChatView(p: Props) {
   const [qCollapsed, setQCollapsed] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
+  // 滚轮上滑后这段时间内屏蔽「重新吸底」，防程序化滚动事件把用户位置抢回去
+  const wheelUpMuteUntilRef = useRef(0)
 
   const dirRef = useRef<string | undefined>(p.project?.path)
   const sidRef = useRef(p.sessionId)
@@ -313,13 +315,15 @@ export function ChatView(p: Props) {
         if (pu) url = pu[1]
       }
     }
-    // 桌面控制没有 URL 字段：从 AI 的回复文本里抓最后一个网址（用户让它「打开某页」的场景）
+    // 桌面控制没有 URL 字段：从 AI 的回复文本里抓最后一个网址（用户让它「打开某页」的场景）。
+    // 图/视频等生成媒体的直链除外：对话里已内嵌展示，不该惊动面板浏览器
     if (!url) {
+      const mediaExtRe = /\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|avi)$/i
       for (const m of msgs) {
         if (m.info.role !== 'assistant') continue
         const text = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
-        const ms = text.match(/https?:\/\/[^\s)<>"'）】」。，；]+/g)
-        if (ms?.length) url = ms[ms.length - 1]
+        const ms = (text.match(/https?:\/\/[^\s)<>"'）】」。，；]+/g) ?? []).filter((u) => !mediaExtRe.test(u.split(/[?#]/)[0]))
+        if (ms.length) url = ms[ms.length - 1]
       }
     }
     return { url, active: url !== '' }
@@ -992,6 +996,13 @@ export function ChatView(p: Props) {
   function onMsgsScroll() {
     const el = scrollRef.current
     if (!el) return
+    // 滚轮上滑后的短窗口内：流式吸底的程序化 scrollTop 也会触发 scroll 事件，
+    // 若照常按「贴底」重新接管，用户的上滑会被拉回底部（回弹）。窗口内一律保持脱离吸底
+    if (performance.now() < wheelUpMuteUntilRef.current) {
+      atBottomRef.current = false
+      setAtBottom(false)
+      return
+    }
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80
     atBottomRef.current = near
     setAtBottom(near)
@@ -1353,9 +1364,10 @@ export function ChatView(p: Props) {
         ref={scrollRef}
         onScroll={onMsgsScroll}
         onWheel={(e) => {
-          // 上滚瞬间同步脱离吸底：流式期间 24ms 一帧的自动滚动会赶在 scroll 事件前把位置拉回底部，
-          // 只有拖滚动条（持续触发 onScroll）能赢，滚轮就这么被"吸"回去了
+          // 上滚瞬间同步脱离吸底：流式期间 24ms 一帧的自动滚动会赶在 scroll 事件前把位置拉回底部；
+          // 并开一个静音窗口，让随后程序化 scrollTop 触发的 scroll 事件也不得重新接管（见 onMsgsScroll）
           if (e.deltaY < 0) {
+            wheelUpMuteUntilRef.current = performance.now() + 300
             atBottomRef.current = false
             setAtBottom(false)
           }
@@ -2262,6 +2274,12 @@ function extractToolContent(raw: string): string {
   }
 }
 
+/** 模型把工具调用标记吐进正文（deepseek 等 provider 的无效调用）：识别这类文本，整段收进折叠行展示 */
+function isInvalidCallText(text: string): boolean {
+  const head = text.slice(0, 400)
+  return /<\s*tool_call\b/i.test(head) || /<\s*function\s*=/i.test(head) || /<\s*(?:antml:)?parameter\s*=/i.test(head) || /<\|[\s\S]*call[\s\S]*begin\|>/i.test(head)
+}
+
 /** 文件扩展名 → highlight.js 语言 */
 function extLang(file: string): string | undefined {
   const ext = file.split('.').pop()?.toLowerCase() ?? ''
@@ -2320,6 +2338,8 @@ function escapeHtml(s: string): string {
 function toolTarget(part: Part, projPath?: string): string {
   // 待办清单工具的输出是 JSON 数组（已渲染成任务卡），其标题「N todos」无信息量，不展示在工具行
   if ((part.tool ?? '').toLowerCase().includes('todo')) return ''
+  // 无效调用的内核标题是英文「Invalid Tool」，折叠行只留中文名+错误图标
+  if ((part.tool ?? '').toLowerCase() === 'invalid') return ''
   const inp = part.state?.input ?? {}
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
@@ -2347,6 +2367,18 @@ function relTarget(s: string, projPath?: string): string {
 function PartView({ part, projectPath, preview, live, diffs }: { part: Part; projectPath?: string; preview?: string; live?: boolean; diffs?: FileDiff[] }) {
   // 正文过长（代码大段粘贴/长回答）自动收起，点「展开全文」看全
   if (part.type === 'text' && part.text) {
+    // 模型把工具调用吐成了正文文本（无效调用）：整段收进「无效调用」折叠行，不混进对话正文
+    if (isInvalidCallText(part.text)) {
+      return (
+        <StepLine
+          icon={<AlertCircle size={13} />}
+          name="无效调用"
+          target="模型把工具调用写成了正文，已收起，不执行"
+          status="error"
+          body={<CodeBlock text={part.text} />}
+        />
+      )
+    }
     return (
       <Collapsible maxPx={520} forceText={part.text}>
         <Markdown text={part.text} />
@@ -2379,7 +2411,14 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     // 写入类工具：内核算好的整轮差量优先（带 +/- 行），工具自身输出仅作回退
     const fd = isFileTool(tool) ? (matchedDiff(metaDiffs(part), part) ?? matchedDiff(diffs, part)) : undefined
     let body: ReactNode
-    if (rawOut && tool === 'read') {
+    if (tool === 'invalid') {
+      // 无效调用：内核把整坨原始入参塞在 output 里（可达几十 KB），展开只给中文说明+截断原文
+      const inner = str(toolIn?.tool)
+      const zh = TOOL_META[inner.toLowerCase()]?.name ?? inner
+      const err = str(toolIn?.error)
+      const cut = err.length > 2000 ? err.slice(0, 2000) + '\n…' : err
+      body = <CodeBlock text={inner ? `「${zh}」工具的调用参数不完整，已让模型重写参数重试。\n${cut}` : cut} />
+    } else if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
     } else if (isFileTool(tool)) {
