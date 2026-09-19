@@ -7,6 +7,12 @@
 
 ![screenshot](screenshot/1.png)
 
+## 界面速览
+
+| 生图：对话内直接嵌出生成结果 | 主动提问：动手前先弹卡片确认需求 | 生视频：轮询期间逐条播报进度 |
+| --- | --- | --- |
+| ![生图](screenshot/2.png) | ![提问](screenshot/3.png) | ![生视频](screenshot/4.png) |
+
 取意神话中替人出行、把事办成带回消息的信使鸟，对标腾讯 WorkBuddy 形态的桌面 AI 工作助手，全开源技术栈：
 
 - **Agent 内核：[OpenCode](https://github.com/sst/opencode)**
