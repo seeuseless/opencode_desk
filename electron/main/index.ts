@@ -2,7 +2,8 @@ import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { join, resolve } from 'node:path'
+import { join, resolve, basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
@@ -87,6 +88,46 @@ ipcMain.handle('folder:open', async (_e, target: string) => {
   if (!p) return '路径为空'
   if (!existsSync(p)) return '文件夹不存在或已被移动'
   return shell.openPath(p)
+})
+
+// 聊天里图片/视频的「保存」：远程地址先下载到内存，本地路径直接读文件，再弹系统另存为对话框
+// 约定同 folder:open：返回空串表示成功（用户取消也算成功），失败返回原因
+ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) => {
+  const src = String(req?.source ?? '').trim()
+  if (!src) return '地址为空'
+  try {
+    let buf: Buffer
+    let suggested = String(req?.name ?? '').trim()
+    if (/^data:/i.test(src)) {
+      const m = /^data:([^;,]*)?(;base64)?,([\s\S]*)$/.exec(src)
+      if (!m) return 'data 地址无法解析'
+      const body = decodeURIComponent(m[3] ?? '')
+      buf = m[2] ? Buffer.from(body, 'base64') : Buffer.from(body, 'utf8')
+      if (!suggested) suggested = 'image.' + ((m[1] ?? '').includes('/') ? (m[1] as string).split('/')[1] : 'png')
+    } else if (/^https?:\/\//i.test(src)) {
+      const r = await fetch(src)
+      if (!r.ok) return `下载失败 HTTP ${r.status}`
+      buf = Buffer.from(await r.arrayBuffer())
+      if (!suggested) {
+        suggested = decodeURIComponent(new URL(src).pathname.split('/').pop() ?? '') || 'media'
+      }
+    } else {
+      let p = src
+      if (/^file:\/\//i.test(p)) p = fileURLToPath(p)
+      if (!existsSync(p)) return '文件不存在或已被移动'
+      buf = readFileSync(p)
+      if (!suggested) suggested = basename(p)
+    }
+    const win = BrowserWindow.getFocusedWindow() ?? mainWin
+    const r = win
+      ? await dialog.showSaveDialog(win, { defaultPath: suggested })
+      : await dialog.showSaveDialog({ defaultPath: suggested })
+    if (r.canceled || !r.filePath) return ''
+    writeFileSync(r.filePath, buf)
+    return ''
+  } catch (err) {
+    return String((err as Error).message ?? err)
+  }
 })
 
 // ---------- 移动端接入（平台中转） ----------

@@ -57,6 +57,8 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('openExternal', url),
   /** 在系统文件管理器里打开某个文件夹（左栏项目右键菜单「打开文件夹」）；返回空串表示成功 */
   openFolder: (path: string): Promise<string> => ipcRenderer.invoke('folder:open', path),
+  /** 保存聊天里的图片/视频：远程地址下载、本地路径复制，弹系统另存为对话框；返回空串表示成功 */
+  saveMedia: (source: string, name?: string): Promise<string> => ipcRenderer.invoke('media:save', { source, name }),
   /** 移动端接入状态：开关、二维码（{平台域名}/ide/device/{token}）、通道是否在跑（左栏手机面板用） */
   mobileStatus: (): Promise<DeskStatus> => ipcRenderer.invoke('mobile:get'),
   /** 开/关「允许移动端连接此设备」：开则手机扫码后能操作这台电脑 */
