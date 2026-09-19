@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join, resolve } from 'node:path'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, saveSettings, setDesktopMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -296,6 +296,13 @@ function desktopMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'desktop-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'desktop-mcp.mjs')
+}
+
+/** 媒体生成 MCP（生图/生视频工具）脚本位置（随安装包分发） */
+function mediaMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'media-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'media-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -602,6 +609,7 @@ app.whenReady().then(async () => {
   syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前
   setPanelMcp({ path: panelMcpPath(), port: panelPort })
   setDesktopMcp({ path: desktopMcpPath() })
+  setMediaMcp({ path: mediaMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace

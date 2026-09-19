@@ -680,7 +680,7 @@ export function ChatView(p: Props) {
    */
   const chatFallbackRef = useRef<(sid: string, errMsg: string) => boolean>(() => false)
   chatFallbackRef.current = (sid, errMsg) => {
-    if (!/images\/generations|是\s*image\s*模型|image (?:generation )?model|model[_ ]not[_ ]found|does not exist|unknown model|unsupported model/i.test(errMsg)) return false
+    if (!/images\/generations|videos\/|是\s*(?:image|video)\s*模型|(?:image|video) (?:generation )?model|model[_ ]not[_ ]found|does not exist|unknown model|unsupported model/i.test(errMsg)) return false
     const key = p.model
     const i = key.indexOf('/')
     if (i <= 0) return false
@@ -691,8 +691,8 @@ export function ChatView(p: Props) {
     const cand = prov.models.find(
       (m) =>
         m.id !== key.slice(i + 1) &&
-        // 名字带 image 的按生图模型处理（agnes-image-* / flux / sd 等），别再撞一次拒绝
-        !/(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i.test(m.id) &&
+        // 名字带 image/video 的按生成模型处理（agnes-image-* / flux / sd 等），它们不收对话，别再撞一次拒绝
+        !/(^|[-_.])(image|img|video|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i.test(m.id) &&
         !tried.includes(m.id) &&
         !(p.computerUse && !(m.input ?? MODEL_DEFAULTS.input).includes('image'))
     )

@@ -252,6 +252,16 @@ let desktopMcp: { path: string } | undefined
 export function setDesktopMcp(v: { path: string }): void {
   desktopMcp = v
 }
+/** 媒体生成 MCP（生图/生视频工具）脚本路径 */
+let mediaMcp: { path: string } | undefined
+export function setMediaMcp(v: { path: string }): void {
+  mediaMcp = v
+}
+
+/** 纯生图模型的命名特征：这类模型只认 /images/generations，发 chat 必被拒，由生图工具代劳 */
+const IMAGE_MODEL_RE = /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i
+/** 生视频模型同理，只认异步 /videos 任务接口 */
+const VIDEO_MODEL_RE = /(^|[-_.])(video|sora|kling|veo|wan)/i
 
 /**
  * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器与桌面控制）。
@@ -303,6 +313,39 @@ export function writeOpencodeConfig(s: Settings): void {
     // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
     if (desktopMcp) {
       mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
+    }
+  }
+  // 生图/生视频：只要任一可用提供商带了生成类模型就挂上工具，对话模型靠它们出图出片
+  if (mediaMcp) {
+    const pick = (re: RegExp) =>
+      usableProviders(s).flatMap((p) =>
+        p.apiKey.trim() && p.baseURL.trim()
+          ? p.models
+              .filter((m) => re.test(m.id))
+              .map((m) => ({
+                id: `${p.id}/${m.id}`,
+                label: m.name || m.id,
+                baseURL: p.baseURL.trim().replace(/\/+$/, ''),
+                apiKey: p.apiKey.trim(),
+                model: m.id
+              }))
+          : []
+      )
+    const imageTargets = pick(IMAGE_MODEL_RE)
+    const videoTargets = pick(VIDEO_MODEL_RE)
+    if (imageTargets.length || videoTargets.length) {
+      mcp['media'] = {
+        type: 'local',
+        command: ['node', mediaMcp.path],
+        environment: {
+          QN_IMAGE_TARGETS: JSON.stringify(imageTargets),
+          QN_VIDEO_TARGETS: JSON.stringify(videoTargets),
+          QN_MEDIA_DIR: join(storeDir(), 'media')
+        },
+        // 生图一次要几十秒，默认 5s 的 MCP 超时会把工具调用掐死
+        timeout: 300000,
+        enabled: true
+      }
     }
   }
   for (const m of s.mcps) {
