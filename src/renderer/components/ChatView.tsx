@@ -751,9 +751,22 @@ export function ChatView(p: Props) {
       setInput('')
       return
     }
+    const sid = p.sessionId
+    // 切进的会话可能有早已发出的待答问题（asked 事件不会再补发），只能拿内核待答列表对账，否则永远没卡片
+    let askAlive = true
+    oc.questions(p.project?.path)
+      .then((list) => {
+        if (!askAlive) return
+        const mine = (Array.isArray(list) ? list : []).filter((x) => x.sessionID === sid && !replyingRef.current.has(x.id))
+        if (mine.length) setAsks(mine)
+      })
+      .catch(() => {})
     oc.messages(p.sessionId, p.project?.path)
       .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
       .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      askAlive = false
+    }
   }, [p.sessionId, p.project?.path])
 
   // 订阅内核事件：token 级增量 + part 快照 + 会话空闲
@@ -795,10 +808,11 @@ export function ChatView(p: Props) {
         const pr = e.properties as { sessionID?: string; todos?: TodoItem[] }
         if (pr.sessionID !== sidRef.current) return
         setTodos(pr.todos ?? [])
-      } else if (e.type === 'question.v2.asked') {
+      } else if (e.type === 'question.v2.asked' || e.type === 'question.asked') {
+        // 实测事件名有 v1/v2 两套（内核二进制里都存在），认全部，漏一个名字就再也不弹窗
         const q = e.properties as unknown as QuestionAsk
         if (q && q.id && q.sessionID === sidRef.current) setAsks((prev) => [...prev.filter((x) => x.id !== q.id), q])
-      } else if (e.type === 'question.v2.replied' || e.type === 'question.v2.rejected') {
+      } else if (['question.v2.replied', 'question.v2.rejected', 'question.replied', 'question.rejected'].includes(e.type)) {
         const pr = e.properties as { requestID?: string }
         setAsks((prev) => prev.filter((x) => x.id !== pr.requestID))
       } else if (e.type === 'session.idle') {
@@ -1008,9 +1022,10 @@ export function ChatView(p: Props) {
     let alive = true
     const sync = async () => {
       if (!alive) return
-      // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准
+      // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准。
+      // /question 端点按项目实例隔离，必须带上该会话的目录，否则永远返回空
       try {
-        const list = await oc.questions()
+        const list = await oc.questions(busyDir.current[sid] ?? dirRef.current)
         const mine = (Array.isArray(list) ? list : []).filter((x) => x.sessionID === sid && !replyingRef.current.has(x.id))
         const cur = asksRef.current
         if (mine.length !== cur.length || mine.some((x) => !cur.some((k) => k.id === x.id))) setAsks(mine)

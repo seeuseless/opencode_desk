@@ -204,8 +204,9 @@ export const oc = {
     call<unknown>(`/session/${id}/revert${dirQ(directory)}`, { method: 'POST', body: { messageID } }),
   deleteSession: (id: string, directory?: string) =>
     call(`/session/${id}${dirQ(directory)}`, { method: 'DELETE' }),
-  /** 内核全部待答问题（question 工具阻塞等待用户应答；事件可能漏收，轮询对账用） */
-  questions: () => call<QuestionAsk[]>('/question'),
+  /** 内核全部待答问题（question 工具阻塞等待用户应答；事件可能漏收，轮询对账用）。
+   *  实测该端点按实例（directory）隔离：不带目录参数永远返回空数组，必须随项目传。 */
+  questions: (directory?: string) => call<QuestionAsk[]>(`/question${dirQ(directory)}`),
   /** 会话文件差量：messageID 必填且必须是用户消息 id（不传或传助手消息 id 一律返回空数组） */
   diff: (id: string, directory: string | undefined, messageID: string) => {
     const q = dirQ(directory)
