@@ -128,6 +128,17 @@ function defaultModelCfg(): Omit<ModelCfg, 'id'> {
   return { context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
 }
 
+/** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
+const PROVIDER_PRESETS: { id: string; name: string; baseURL: string; models: string[] }[] = [
+  {
+    id: 'agnes',
+    name: 'agnes',
+    baseURL: 'https://api.agnes-ai.cn/v1',
+    models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash']
+  },
+  { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] }
+]
+
 export function SettingsView(p: Props) {
   const providers = p.settings.providers
   const [draft, setDraft] = useState<Draft | null>(null)
@@ -209,6 +220,25 @@ export function SettingsView(p: Props) {
   function openNew() {
     setFormMsg(null)
     setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })
+  }
+
+  /** 应用提供商模板：本机已有同 ID 的配置原样带出（模型/参数/Base URL），但绝不带入 API Key */
+  function applyPreset(pid: string) {
+    if (!draft) return
+    const t = PROVIDER_PRESETS.find((x) => x.id === pid)
+    if (!t) return
+    const cur = providers.find((x) => x.id === t.id)
+    setDraft({
+      isNew: true,
+      index: -1,
+      name: cur?.name ?? t.name,
+      id: t.id,
+      baseURL: cur?.baseURL ?? t.baseURL,
+      apiKey: '',
+      modelsText: (cur?.models.length ? cur.models.map((m) => m.id) : t.models).join('\n'),
+      cfgs: cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
+    })
+    setFormMsg({ text: '已填充模板，请填写 API Key', bad: false })
   }
 
   function openEdit(i: number) {
@@ -735,6 +765,23 @@ export function SettingsView(p: Props) {
 
       {draft && (
         <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} wide onClose={() => setDraft(null)}>
+          {draft.isNew && (
+            <div className="preset-row">
+              <span className="preset-lab">快速填充</span>
+              {PROVIDER_PRESETS.map((t) => (
+                <button type="button" key={t.id} className={'preset-chip' + (draft.id === t.id ? ' on' : '')} onClick={() => applyPreset(t.id)}>
+                  {t.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="preset-chip"
+                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })}
+              >
+                手动填写
+              </button>
+            </div>
+          )}
           <label>
             名称
             <input

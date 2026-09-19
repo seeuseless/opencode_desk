@@ -56,7 +56,8 @@ const TOOLS = [
     name: 'create_video',
     description:
       '创建文字生成视频的任务（异步，出片通常要几分钟）。用户要求「生视频 / 做个视频 / 让这张图动起来」时调用本工具。' +
-      '本工具只返回 video_id，不会等待出片——拿到 video_id 后先告知用户"视频生成中"，再用 check_video 轮询（每次间隔 15-30 秒），' +
+      '本工具只返回 video_id，不会等待出片——拿到 video_id 后告知用户"视频生成中"，随后反复调用 check_video 轮询：' +
+      '每次查询内部已静默等约 12 秒，返回"还在生成中"就立即再查即可，两次之间用一句话向用户播报进度（让用户看到事情在推进，不会手误点停止）。' +
       '完成或失败都要把结果原样转达。同一 video_id 不要重复 create。',
     inputSchema: {
       type: 'object',
@@ -80,7 +81,7 @@ const TOOLS = [
     name: 'check_video',
     description:
       '查询 create_video 任务的进度。返回 生成中 / 已完成（含视频 URL 与本地文件路径）/ 失败（含原因）。' +
-      '生成中时请等 15-30 秒再调一次，直到完成或失败。',
+      '每次调用内部已静默等待约 12 秒；返回"还在生成中"时先给用户播报一句进度，然后立即再调本工具，直到完成或失败。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -229,7 +230,7 @@ async function createVideo(args) {
   if (!r.ok) return `创建视频任务失败（${t.id}，HTTP ${r.status}）：${r.j?.error?.message ?? r.j?.detail ?? r.j?.message ?? r.text.slice(0, 300)}`
   const videoId = r.j?.video_id ?? r.j?.id ?? r.j?.data?.video_id ?? r.j?.data?.id ?? r.j?.task_id
   if (!videoId) return '创建视频任务返回异常：响应里没有 video_id。原始返回：' + r.text.slice(0, 300)
-  return `视频任务已创建（模型 ${t.id}）：video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，然后等 15-30 秒调一次 check_video（video_id=${videoId}），直到完成或失败。`
+  return `视频任务已创建（模型 ${t.id}）：video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，然后先调 check_video（video_id=${videoId}）轮询，每次返回"还在生成中"就播报名进度并立即再查，直到完成或失败。`
 }
 
 /** 在任意 JSON 里找视频直链（mp4/webm/mov），字段名以实际返回为准 */
@@ -259,9 +260,10 @@ async function checkVideo(args) {
   const t = pickTarget(VIDEO_TARGETS, args.model)
   if (!t) return '找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、')
 
-  // 单次查询最多内部重试 ~50 秒（10 次 × 5s），既省模型往返又不至于卡死工具调用
+  // 单次查询内部最多等 ~12 秒（4 次 × 3s）就返回"还在生成中"——短轮询让模型能在两次调用之间
+  // 给用户播报进度，挂 50 秒没反馈反而诱导用户点停止把回合打断
   let last = null
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 4; i++) {
     const r = await apiFetch(
       t,
       originOf(t.baseURL) + '/agnesapi?video_id=' + encodeURIComponent(videoId) + '&model_name=' + encodeURIComponent(t.model),
@@ -281,9 +283,9 @@ async function checkVideo(args) {
       }
       return parts.join('\n')
     }
-    await new Promise((ok) => setTimeout(ok, 5000))
+    await new Promise((ok) => setTimeout(ok, 3000))
   }
-  return `还在生成中（video_id=${videoId}，status=${last?.status ?? last?.state ?? '未知'}）。请再等 15-30 秒后重新调用 check_video。`
+  return `还在生成中（video_id=${videoId}，status=${last?.status ?? last?.state ?? '未知'}）。这很正常，出片通常要几分钟：请先用一句话向用户播报进度（如"还在渲染中，请稍等"），再直接调用一次 check_video（video_id=${videoId}）继续查，不要停。`
 }
 
 createInterface({ input: process.stdin }).on('line', async (line) => {
