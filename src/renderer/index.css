@@ -317,17 +317,15 @@ input, textarea { font: inherit; }
 /* 空对话引导：标题用主文字色突出，说明行沿用 .empty 的弱化色 */
 .empty-title { color: var(--fg); font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 
-/* 错误提示条：不用底色块，靠左侧竖线 + 图标区分（正文区保持纯净） */
-.errbar {
+/* 对话流内的失败反馈（AI 消息位置的红边气泡）：拦截、回合报错与事件丢失兜底共用 */
+.msgerr {
   display: flex; align-items: flex-start; gap: 8px;
-  background: transparent; color: var(--err);
-  padding: 2px 0 2px 10px; margin-bottom: 12px;
+  color: var(--err); padding: 2px 0 2px 10px; margin: 4px 0;
   border-left: 2px solid var(--err);
-  font-size: 13px; line-height: 1.6;
-  word-break: break-word;
+  font-size: 13px; line-height: 1.6; word-break: break-word;
 }
-.errbar svg { flex-shrink: 0; margin-top: 3px; }
-.errbar span { flex: 1; min-width: 0; }
+.msgerr svg { flex-shrink: 0; margin-top: 3px; }
+.msgerr span { flex: 1; min-width: 0; }
 
 .umsg { display: flex; justify-content: flex-end; margin: 10px 0; position: relative; }
 /* 用户气泡：气泡 + 折叠按钮纵向排列，按钮与气泡同侧对齐 */

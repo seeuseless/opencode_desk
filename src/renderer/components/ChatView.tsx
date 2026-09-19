@@ -7,7 +7,7 @@ import {
   Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, PLATFORM_PROVIDER_ID, modelSupportsImage, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import { load, save } from '../store'
 import type { ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -183,9 +183,16 @@ function humanizeError(raw: string): string {
   if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return '请求过于频繁，已被限流，请稍候片刻再试。'
   if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return '请求的模型在该端点不存在或不可用，请更换模型。'
   // 图生图/文生图模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-image-* 提示走 /v1/images/generations）
-  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return '该模型是图像生成模型，不支持对话，无法作为工作模型。请到 设置 → 模型 换用对话模型（桌面控制需选支持图片输入的视觉对话模型）。'
+  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return '该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。'
   if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return '无法连接模型端点，请检查 Base URL 与网络。'
   return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
+}
+
+/** 助手消息自带的失败原因：session.error 事件偶尔漏推，这是「这轮为什么空了」的唯一兜底展示 */
+function msgErrorText(m: MessageView): string {
+  const e = (m.info as unknown as { error?: { name?: string; data?: { message?: string }; message?: string } }).error
+  if (!e || e.name === 'MessageAbortedError') return ''
+  return humanizeError(e.data?.message ?? e.message ?? e.name ?? '')
 }
 
 export function ChatView(p: Props) {
@@ -664,6 +671,39 @@ export function ChatView(p: Props) {
       }))
     }))
 
+  /** 自动换模型链路里已试过的模型（按会话记账）：新发送重置，避免 A↔B 来回弹跳 */
+  const fallbackTried = useRef<Record<string, string[]>>({})
+  /**
+   * 「拒绝对话」报错的自救：生图模型当对话用、模型 ID 写错等，端点直接拒绝——
+   * 与其把错误丢回给用户，不如静默换同提供商里能对话的模型重发「继续」。
+   * 经 ref 暴露给挂载期闭包的事件处理器，保证读到的是当次渲染的设置与模型。
+   */
+  const chatFallbackRef = useRef<(sid: string, errMsg: string) => boolean>(() => false)
+  chatFallbackRef.current = (sid, errMsg) => {
+    if (!/images\/generations|是\s*image\s*模型|image (?:generation )?model|model[_ ]not[_ ]found|does not exist|unknown model|unsupported model/i.test(errMsg)) return false
+    const key = p.model
+    const i = key.indexOf('/')
+    if (i <= 0) return false
+    const pid = key.slice(0, i)
+    const prov = p.settings.find((x) => x.enabled && x.id === pid)
+    if (!prov) return false
+    const tried = (fallbackTried.current[sid] ??= [])
+    const cand = prov.models.find(
+      (m) =>
+        m.id !== key.slice(i + 1) &&
+        // 名字带 image 的按生图模型处理（agnes-image-* / flux / sd 等），别再撞一次拒绝
+        !/(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i.test(m.id) &&
+        !tried.includes(m.id) &&
+        !(p.computerUse && !(m.input ?? MODEL_DEFAULTS.input).includes('image'))
+    )
+    if (!cand) return false
+    tried.push(cand.id)
+    p.onModelChange(`${pid}/${cand.id}`)
+    cancelRetry(sid)
+    void runPrompt(RETRY_CONTINUE, sid, busyDir.current[sid] ?? p.project?.path, { providerID: pid, modelID: cand.id })
+    return true
+  }
+
   /**
    * 正在后台刷新计价的分组 id。
    *
@@ -701,6 +741,7 @@ export function ChatView(p: Props) {
     texts.current.clear()
     toolRaw.current.clear()
     shown.current.clear()
+    setError('')  // 切任务/切项目：上一条失败反馈属于旧对话，不能跟过来
     setPreviews({})
     setQueue([])
     setTodos([])
@@ -836,6 +877,9 @@ export function ChatView(p: Props) {
         const owned = !!busySetRef.current[sid]
         if (owned) markBusy(sid, false)
         const isCurrent = sid === sidRef.current
+        // 端点拒绝对话（生图模型/模型 ID 不存在）：先静默换同组可对话的模型续跑，换不动才把错误露给用户。
+        // 仅限当前会话——后台会话用的可能不是 p.model，拿这次的模型组去换会换错。
+        if (owned && isCurrent && chatFallbackRef.current(sid, pr.error?.message ?? '')) return
         oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
           .then((list) => {
             const last = list[list.length - 1]
@@ -1101,6 +1145,8 @@ export function ChatView(p: Props) {
     histPos.current = hist.current.length
     // 用户自己发新消息 = 不用自动重试来续跑了
     if (p.sessionId) cancelRetry(p.sessionId)
+    // 新对话轮重新计数，允许再次自动换模型；否则上一轮试过的模型会永久挡路
+    if (p.sessionId) delete fallbackTried.current[p.sessionId]
     if (busy) {
       // 终端长跑卡住本轮：发送新消息 = 用户主动接管（中止当前轮后立即执行，不进队列）
       if (terminalBlocked && sidRef.current) {
@@ -1115,13 +1161,9 @@ export function ChatView(p: Props) {
     await runPrompt(text)
   }
 
-  async function runPrompt(text: string, sidOverride?: string, dirOverride?: string) {
-    // 桌面控制是「截图→操作→再截图」的闭环，模型不收图片就只能盲打，成功率极低：
-    // 与其让它降级硬撑，不如当场拦下并指路换模型（草稿场景也走这里，不会先建半截会话）
-    if (p.computerUse && !modelSupportsImage(p.settings, p.model)) {
-      setError('桌面控制需要支持图片输入的模型（AI 靠读屏截图决定下一步操作），当前模型收不到图片。请在下方模型选择器换用视觉模型，或到 设置 → MCP 关闭「桌面控制」。')
-      return
-    }
+  async function runPrompt(text: string, sidOverride?: string, dirOverride?: string, modelOverride?: ModelSel) {
+    // 新执行一律先清上一条错误：否则换话题/换模型续跑时，旧错误气泡会赖在对话尾部
+    setError('')
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
@@ -1192,7 +1234,7 @@ export function ChatView(p: Props) {
     setMsgs((prev) => [...prev, optimistic])
     let transportLost = false
     try {
-      await oc.prompt(sid, dir, text, parseModel(p.model))
+      await oc.prompt(sid, dir, text, modelOverride ?? parseModel(p.model))
     } catch (e) {
       const status = (e as Error & { status?: number }).status
       // 502/503 是主进程代抛的传输层故障（内核还在跑），不代表任务结束：
@@ -1305,14 +1347,6 @@ export function ChatView(p: Props) {
         }}
       >
         <div className="col">
-          {error && (
-            <div className="errbar">
-              <AlertCircle size={14} /> <span>{error}</span>
-              <button className="icon-btn" onClick={() => setError('')}>
-                <X size={14} />
-              </button>
-            </div>
-          )}
           {visibleMsgCount === 0 && !busy && (
             <div className="empty">
               <div className="empty-title">新对话</div>
@@ -1336,9 +1370,25 @@ export function ChatView(p: Props) {
                 {m.parts.map((part) => (
                   <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
                 ))}
+                {!busy && m.info.id === lastAid && msgErrorText(m) && (
+                  <div className="msgerr">
+                    <AlertCircle size={13} /> <span>{msgErrorText(m)}</span>
+                  </div>
+                )}
               </div>
             )
           })}
+          {/* 失败反馈走对话流：作为一条 AI 消息落在消息末尾，而非顶部弹条 */}
+          {error && (
+            <div className="amsg">
+              <div className="msgerr">
+                <AlertCircle size={13} /> <span>{error}</span>
+                <button className="icon-btn" title="关闭" onClick={() => setError('')}>
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+          )}
           {asks.length > 0 && (
             <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
           )}
