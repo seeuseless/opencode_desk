@@ -4,14 +4,15 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Folder, Globe, HelpCircle, ListChecks, LoaderCircle, MessageCircle, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, resolveThinkingKind, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
 import { load, save } from '../store'
-import type { ProviderCfg } from '../../../electron/main/types'
+import type { Modality, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { ProjectPicker } from './ProjectPicker'
+import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
 import type { Project } from './Sidebar'
@@ -57,7 +58,7 @@ function parseModel(key: string): ModelSel | undefined {
 
 /** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文）：AI 可见、界面不渲染 */
 function isCtxOnly(txt: string): boolean {
-  return txt.startsWith(MEMORY_PREFIX) || txt.startsWith(BROWSER_CTX_PREFIX)
+  return txt.startsWith(MEMORY_PREFIX) || txt.startsWith(BROWSER_CTX_PREFIX) || txt.startsWith(ATTACH_CTX_PREFIX)
 }
 
 /** 浏览器收藏条目：URL 去重；title 取页面标题，拿不到时用域名兜底 */
@@ -196,11 +197,44 @@ function msgErrorText(m: MessageView): string {
 export function ChatView(p: Props) {
   const [msgs, setMsgs] = useState<MessageView[]>([])
   const [input, setInput] = useState('')
+  /** 待发送附件（回形针选的图片/视频）：随下一条消息一起发；处理中禁止上传与发送附件 */
+  const [atts, setAtts] = useState<Attachment[]>([])
+  /** 内核模型能力表：`提供商/模型` → 是否支持思考（models.dev 数据，内核就绪后拉一次）。
+   *  思考选择器据此决定档位形态，用户不必逐个模型去查它支不支持思考。 */
+  const [caps, setCaps] = useState<Record<string, boolean>>({})
+  /** 思考档位按模型记忆（跟随所选模型）：value = thinkMap[当前模型] ?? 默认；切模型读各自的记忆。
+   *  档位名按模型「思考方式」校验：effort=低/中/高，toggle=on，off=不传（无效存档回落默认）。
+   *  thinkRef 每次渲染同步当前模型的有效档位，供异步重发/续跑读取最新值。 */
+  const [thinkMap, setThinkMap] = useState<Record<string, string>>(() => load('qingniao.thinkMap', {}))
+  // 思考档位形态一律按模型自身能力定（内核 capabilities.reasoning，查不到再按模型名猜），无需用户配置
+  const thinkKind = resolveThinkingKind(p.model, caps)
+  const thinkVal = (() => {
+    const stored = thinkMap[p.model] ?? ''
+    if (!stored) return ''
+    const valid =
+      thinkKind === 'toggle'
+        ? stored === 'on'
+        : thinkKind === 'off'
+          ? false
+          : stored === 'low' || stored === 'medium' || stored === 'high'
+    return valid ? stored : ''
+  })()
+  const thinkRef = useRef(thinkVal)
+  thinkRef.current = thinkVal
+  function setThinkSel(v: string) {
+    setThinkMap((prev) => {
+      const next = { ...prev, [p.model]: v }
+      save('qingniao.thinkMap', next)
+      return next
+    })
+  }
   /** 处理中的会话集合：可能多任务并行（A 在跑，切去 B 又发一轮），每个会话独立记账 */
   const [busySet, setBusySet] = useState<Record<string, boolean>>({})
   // 执行中每秒跳一次表（只当刷新信号用）：已用时按本轮真实开始时间算，见 busySince
   const [, tick] = useState(0)
   const [error, setError] = useState('')
+  /** 中性提示（非失败）：如「已切到能看图的模型」，同样落在对话流末尾，可手动关掉 */
+  const [notice, setNotice] = useState('')
   /** 每个会话独立的任务队列：切走保留、切回还在，只消费当前视图会话的队列 */
   const [queues, setQueues] = useState<Record<string, string[]>>({})
   const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
@@ -219,8 +253,8 @@ export function ChatView(p: Props) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   // 本轮发送前已存在的消息 id：用于判断本轮是否已开始产出
   const turnBase = useRef<Set<string>>(new Set())
-  // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文）
-  const inflight = useRef<{ sid: string; text: string } | null>(null)
+  // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文 + 附件）
+  const inflight = useRef<{ sid: string; text: string; atts?: Attachment[] } | null>(null)
   // 已发送消息的历史：Ctrl+Z 逐条回看、Ctrl+Y 前进；histPos == length 表示在草稿态
   const hist = useRef<string[]>([])
   const histPos = useRef(0)
@@ -727,6 +761,26 @@ export function ChatView(p: Props) {
     }
   }
 
+  // 模型能力表（谁支持思考）来自内核内嵌的 models.dev，内核刚拉起时可能还没加载完：
+  // 空载就隔 2 秒重试，最多 4 次；始终拿不到就一直走「按模型名猜」，不影响使用
+  useEffect(() => {
+    let alive = true
+    let tries = 0
+    const load = async () => {
+      const got = await oc.fetchReasoningCaps().catch(() => ({}) as Record<string, boolean>)
+      if (!alive) return
+      if (Object.keys(got).length) {
+        setCaps(got)
+        return
+      }
+      if (++tries < 4) setTimeout(load, 2000)
+    }
+    void load()
+    return () => {
+      alive = false
+    }
+  }, [p.settingsReady])
+
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
   useEffect(() => {
@@ -744,7 +798,9 @@ export function ChatView(p: Props) {
     texts.current.clear()
     toolRaw.current.clear()
     shown.current.clear()
-    setError('')  // 切任务/切项目：上一条失败反馈属于旧对话，不能跟过来
+    // 切任务/切项目：上一条失败反馈与切换提示都属于旧对话，不能跟过来
+    setError('')
+    setNotice('')
     setPreviews({})
     setTodos([])
     setAsks([])
@@ -1131,7 +1187,7 @@ export function ChatView(p: Props) {
       if (!cur) return
       inflightRef.current = null
       setError('')
-      void runPrompt(cur.text, cur.sid, busyDir.current[cur.sid])
+      void runPrompt(cur.text, cur.sid, busyDir.current[cur.sid], undefined, cur.atts)
     }
     window.addEventListener('offline', onOffline)
     window.addEventListener('online', onOnline)
@@ -1170,13 +1226,75 @@ export function ChatView(p: Props) {
     oc.killTerminal(t.id, dirRef.current).catch(() => { /* 已退出 */ })
   }
 
+  /** 回形针：弹系统对话框选图片/视频，追加进待发送附件条 */
+  async function pickAtt() {
+    try {
+      const list = await window.qingniao.pickMedia()
+      if (list?.length) setAtts((prev) => [...prev, ...list])
+    } catch {
+      /* 选择框取消/失败 */
+    }
+  }
+
+  /** 发送前挑一个能胜任本轮的聊天模型，返回覆盖用的 ModelSel（不用换则 undefined）。
+   *  两种情况会换，且都只在**同提供商**内挑（跨提供商静默跳会让用户莫名换到别家）：
+   *  1. 当前是纯生图/生视频模型（没有 text 输入，端点只收 /images|/videos）——换到能聊天的模型，
+   *     图生图由聊天模型 + generate_image 工具完成，本来就不需要选生图模型当对话模型；
+   *  2. 带了图片/视频附件但当前模型不支持该输入模态——换到同提供商支持该模态的聊天模型。
+   *     否则模型只看到 [Attached image/png: 路径] 一行文本、看不到画面，识图答不上、
+   *     「把背景换成海边」这类改图意图也容易判成普通问答。
+   *  换成功会在对话里留一句提示，不静默。 */
+  function resolveChatModel(files: Attachment[]): ModelSel | undefined {
+    const i = p.model.indexOf('/')
+    if (i <= 0) return undefined // 跟随内核默认，无法判定，不干预
+    const pid = p.model.slice(0, i)
+    const cur = p.settings.find((x) => x.enabled && x.id === pid)
+    const curM = cur?.models.find((mm) => mm.id === p.model.slice(i + 1))
+    const curInput = curM?.input ?? MODEL_DEFAULTS.input
+    const inputs = (mm: { input?: readonly Modality[] }): readonly Modality[] => mm.input ?? MODEL_DEFAULTS.input
+    // 附件需要的输入模态（视频附件同理，看不了视频就换能看的）
+    const need: Modality[] = []
+    if (files.some((a) => a.mime.startsWith('image/'))) need.push('image')
+    if (files.some((a) => a.mime.startsWith('video/'))) need.push('video')
+    // 先保证能聊天：纯生图/生视频模型根本收不了对话
+    if (!curInput.includes('text')) {
+      const cand = cur?.models.find((mm) => inputs(mm).includes('text'))
+      if (!cand) return undefined
+      p.onModelChange(`${pid}/${cand.id}`)
+      setNotice(`当前模型只能生成、不能对话，已切到「${cand.name || cand.id}」；出图仍由生图工具完成。`)
+      return { providerID: pid, modelID: cand.id }
+    }
+    // 再看缺不缺附件对应的模态
+    const lack = need.filter((n) => !curInput.includes(n))
+    if (!lack.length) return undefined
+    const cand = cur?.models.find((mm) => inputs(mm).includes('text') && lack.every((n) => inputs(mm).includes(n)))
+    if (!cand) return undefined // 同提供商没有能看的，就原样发：路径照样能交给生图工具改图
+    p.onModelChange(`${pid}/${cand.id}`)
+    setNotice(
+      `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
+        `已切到「${cand.name || cand.id}」以便看懂附件内容。`
+    )
+    return { providerID: pid, modelID: cand.id }
+  }
+
   async function send() {
     const text = input.trim()
-    if (!text) return
+    if (!text && !atts.length) return
+    const files = atts
+    setNotice('') // 新的一轮先清掉上次的切换提示，避免旧提示赖在对话末尾
+    // 当前模型不能聊天，或看不懂本轮附件时，自动换成同提供商能胜任的模型（详见 resolveChatModel）
+    const promptModel = resolveChatModel(files)
+    if (busy && atts.length) {
+      setError('处理中不能发送附件，请等当前任务结束后再发送')
+      return
+    }
+    setAtts([])
     setInput('')
     setError('')
-    hist.current.push(text)
-    histPos.current = hist.current.length
+    if (text) {
+      hist.current.push(text)
+      histPos.current = hist.current.length
+    }
     // 用户自己发新消息 = 不用自动重试来续跑了
     if (p.sessionId) cancelRetry(p.sessionId)
     // 新对话轮重新计数，允许再次自动换模型；否则上一轮试过的模型会永久挡路
@@ -1192,17 +1310,17 @@ export function ChatView(p: Props) {
       setQueues((m) => ({ ...m, [sidRef.current]: [...(m[sidRef.current] ?? []), text] }))
       return
     }
-    await runPrompt(text)
+    await runPrompt(text, undefined, undefined, promptModel, files)
   }
 
-  async function runPrompt(text: string, sidOverride?: string, dirOverride?: string, modelOverride?: ModelSel) {
+  async function runPrompt(text: string, sidOverride?: string, dirOverride?: string, modelOverride?: ModelSel, attsOverride?: Attachment[]) {
     // 新执行一律先清上一条错误：否则换话题/换模型续跑时，旧错误气泡会赖在对话尾部
     setError('')
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
-      // 草稿：首次发送才真正创建会话；标题直接用用户这句话，避免 "New session - 时间戳"
-      const title = text.length > 30 ? text.slice(0, 30) + '…' : text
+      // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
+      const title = (text.length > 30 ? text.slice(0, 30) + '…' : text) || '发送了附件'
       try {
         const s = await oc.createSession(dir, title)
         s.title = title
@@ -1255,20 +1373,54 @@ export function ChatView(p: Props) {
         }
       }
     }
+    // 附件工具路由：只靠工具描述里的触发条件不够稳——模型看不到图片画面时往往直接回
+    // 「我看不了图片」。这里点名本轮附件路径和该调的工具（noReply：AI 可见、界面不渲染）。
+    const attFiles = attsOverride ?? []
+    if (attFiles.length) {
+      const hasImg = attFiles.some((a) => a.mime.startsWith('image/'))
+      const hasVid = attFiles.some((a) => a.mime.startsWith('video/'))
+      const lines = ['用户这一轮发来了附件，下面是本机绝对路径（填工具参数时原样照抄，不要改成文件名）：']
+      for (const a of attFiles) lines.push(`- ${a.mime.startsWith('image/') ? '图片' : '视频'}：${a.path}`)
+      lines.push('按用户意图选工具，不要回答「我看不了图片」，也不要只描述附件：')
+      if (hasImg) {
+        lines.push('- 要**看懂图片内容**（识别画面、读图里文字、回答关于图的问题）→ 调 describe_image，images 填上面的图片路径。')
+        lines.push('- 要**改图 / 按图出图**（换背景、换风格、去掉某物、做成某风格）→ 调 generate_image，把上面的图片路径放进 image，文字要求写进 prompt。')
+      }
+      if (hasVid)
+        lines.push('- 要**按视频出片**（续写、换风格、配音乐）→ 调 create_video，把上面的视频路径放进 videos（配音乐用 audios）。')
+      try {
+        await oc.injectContext(sid, dir, ATTACH_CTX_PREFIX + lines.join('\n'))
+      } catch {
+        /* 注入失败不阻塞发送 */
+      }
+    }
+
     markBusy(sid, true, dir)
-    inflight.current = { sid, text }
+    const files = attsOverride ?? []
+    inflight.current = { sid, text, atts: files.length ? files : undefined }
     atBottomRef.current = true
     setAtBottom(true)
     const tmpId = 'tmp-' + Date.now()
     turnBase.current = new Set(msgs.map((m) => m.info.id))
     const optimistic: MessageView = {
       info: { id: tmpId, role: 'user', sessionID: sid },
-      parts: [{ id: tmpId + '-p', sessionID: sid, messageID: tmpId, type: 'text', text }]
+      parts: [
+        { id: tmpId + '-p', sessionID: sid, messageID: tmpId, type: 'text', text },
+        ...files.map((a, i) => ({
+          id: `${tmpId}-f${i}`,
+          sessionID: sid,
+          messageID: tmpId,
+          type: 'file',
+          mime: a.mime,
+          filename: a.name,
+          url: a.url
+        }))
+      ]
     }
     setMsgs((prev) => [...prev, optimistic])
     let transportLost = false
     try {
-      await oc.prompt(sid, dir, text, modelOverride ?? parseModel(p.model))
+      await oc.prompt(sid, dir, text, modelOverride ?? parseModel(p.model), files, thinkRef.current)
     } catch (e) {
       const status = (e as Error & { status?: number }).status
       // 502/503 是主进程代抛的传输层故障（内核还在跑），不代表任务结束：
@@ -1398,7 +1550,10 @@ export function ChatView(p: Props) {
               const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
               // 「仅上下文」注入（项目记忆 / 浏览器页面上下文），AI 可见但界面不渲染，保持对话顶部干净
               if (isCtxOnly(txt)) return null
-              return <UserBubble key={m.info.id} text={txt} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
+              const fatts = m.parts
+                .filter((x): x is Part & { mime: string; url: string } => x.type === 'file' && !!x.mime && !!x.url)
+                .map((x) => ({ mime: x.mime, name: (x.filename || '附件').replace(/^.*[\\/]/, ''), url: x.url }))
+              return <UserBubble key={m.info.id} text={txt} atts={fatts} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
             }
             return (
               <div key={m.info.id} className="amsg">
@@ -1419,6 +1574,17 @@ export function ChatView(p: Props) {
               <div className="msgerr">
                 <AlertCircle size={13} /> <span>{error}</span>
                 <button className="icon-btn" title="关闭" onClick={() => setError('')}>
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+          )}
+          {/* 中性提示（自动换模型等）：同位置弱化版，不标红吓人 */}
+          {notice && (
+            <div className="amsg">
+              <div className="msgnotice">
+                <Info size={13} /> <span>{notice}</span>
+                <button className="icon-btn" title="关闭" onClick={() => setNotice('')}>
                   <X size={13} />
                 </button>
               </div>
@@ -1541,8 +1707,7 @@ export function ChatView(p: Props) {
                     : 'Enter 发送 / Shift+Enter 换行'
             }
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
+            onKeyDown={(e) => {              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
               if (e.ctrlKey && !e.altKey && (e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
                 e.preventDefault()
                 if (!hist.current.length) return
@@ -1564,7 +1729,34 @@ export function ChatView(p: Props) {
               }
             }}
           />
+          {atts.length > 0 && (
+            <div className="catts">
+              {atts.map((a, i) => (
+                <span key={a.path + i} className="catt">
+                  {a.mime.startsWith('image/') ? (
+                    <img src={a.url} alt={a.name} />
+                  ) : (
+                    <span className="catt-file" title={a.path}>
+                      <Film size={12} />
+                      <span>{a.name}</span>
+                    </span>
+                  )}
+                  <button className="catt-x" title="移除附件" onClick={() => setAtts((prev) => prev.filter((_, j) => j !== i))}>
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="crow">
+            <button
+              className="icon-btn"
+              title={busy ? '处理中不能上传附件' : '上传图片或视频（配合生图/生视频模型可图生图、图生视频）'}
+              disabled={busy}
+              onClick={() => void pickAtt()}
+            >
+              <Paperclip size={14} />
+            </button>
             <ProjectPicker
               projects={p.projects}
               value={p.project?.id}
@@ -1591,12 +1783,13 @@ export function ChatView(p: Props) {
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
             />
+            <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />
             {anyBusy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
             ) : (
-              <button className="send-round" disabled={!input.trim()} onClick={send} title="发送">
+              <button className="send-round" disabled={!input.trim() && !atts.length} onClick={send} title="发送">
                 <Send size={15} />
               </button>
             )}
@@ -2011,10 +2204,20 @@ function Collapsible({
   )
 }
 
-/** 用户消息气泡：超过 6 行自动折叠；悬浮显示 编辑（放回输入框）/复制，操作列在气泡上方 */
+/** 用户消息气泡：附件（上传的图片/视频）渲染在正文上方；超过 6 行自动折叠；悬浮显示 编辑/复制 */
 /** 用户消息气泡：操作列（编辑/复制）在气泡下方；编辑时在该行展开聊天窗样式的输入框 + 取消/发送
- * 发送只更新这条消息并让 AI 重新回复（见 ChatView.resendMessage） */
-function UserBubble({ text, editable, onSend }: { text: string; editable?: boolean; onSend: (t: string) => void }) {
+ * 发送只更新这条消息并让 AI 重新回复（见 ChatView.resendMessage）；附件只作展示，编辑重发只带文字 */
+function UserBubble({
+  text,
+  atts,
+  editable,
+  onSend
+}: {
+  text: string
+  atts?: { mime: string; name: string; url: string }[]
+  editable?: boolean
+  onSend: (t: string) => void
+}) {
   const [copied, setCopied] = useState(false)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(text)
@@ -2063,6 +2266,20 @@ function UserBubble({ text, editable, onSend }: { text: string; editable?: boole
   return (
     <div className="umsg">
       <div className="ubox">
+        {atts && atts.length > 0 && (
+          <div className="uatts">
+            {atts.map((a, i) =>
+              a.mime.startsWith('video/') ? (
+                <span key={i} className="uatt-video" title={a.name}>
+                  <Film size={11} />
+                  <span className="uatt-name">{a.name}</span>
+                </span>
+              ) : (
+                <img key={i} className="uatt-img" src={a.url} alt={a.name} title={a.name} />
+              )
+            )}
+          </div>
+        )}
         <Collapsible maxPx={150} forceText={text}>
           <div className="ubub">{text}</div>
         </Collapsible>

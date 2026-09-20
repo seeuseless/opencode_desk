@@ -55,6 +55,88 @@ export function modelSupportsImage(list: ProviderCfg[], key: string): boolean {
   return (m.input ?? MODEL_DEFAULTS.input).includes('image')
 }
 
+/** 同上，视频输入版（用户上传视频附件的发送拦截用） */
+export function modelSupportsVideo(list: ProviderCfg[], key: string): boolean {
+  if (!key) return true
+  const i = key.indexOf('/')
+  if (i <= 0) return true
+  const m = list.find((x) => x.id === key.slice(0, i))?.models.find((x) => x.id === key.slice(i + 1))
+  if (!m) return true
+  return (m.input ?? MODEL_DEFAULTS.input).includes('video')
+}
+
+/** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
+ *  一律按模型自身能力自动判定，不再由用户配置（见 resolveThinkingKind） */
+export type ThinkingKind = 'off' | 'toggle' | 'effort'
+
+/** 纯开关型思考模型的命名特征：只有「思考开/思考关」，没有强度档位 */
+const THINKING_TOGGLE_RE = /(^|[-_/.])(r1|reasoner|qwq|thinking|think)(-|$|[-_/.])|o1-(mini|preview)/i
+/** 非对话模型（嵌入/语音/重排/审核/生图/生视频）：谈不上思考，一律不支持。
+ *  短词（wan/veo/sora 等）必须卡边界，否则会误伤名字里恰好含这些字母的对话模型 */
+const NON_CHAT_RE =
+  /(embed|embedding|rerank|re-rank|moderation|whisper|tts|speech|asr|dall|flux|sdxl|stable-diffusion|image|video|(^|[-_/.])(sora|kling|veo|wan))/i
+
+/**
+ * 按模型 ID 猜思考能力（内核能力表查不到时的兜底，也用于内核未就绪时先给个像样的结果）。
+ * 猜宽的代价远小于猜严：档位默认停在「默认」（不传任何思考参数），模型不支持也不会出错；
+ * 反过来把能思考的判成不支持，用户就彻底用不上。
+ */
+export function inferThinking(modelId: string): ThinkingKind {
+  const id = String(modelId ?? '').toLowerCase()
+  if (!id) return 'effort'
+  if (NON_CHAT_RE.test(id)) return 'off'
+  if (THINKING_TOGGLE_RE.test(id)) return 'toggle'
+  return 'effort'
+}
+
+/** 内核 GET /provider 的原始形状：只取用得到的几个字段 */
+interface KernelModel {
+  id?: string
+  providerID?: string
+  capabilities?: { reasoning?: boolean }
+}
+
+/**
+ * 拉内核模型能力表：`{ '提供商ID/模型ID': 是否支持思考 }`。
+ * 内核按 models.dev 补全每个模型的 capabilities.reasoning，比按名字猜准得多；
+ * 拿不到（内核未就绪/端点变更）返回空表，调用方回落到 inferThinking。
+ */
+export async function fetchReasoningCaps(): Promise<Record<string, boolean>> {
+  try {
+    const j = (await call<{ all?: { id?: string; models?: Record<string, KernelModel> }[] }>('/provider')) as {
+      all?: { id?: string; models?: Record<string, KernelModel> }[]
+    }
+    const out: Record<string, boolean> = {}
+    for (const p of j.all ?? []) {
+      const pid = p.id ?? ''
+      for (const m of Object.values(p.models ?? {})) {
+        const r = m?.capabilities?.reasoning
+        if (typeof r !== 'boolean') continue
+        const mid = m.id ?? ''
+        out[`${pid}/${mid}`] = r
+        // 内核返回的 id 常带前缀（如 qwen/qwen3.5-…），用户存的可能是后半段，两种键都存一份
+        const tail = mid.includes('/') ? mid.slice(mid.lastIndexOf('/') + 1) : ''
+        if (tail) out[`${pid}/${tail}`] = r
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * 决定某模型的思考档位形态：优先内核能力表（models.dev 的 reasoning），查不到再按模型名猜。
+ * caps 为空（内核还没就绪）时完全交给 inferThinking，等能力表到了会自动纠正。
+ */
+export function resolveThinkingKind(modelKey: string, caps: Record<string, boolean>): ThinkingKind {
+  const mid = modelKey.slice(modelKey.indexOf('/') + 1)
+  const known = caps[modelKey]
+  if (known === false) return 'off'
+  if (known === true) return inferThinking(mid) === 'toggle' ? 'toggle' : 'effort'
+  return inferThinking(mid)
+}
+
 async function call<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T> {
   const r = await window.qingniao.call(path, opts)
   if (r.status >= 400) {
@@ -97,6 +179,10 @@ export interface Part {
   text?: string
   tool?: string
   state?: ToolState
+  /** file part（用户上传的图片/视频附件）：历史渲染与预览用 */
+  mime?: string
+  filename?: string
+  url?: string
   /** 内核某些版本把附件挂在 part 顶层而非 state 上，浏览面板提取时两处兼容 */
   attachments?: { type?: string; mime?: string; url: string }[]
 }
@@ -119,6 +205,14 @@ export interface ModelSel {
   modelID: string
 }
 
+/** 聊天附件（media:pick 返回）：图片 url=data URL，视频 url=file:// 本机路径 */
+export interface Attachment {
+  path: string
+  name: string
+  mime: string
+  url: string
+}
+
 /**
  * 项目记忆注入标记：以该前缀开头的用户消息是「仅上下文」记忆（noReply 注入，AI 可见但界面不渲染），
  * 用于在新会话首发时把项目记忆喂给内核。ChatView 渲染时据此跳过，避免顶部出现多余提示。
@@ -130,6 +224,16 @@ export const MEMORY_PREFIX = '␞␞项目记忆␞␞\n'
  * 以 noReply 注入。与项目记忆同一机制——AI 可见、界面不渲染，ChatView 渲染时据此跳过。
  */
 export const BROWSER_CTX_PREFIX = '␞␞浏览器上下文␞␞\n'
+
+/**
+ * 附件工具路由注入标记：用户发图片/视频附件时，发消息前把「附件路径 + 该调哪个工具」
+ * 以 noReply 注入。与项目记忆同一机制——AI 可见、界面不渲染，ChatView 渲染时据此跳过。
+ *
+ * 为什么需要：光靠工具 description 里的触发条件，模型经常不调工具——尤其是它压根看不到图片
+ * 画面、只拿到 [Attached image/png: 路径] 一行占位时，会直接回「我看不了图片」。
+ * 明确点名工具和参数，触发率才稳。
+ */
+export const ATTACH_CTX_PREFIX = '␞␞附件路由␞␞\n'
 
 /** 内核 question 工具的提问请求（question.v2.asked 事件推送，阻塞等待用户应答） */
 export interface QuestionAsk {
@@ -183,13 +287,27 @@ export const oc = {
   createSession: (directory?: string, title?: string) =>
     call<Session>(`/session${dirQ(directory)}`, { method: 'POST', body: { title } }),
   messages: (id: string, directory?: string) => call<MessageView[]>(`/session/${id}/message${dirQ(directory)}`),
-  /** 同步等待本轮对话完成；期间流式内容走事件推送 */
-  prompt: (id: string, directory: string | undefined, text: string, model?: ModelSel) =>
+  /** 模型能力表（谁支持思考）：内核内嵌 models.dev 的 capabilities.reasoning，见 fetchReasoningCaps */
+  fetchReasoningCaps,
+  /** 同步等待本轮对话完成；期间流式内容走事件推送。
+   *  附件（图片/视频）转成内核 file part：图片 data URL 供内核缩图，视频 file:// 由内核本机读取。
+   *  图片的 filename 带媒体目录完整路径——模型据此在图生图/图生视频时把路径传给 media MCP 工具。
+   *  variant 为思考档位（低/高/最高），非空时随请求顶层传给内核（见 docs/内核variant思考档位机制.md）。 */
+  prompt: (id: string, directory: string | undefined, text: string, model?: ModelSel, atts?: Attachment[], variant?: string) =>
     call<MessageView>(`/session/${id}/message${dirQ(directory)}`, {
       method: 'POST',
       body: {
-        parts: [{ type: 'text', text }],
-        ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {})
+        parts: [
+          { type: 'text', text },
+          ...(atts ?? []).map((a) => ({
+            type: 'file',
+            mime: a.mime,
+            filename: a.mime.startsWith('image/') ? a.path : a.name,
+            url: a.url
+          }))
+        ],
+        ...(model ? { model: { providerID: model.providerID, modelID: model.modelID } } : {}),
+        ...(variant ? { variant } : {})
       }
     }),
   abort: (id: string, directory?: string) => call(`/session/${id}/abort${dirQ(directory)}`, { method: 'POST' }),
