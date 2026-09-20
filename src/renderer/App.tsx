@@ -160,17 +160,30 @@ export default function App() {
   }, [])
 
   // 初始加载：项目 + 本地设置；激活项目默认展开（仅首次无存档时）
-  // 不预设任何默认项目：新用户左栏为空，由「+」或空态引导自己添加
+  // 不预设任何普通项目，但**始终种一个「默认」目录**（内核 workspace，主进程已创建）：
+  // 列表永不为空，用户任何时候都有落脚点；它不可移除（builtin 标记）
   useEffect(() => {
     ;(async () => {
       // 会话列表的「已展开条数」已改为每次启动从 5 重新开始，旧存档留着只会误导，清掉
       localStorage.removeItem('qingniao.sessShown')
       const info = await window.qingniao.info()
       workspaceRef.current = info.workspace
-      const ps = load<Project[]>('qingniao.projects', []).filter((x) => x.id !== 'workbench')
+      const builtin: Project = {
+        id: 'builtin',
+        path: info.workspace,
+        name: '默认',
+        added: 0,
+        builtin: true
+      }
+      const ps = [
+        builtin,
+        ...load<Project[]>('qingniao.projects', []).filter(
+          (x) => x.id !== 'workbench' && x.id !== builtin.id && x.path !== builtin.path
+        )
+      ]
       setProjects(ps)
       const stored = load<string>('qingniao.activeProject', '')
-      const act = ps.some((x) => x.id === stored) ? stored : (ps[0]?.id ?? '')
+      const act = ps.some((x) => x.id === stored) ? stored : builtin.id
       setActiveId(act)
       const exp = load<Record<string, boolean>>('qingniao.expanded', {})
       if (!Object.keys(exp).length && act) setExpanded({ [act]: true })
@@ -306,8 +319,14 @@ export default function App() {
     toChat()
   }
 
-  /** 移除项目：允许移除到空列表（不再兜底造一个「工作台」） */
+  /**
+   * 移除项目：允许移除到「只剩默认目录」。
+   * 默认目录（builtin）是内核 workspace，也是列表最后的落脚点，**直接拒绝移除**——
+   * 否则用户能把目录清空，之后连往哪干活都没了（UI 侧已置灰，这里是兜底）。
+   */
   function removeProject(id: string) {
+    const target = projects.find((x) => x.id === id)
+    if (target?.builtin) return
     const next = projects.filter((x) => x.id !== id)
     setProjectsPersisted(next)
     setExpanded((e) => {
@@ -315,7 +334,7 @@ export default function App() {
       return rest
     })
     if (activeId === id) {
-      const nid = next[0]?.id ?? ''
+      const nid = next[0]?.id ?? 'builtin'
       setActiveId(nid)
       save('qingniao.activeProject', nid)
       setSessionId('')

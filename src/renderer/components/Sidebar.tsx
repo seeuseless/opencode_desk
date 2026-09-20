@@ -7,6 +7,7 @@ import {
   FolderOpen,
   FolderPlus,
   LoaderCircle,
+  Lock,
   LogIn,
   MessageSquarePlus,
   RefreshCw,
@@ -24,6 +25,12 @@ export interface Project {
   name: string
   /** 添加时间，作为排序兜底 */
   added?: number
+  /**
+   * 默认工作目录：内核自己的 workspace（`~/qingniaoai-workspace`）。
+   * 它由主进程创建、始终可用，所以**不提供移除**——列表被清空后只剩它一个落脚点，
+   * 否则用户会把目录全删光、连「往哪放东西」都没了。
+   */
+  builtin?: boolean
 }
 
 const COLLAPSE_AT = 5
@@ -127,13 +134,14 @@ export function Sidebar(p: Props) {
             return (
               <div key={proj.id}>
                 <div
-                  className="proj"
-                  title={`${proj.path}\n右键：打开文件夹`}
+                  className={'proj' + (proj.builtin ? ' builtin' : '')}
+                  title={proj.builtin ? `${proj.path}\n默认工作目录，不可移除` : `${proj.path}\n右键：打开文件夹`}
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
                 >
                   <Folder size={15} className="proj-ico" />
                   <span className="proj-name">{proj.name}</span>
+                  {proj.builtin && <Lock size={11} className="proj-lock" />}
                   {/* hover 只留「添加任务」一个：打开文件夹/从列表移除都归右键菜单，
                       图标堆在行右端反而容易点错 */}
                   <span className="proj-actions">
@@ -366,15 +374,19 @@ export function Sidebar(p: Props) {
               添加任务
             </button>
             <div className="ctx-sep" />
+            {/* 默认工作目录不给移除：置灰 + 说明，菜单里直接写清原因，不用弹窗 */}
             <button
               className="ctx-item danger"
+              disabled={!!menu.proj.builtin}
+              title={menu.proj.builtin ? '默认工作目录，不可移除' : undefined}
               onClick={() => {
+                if (menu.proj.builtin) return
                 setConfirmDel(menu.proj)
                 setMenu(null)
               }}
             >
               <Trash2 size={14} />
-              从列表移除
+              {menu.proj.builtin ? '默认目录 · 不可移除' : '从列表移除'}
             </button>
           </div>
         </div>
