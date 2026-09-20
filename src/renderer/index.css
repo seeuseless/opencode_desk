@@ -226,6 +226,9 @@ input, textarea { font: inherit; }
 .proj-ico { color: var(--side-fg2); flex-shrink: 0; }
 /* 名称占满整行不折行；超长才省略号兜底（tooltip 有完整路径） */
 .proj-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 默认工作目录：不给移除，行尾挂个小锁提示（hover 时给 .proj-actions 让位） */
+.proj-lock { flex-shrink: 0; color: var(--side-fg2); opacity: .55; }
+.proj:hover .proj-lock { opacity: 0; }
 /* 操作按钮绝对定位悬浮在行右端，不占名称空间 */
 .proj-actions {
   position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
@@ -1187,6 +1190,8 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
    接入参数（上下文窗口/最大输出/思考/生成）收进二级弹窗，见下方 .mform */
 .model-cfgs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
 .model-cfgs-tip { font-size: 11.5px; color: var(--fg2); line-height: 1.7; margin-bottom: 2px; }
+/* 标签里跟一句弱化说明（原为整段 lab-tip，用户嫌描述太长）：不占独立一行，details 里能塞下就塞 */
+.lab-soft { font-size: 11px; color: var(--fg2); opacity: .72; font-weight: 400; margin-left: 5px; }
 .model-empty { font-size: 12.5px; color: var(--fg2); padding: 12px 0; text-align: center; }
 .model-row {
   position: relative;
@@ -1432,6 +1437,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 }
 .ctx-item:hover { background: var(--side-hover); }
 .ctx-item.danger:hover { color: var(--err); background: color-mix(in srgb, var(--err) 20%, transparent); }
+/* 禁用项（如默认目录的「不可移除」）：不响应 hover，文字与图标一起压暗 */
+.ctx-item:disabled { cursor: not-allowed; opacity: .42; }
+.ctx-item:disabled:hover { background: none; color: var(--side-fg); }
 .ctx-sep { height: 1px; margin: 3px 6px; background: var(--side-line); }
 
 /* ================= 左下角「移动端」入口 + 悬浮面板 ================= */

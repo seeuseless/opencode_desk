@@ -1121,8 +1121,8 @@ export function SettingsView(p: Props) {
             />
           </label>
           <label>
-            ID（内核内唯一标识，留空自动生成）
-            <input value={draft.id} placeholder="deepseek" onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
+            ID
+            <input value={draft.id} placeholder="留空自动生成，如 deepseek" onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
           </label>
           <label>
             Base URL
@@ -1133,10 +1133,10 @@ export function SettingsView(p: Props) {
             />
           </label>
           <label title="创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个">
-            生视频任务查询地址（可选，仅带生视频模型时用得上）
+            <span className="lab-soft">视频任务查询地址（可选）</span>
             <input
               value={draft.videoPoll}
-              placeholder="如 https://xx/videos/{video_id}；占位符 {origin} {baseURL} {video_id} {model}"
+              placeholder="如 https://xx/videos/{video_id}"
               onChange={(e) => setDraft({ ...draft, videoPoll: e.target.value })}
             />
           </label>
@@ -1163,13 +1163,7 @@ export function SettingsView(p: Props) {
               原先每行摊开上下文窗口、最大输出、输入、思考、生成五组控件，一屏放不下两个模型，
               现在列表用来扫全貌，参数收进弹窗。 */}
           <div className="model-cfgs">
-            <div className="model-cfgs-tip">
-              <b>「图片」与「视觉」的区别</b>：勾「图片」= 这个模型<b>自己</b>能读图/看视频，用户发图它能直接懂；
-              勾「视觉」= 这个模型能当<b>眼睛替别的模型看画面</b>（截图交给它，它把看到的内容写成文字）。
-              控制电脑、识图工具都靠「视觉」标记挑人——<b>没勾视觉的模型，控制电脑时无法看图</b>，所以界面会提示你先去模型设置里勾一个。
-              标为「图片 / 视频 / 语音 / 音乐 / 识别」的模型不进对话候选，由对应工具调用。
-              拖动左侧手柄可调整顺序，这个顺序就是模型选择器里的排列顺序
-            </div>
+            <div className="model-cfgs-tip">拖动左侧手柄可调整顺序</div>
             {(() => {
               const ids = parseModels(draft.modelsText)
               if (!ids.length) {
@@ -1260,10 +1254,9 @@ export function SettingsView(p: Props) {
           <div className="mform">
             <label>
               模型名
-              <span className="lab-tip">调用时填的 model 字段，如 deepseek-chat</span>
               <input
                 value={modelForm.id}
-                placeholder="deepseek-chat"
+                placeholder="调用时填的 model 字段，如 deepseek-chat"
                 autoFocus
                 onChange={(e) => {
                   const id = e.target.value
@@ -1363,11 +1356,6 @@ export function SettingsView(p: Props) {
                   </button>
                 ))}
               </div>
-              {/* 这行是「我配了语音为什么工具还报找不到模型」的答案：角色选对才算真的配好 */}
-              <span className="lab-tip">
-                选「语音」这个模型才会被配音工具调用（如 MiMo 的 mimo-v2.5-tts）；选「自动」只看名字猜。
-                标为图片 / 视频 / 语音 / 音乐 / 识别的模型不进模型选择器，仅由对应工具调用
-              </span>
             </div>
             <div className="actions">
               <button className="ghost" onClick={() => setModelForm(null)}>取消</button>
