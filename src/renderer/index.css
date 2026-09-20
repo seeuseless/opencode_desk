@@ -994,6 +994,9 @@ input, textarea { font: inherit; }
 }
 .prow:hover { background: var(--bg3); }
 .prow.off .prow-main { opacity: 0.5; }
+/* 内置能力没有开关、也不给编辑删除，整行置灰并去掉 hover 反馈，看起来就知道不可点 */
+.prow.builtin { opacity: 0.55; cursor: default; }
+.prow.builtin:hover { background: var(--bg2); }
 .prow-main { flex: 1; min-width: 0; }
 .prow-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .prow-url { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }

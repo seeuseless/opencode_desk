@@ -727,7 +727,7 @@ export function SettingsView(p: Props) {
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="mcp-list">
-          <div className="prow">
+          <div className="prow builtin">
             <span className="prow-ico"><Globe size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
@@ -737,7 +737,7 @@ export function SettingsView(p: Props) {
               <div className="prow-url">AI 与右侧面板共用同一个浏览器（登录态共享），打开网页/链接默认都走它</div>
             </div>
           </div>
-          <div className="prow">
+          <div className="prow builtin">
             <span className="prow-ico"><Monitor size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
