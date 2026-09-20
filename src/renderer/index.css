@@ -436,6 +436,10 @@ input, textarea { font: inherit; }
 .md-video { display: block; width: fit-content; max-width: 100%; margin: 8px 0; }
 .md-video video { width: min(100%, 560px); max-height: 420px; border-radius: 10px; background: #000; display: block; }
 .md-video-bar { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+/* 配音/音频结果：原生播放器 + 文件名、保存、定位所在目录
+   宽度给在容器上（不是 audio 的 min(100%,…)）：容器 fit-content 时子元素的 100% 会退回控件固有 300px，播放器拉不开 */
+.md-audio { display: block; width: min(420px, 100%); margin: 8px 0; }
+.md-audio audio { display: block; width: 100%; }
 .md-file-name { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg2); }
 /* 本地图片文件不存在时的占位（不退回远程地址） */
 .md-img-missing { display: inline-flex; align-items: center; gap: 6px; background: var(--bg3); color: var(--fg2); border-radius: 8px; padding: 8px 12px; margin: 6px 0; font-size: 12.5px; }
@@ -1048,15 +1052,24 @@ input, textarea { font: inherit; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 
 /* 添加提供商弹窗：常用提供商一键模板 */
-.preset-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+/* 顶部留白给胶囊右上角的「生图/视频」角标，避免它压到弹窗标题 */
+.preset-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
 .preset-lab { font-size: 12px; color: var(--fg2); }
 .preset-chip {
+  position: relative;
   border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);
   border-radius: 999px; padding: 3.5px 12px; font-size: 12.5px;
   transition: border-color 0.12s, background 0.12s, color 0.12s;
 }
 .preset-chip:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--field-line)); }
 .preset-chip.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+/* 模板自带生成类模型的角标：不点开就能看出这家能出图/出片。压在胶囊正上方居中 */
+.preset-badge {
+  position: absolute; top: -14px; left: 50%; transform: translateX(-50%);
+  pointer-events: none; white-space: nowrap;
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg2));
+  color: var(--accent); border-radius: 999px; padding: 0 5px; font-size: 9.5px; line-height: 1.6;
+}
 
 /* ================= 提供商弹窗：每模型的接入参数 ================= */
 .model-cfgs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }

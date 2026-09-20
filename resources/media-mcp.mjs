@@ -43,7 +43,12 @@ const TOOLS = [
           type: 'string',
           description: '可选：指定生图模型（见返回报错里的可用清单），不传用默认的第一个生图模型'
         },
-        size: { type: 'string', description: '可选：分辨率档位 1K / 2K / 3K / 4K，默认由服务端决定' },
+        size: {
+          type: 'string',
+          description:
+            '可选：分辨率。agnes 一类认档位 1K / 2K / 3K / 4K；OpenAI 兼容的一类（stepfun 等）只认 宽x高，如 1024x1024、1280x800。' +
+            '不确定就别传，用服务端默认值'
+        },
         ratio: {
           type: 'string',
           description: '可选：宽高比，如 1:1、16:9、9:16、4:3、3:4、2:3、3:2、21:9'
@@ -67,7 +72,9 @@ const TOOLS = [
       '视频传 videos（首尾帧约束构图用 first_frame / last_frame），文字照样放 prompt；什么都不传就是纯文字生视频。' +
       '本工具只返回 video_id，不会等待出片——拿到 video_id 后告知用户"视频生成中"，随后反复调用 check_video 轮询：' +
       '每次查询内部已静默等约 12 秒，返回"还在生成中"就立即再查即可，两次之间用一句话向用户播报进度（让用户看到事情在推进，不会手误点停止）。' +
-      '完成或失败都要把结果原样转达。同一 video_id 不要重复 create。',
+      '完成或失败都要把结果原样转达，视频 URL 与本地文件路径两者都要告诉用户：本地路径用反引号包起来（防止 Markdown 吞掉转义），' +
+      '展示视频直接用 ![视频](本地路径) 的形式内嵌——客户端优先播放本地文件，远程 URL 可能过期，不要把 URL 当视频地址贴出来。' +
+      '同一 video_id 不要重复 create。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -107,7 +114,8 @@ const TOOLS = [
     name: 'check_video',
     description:
       '查询 create_video 任务的进度。返回 生成中 / 已完成（含视频 URL 与本地文件路径）/ 失败（含原因）。' +
-      '每次调用内部已静默等待约 12 秒；返回"还在生成中"时先给用户播报一句进度，然后立即再调本工具，直到完成或失败。',
+      '每次调用内部已静默等待约 12 秒；返回"还在生成中"时先给用户播报一句进度，然后立即再调本工具，直到完成或失败。' +
+      '完成时把结果原样转达，并直接用 ![视频](本地路径) 的形式内嵌本地文件路径展示（路径用反引号包住另一行给出）——客户端优先播放本地文件，远程 URL 可能过期。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -178,9 +186,6 @@ function normalizeImageRef(v) {
     return ''
   }
 }
-function normalizeImageList(list) {
-  return (Array.isArray(list) ? list : []).map(normalizeImageRef).filter(Boolean)
-}
 
 /** 本地素材转 base64 会再膨胀三分之一，超过这个体积就没必要送了（本地视频动辄几十上百 MB） */
 const MAX_LOCAL_BYTES = 50 * 1024 * 1024
@@ -222,6 +227,104 @@ async function saveRemote(url, ext) {
   }
 }
 
+/** 只有「宽x高」这种尺寸才敢往 OpenAI 兼容形态里塞：各家档位值域不同，1K/2K 送过去多半 400 */
+function whSize(v) {
+  const s = String(v ?? '').trim().toLowerCase().replace(/\s+/g, '')
+  return /^\d+x\d+$/.test(s) ? s : ''
+}
+
+/** 参考图取字节：data URL 直接解，http(s) 先拉下来（multipart 上传只吃文件内容） */
+async function refBytes(ref) {
+  const s = String(ref ?? '')
+  const m = s.match(/^data:([^;,]+)[^,]*;base64,(.*)$/is)
+  if (m) return { buf: Buffer.from(m[2], 'base64'), mime: m[1] || 'image/png' }
+  if (/^https?:/i.test(s)) {
+    try {
+      const r = await fetch(s, { signal: AbortSignal.timeout(60000) })
+      if (!r.ok) return null
+      return { buf: Buffer.from(await r.arrayBuffer()), mime: (r.headers.get('content-type') || 'image/png').split(';')[0] }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp' }
+
+/**
+ * 生图请求的几种形态，依次试：
+ * ① agnes——参考图放 extra_body.image，尺寸是 1K/2K 档位、宽高比单列一个 ratio；
+ * ② OpenAI 兼容（stepfun 等）——response_format 在顶层，未知字段按各家网关脾气，
+ *    所以只送 model/prompt/size，档位尺寸和 ratio 这种 agnes 说法一概不发；
+ * ③ 图片编辑——改图的通用约定是 multipart 上传到 /images/edits（stepfun 的图生图只认这条）。
+ * 问通的那种记在 imgShapePicks 上，后续直接用，不再每次都撞前两堵墙。
+ */
+function imageAttempts(t, args, prompt, imgs) {
+  const base = t.baseURL.replace(/\/+$/, '')
+  const out = []
+  const agnes = { model: t.model, prompt, extra_body: { response_format: 'url' } }
+  if (args.size) agnes.size = String(args.size)
+  if (args.ratio) agnes.ratio = String(args.ratio)
+  if (imgs.length) agnes.extra_body.image = imgs
+  out.push({ name: 'agnes', url: base + '/images/generations', json: agnes })
+  const plain = { model: t.model, prompt, response_format: 'url' }
+  const wh = whSize(args.size)
+  if (wh) plain.size = wh
+  if (imgs.length) plain.image = imgs.length === 1 ? imgs[0] : imgs
+  out.push({ name: 'openai', url: base + '/images/generations', json: plain })
+  if (imgs.length) {
+    out.push({
+      name: 'edits',
+      url: base + '/images/edits',
+      prompt,
+      // 多数家的编辑接口一次只吃一张参考图，第二张起就不送了（返回里会说明）
+      refs: imgs.slice(0, 1),
+      extra: imgs.slice(1)
+    })
+  }
+  return out
+}
+
+async function runImageAttempt(t, att) {
+  const init = { method: 'POST', signal: AbortSignal.timeout(300000) }
+  if (att.refs) {
+    const form = new FormData()
+    form.append('model', t.model)
+    form.append('prompt', String(att.prompt))
+    form.append('response_format', 'url')
+    for (const ref of att.refs) {
+      const b = await refBytes(ref)
+      if (!b) return { error: '参考图取不到内容（外链拉不下来或 data URL 解析失败）' }
+      form.append('image', new Blob([b.buf], { type: b.mime }), 'ref.' + (MIME_EXT[b.mime] ?? 'png'))
+    }
+    init.body = form // 不设 content-type：fetch 要自己带 multipart boundary
+  } else {
+    init.headers = { 'content-type': 'application/json' }
+    init.body = JSON.stringify(att.json)
+  }
+  let res
+  try {
+    res = await fetch(att.url, { headers: { authorization: 'Bearer ' + t.apiKey }, ...init })
+  } catch (e) {
+    return { error: `请求发不出去：${e?.message ?? e}` }
+  }
+  const text = await res.text().catch(() => '')
+  let j = null
+  try {
+    j = JSON.parse(text)
+  } catch {
+    /* 非 JSON 错误体，原样带给模型 */
+  }
+  if (!res.ok)
+    return { error: `HTTP ${res.status}：${j?.error?.message ?? j?.detail ?? j?.message ?? text.slice(0, 200)}` }
+  const item = j?.data?.[0] ?? {}
+  return { url: item.url ?? '', b64: item.b64_json ?? '', text }
+}
+
+/** 问通的请求形态（按目标记账） */
+const imgShapePicks = new Map()
+
 async function generateImage(args) {
   if (!IMAGE_TARGETS.length) return '未配置任何生图模型。请在 设置 → 模型 添加/启用一个带生图模型（如 agnes-image-*）的提供商，保存并重启内核后重试。'
   const prompt = String(args.prompt ?? '').trim()
@@ -229,60 +332,60 @@ async function generateImage(args) {
   const t = pickTarget(IMAGE_TARGETS, args.model)
   if (!t) return '找不到生图模型「' + args.model + '」。可用：' + IMAGE_TARGETS.map((x) => x.id).join('、')
 
-  const body = { model: t.model, prompt }
-  if (args.size) body.size = String(args.size)
-  if (args.ratio) body.ratio = String(args.ratio)
-  const extra = { response_format: 'url' }
-  const imgs = normalizeImageList(args.image)
-  if (imgs.length) extra.image = imgs
-  body.extra_body = extra
+  const refs = normalizeWithReport(args.image)
+  // 素材全丢了还照样出图的话，模型以为改图成功，用户拿到的却是另一回事——必须拦下来
+  if (Array.isArray(args.image) && args.image.length && !refs.ok.length)
+    return (
+      '参考图全部处理失败，无法改图：\n' + refs.dropped.join('\n') +
+      '\n请确认附件路径原样填在这里（用户消息里 [Attached image/png: 路径] 的那段路径），或改用公开可访问的 URL。'
+    )
+  const imgs = refs.ok
+  let attempts = imageAttempts(t, args, prompt, imgs)
+  const hit = imgShapePicks.get(t.id)
+  if (hit) attempts = [attempts.find((a) => a.name === hit), ...attempts.filter((a) => a.name !== hit)].filter(Boolean)
 
-  const url = t.baseURL.replace(/\/+$/, '') + '/images/generations'
-  let res
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: 'Bearer ' + t.apiKey },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(300000)
-    })
-  } catch (e) {
-    return `生图请求发不出去（${t.id}）：${e?.message ?? e}。检查 Base URL 与网络后重试。`
-  }
-  const text = await res.text().catch(() => '')
-  let j = null
-  try { j = JSON.parse(text) } catch { /* 非 JSON 错误体，原样带给模型 */ }
-  if (!res.ok) return `生图失败（${t.id}，HTTP ${res.status}）：${j?.error?.message ?? j?.detail ?? j?.message ?? text.slice(0, 300)}`
-
-  const item = j?.data?.[0] ?? {}
-  const parts = [`生图成功（模型 ${t.id}）：`]
-  let b64 = null
-  let ext = 'png'
-  if (item.url) {
-    parts.push(`图片 URL：${item.url}`)
-    const m = item.url.match(/\.(png|jpe?g|webp|gif)(\?|$)/i)
-    if (m) ext = m[1].toLowerCase().replace('jpeg', 'jpg')
-    // 外链随时可能过期，落一份本地文件兜底
-    b64 = null
-    const file = await saveRemote(item.url, ext)
-    if (file) parts.push(`本地文件：${file}`)
-  } else if (item.b64_json) {
-    b64 = item.b64_json
-    if (/^\/9j\/|^data:image\/jpe?g/i.test(item.b64_json)) ext = 'jpg'
-  } else {
-    return '生图返回异常：既没有 url 也没有 b64_json。原始返回：' + text.slice(0, 300)
-  }
-  if (b64) {
-    try {
-      mkdirSync(OUT_DIR, { recursive: true })
-      const file = join(OUT_DIR, outName(ext))
-      writeFileSync(file, Buffer.from(b64, 'base64'))
-      parts.push(`本地文件：${file}`)
-    } catch (e) {
-      parts.push(`（本地保存失败：${e?.message ?? e}）`)
+  const errs = []
+  for (const att of attempts) {
+    const r = await runImageAttempt(t, att)
+    if (r.error) {
+      errs.push(`〔${att.name}〕${r.error}`)
+      continue
     }
+    let ext = 'png'
+    let file = null
+    if (r.url) {
+      const m = r.url.match(/\.(png|jpe?g|webp|gif)(\?|$)/i)
+      if (m) ext = m[1].toLowerCase().replace('jpeg', 'jpg')
+      // 外链随时可能过期，落一份本地文件兜底
+      file = await saveRemote(r.url, ext)
+    } else if (r.b64) {
+      if (/^\/9j\/|^data:image\/jpe?g/i.test(r.b64)) ext = 'jpg'
+      try {
+        mkdirSync(OUT_DIR, { recursive: true })
+        file = join(OUT_DIR, outName(ext))
+        writeFileSync(file, Buffer.from(r.b64, 'base64'))
+      } catch (e) {
+        file = null
+      }
+    } else {
+      errs.push(`〔${att.name}〕返回里没有 url 也没有 b64_json：${r.text.slice(0, 200)}`)
+      continue
+    }
+    imgShapePicks.set(t.id, att.name)
+    const parts = [`生图成功（模型 ${t.id}）：`]
+    if (r.url) parts.push(`图片 URL：${r.url}`)
+    if (file) parts.push(`本地文件：${file}`)
+    else parts.push(r.url ? '（外链下载失败，只有 URL 可用，注意它可能过期）' : '（本地文件写入失败，只拿到了 base64）')
+    if (att.extra?.length) parts.push(`（注意：改图接口只接受一张参考图，多出的 ${att.extra.length} 张未使用）`)
+    if (refs.dropped.length) parts.push(`（注意：以下参考图没能用上：${refs.dropped.join('；')}）`)
+    return parts.join('\n')
   }
-  return parts.join('\n')
+  return (
+    `生图失败（${t.id}）：\n${errs.join('\n')}\n` +
+    '已依次试过 agnes 形态、OpenAI 兼容形态' +
+    (imgs.length ? '与图片编辑（/images/edits）三种接口' : '两种接口') +
+    '。请检查 Base URL、API Key 与该模型的生图接口文档。'
+  )
 }
 
 async function apiFetch(t, url, init) {
@@ -301,6 +404,71 @@ function originOf(baseURL) {
     return new URL(baseURL).origin
   } catch {
     return baseURL.replace(/^(https?:\/\/[^/]+).*$/, '$1')
+  }
+}
+
+/**
+ * 任务查询地址候选：创建任务各家都是 POST {baseURL}/videos，但查询进度没有统一约定。
+ * 提供商里填过的模板（QN 目标上的 poll）最优先，其次 agnes 的 /agnesapi，再试 OpenAI 兼容的 /videos/{id}。
+ * 模板占位符：{origin} {baseURL} {video_id} {model}。
+ */
+function pollUrls(t, videoId) {
+  const base = t.baseURL.replace(/\/+$/, '')
+  const enc = encodeURIComponent
+  const urls = []
+  if (t.poll)
+    urls.push(
+      String(t.poll)
+        .replace(/\{origin\}/g, originOf(base))
+        .replace(/\{baseURL\}/g, base)
+        .replace(/\{video_id\}/g, enc(videoId))
+        .replace(/\{model\}/g, enc(t.model))
+    )
+  urls.push(`${originOf(base)}/agnesapi?video_id=${enc(videoId)}&model_name=${enc(t.model)}`)
+  urls.push(`${base}/videos/${enc(videoId)}`)
+  return [...new Set(urls)]
+}
+
+/** 探出来的可用查询地址（按目标记账）：一次出片要轮几十次，不该每次都把候选重问一遍 */
+const pollPicks = new Map()
+
+/** 查一次任务状态：候选地址依次问，问通的那个记下来；全问不通才把最后一次失败原因报出去 */
+async function pollJob(t, videoId) {
+  const urls = pollUrls(t, videoId)
+  const hit = pollPicks.get(t.id)
+  const order = hit ? [hit, ...urls.filter((u) => u !== hit)] : urls
+  let err = ''
+  for (const url of order) {
+    let r
+    try {
+      r = await apiFetch(t, url, { method: 'GET', signal: AbortSignal.timeout(20000) })
+    } catch (e) {
+      err = err || `${url} —— ${e?.message ?? e}`
+      continue
+    }
+    if (r.ok) {
+      pollPicks.set(t.id, url)
+      return { job: r.j ?? {} }
+    }
+    err = err || `${url} —— HTTP ${r.status}：${r.j?.error?.message ?? r.j?.detail ?? r.j?.message ?? r.text.slice(0, 200)}`
+  }
+  return { error: err }
+}
+
+/** 不给直链的各家实现（OpenAI 兼容那套）把成品挂在 /videos/{id}/content 上回字节流 */
+async function saveVideoContent(t, videoId) {
+  const url = t.baseURL.replace(/\/+$/, '') + '/videos/' + encodeURIComponent(videoId) + '/content'
+  try {
+    const res = await fetch(url, { headers: { authorization: 'Bearer ' + t.apiKey }, signal: AbortSignal.timeout(180000) })
+    if (!res.ok) return null
+    const buf = Buffer.from(await res.arrayBuffer())
+    if (!buf.length) return null
+    mkdirSync(OUT_DIR, { recursive: true })
+    const file = join(OUT_DIR, outName('mp4'))
+    writeFileSync(file, buf)
+    return file
+  } catch {
+    return null
   }
 }
 
@@ -384,23 +552,26 @@ async function checkVideo(args) {
   // 给用户播报进度，挂 50 秒没反馈反而诱导用户点停止把回合打断
   let last = null
   for (let i = 0; i < 4; i++) {
-    const r = await apiFetch(
-      t,
-      originOf(t.baseURL) + '/agnesapi?video_id=' + encodeURIComponent(videoId) + '&model_name=' + encodeURIComponent(t.model),
-      { method: 'GET', signal: AbortSignal.timeout(20000) }
-    )
-    if (!r.ok) return `查询失败（HTTP ${r.status}）：${r.j?.error?.message ?? r.j?.detail ?? r.j?.message ?? r.text.slice(0, 300)}`
-    last = r.j ?? {}
+    const r = await pollJob(t, videoId)
+    if (r.error)
+      return (
+        `查询失败：${r.error}。已按默认识别的两种形态依次问过（{origin}/agnesapi、{baseURL}/videos/{{video_id}}）；` +
+        '若该提供商的查询端点不长这样，请在 设置 → 模型 的提供商表单里填「生视频任务查询地址」。'
+      )
+    last = r.job
     const status = String(last.status ?? last.state ?? '').toLowerCase()
     if (status === 'failed' || status === 'error')
       return `视频生成失败：${last.error ?? last.message ?? last.detail ?? JSON.stringify(last).slice(0, 400)}`
     const file = findVideoUrl(last)
     if (status === 'completed' || (status !== 'queued' && status !== 'processing' && file)) {
-      const parts = [`视频已完成（video_id=${videoId}）：`, `视频 URL：${file || '（响应里没有直链，原始返回：' + JSON.stringify(last).slice(0, 400) + '）'}`]
-      if (file) {
-        const local = await saveRemote(file, 'mp4')
-        if (local) parts.push(`本地文件：${local}`)
-      }
+      // 直链可能压根没有（各家约定不同），也可能已经过期；两种情况都退到 content 端点把成品拉回来
+      const local = (file ? await saveRemote(file, 'mp4') : null) || (await saveVideoContent(t, videoId))
+      const parts = [
+        `视频已完成（video_id=${videoId}）：`,
+        file ? `视频 URL：${file}` : '视频 URL：（响应里没有直链，成品已按任务查询端点下载）'
+      ]
+      if (local) parts.push(`本地文件：${local}`)
+      else parts.push(`（没能拿到成品文件，原始返回：${JSON.stringify(last).slice(0, 400)}）`)
       return parts.join('\n')
     }
     await new Promise((ok) => setTimeout(ok, 3000))

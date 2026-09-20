@@ -62,6 +62,10 @@ export interface ApiResult {
 const HOST = '127.0.0.1'
 const PORT_START = 39421
 const PORT_TRY = 20
+/** 内核就绪等待：单次探测超时 / 探测间隔 / 总上限（实测冷启动 ~3s，上限留给慢盘与 models.dev 卡网） */
+const HEALTH_PROBE_TIMEOUT_MS = 2000
+const HEALTH_PROBE_INTERVAL_MS = 250
+const HEALTH_TIMEOUT_MS = 30000
 
 class Adapter {
   private proc: ChildProcessWithoutNullStreams | null = null
@@ -151,18 +155,35 @@ class Adapter {
     this.safePush({ type: 'qingniao.kernel.started', properties: {} })
   }
 
-  /** 轮询 /global/health 直到内核就绪（冷启动偶尔较慢，给 ~10s） */
+  /**
+   * 轮询 /global/health 直到内核就绪。
+   *
+   * 两次探测都必须带超时/上限，不能只靠循环次数：
+   * - fetch 默认**没有超时**（undici 的 headersTimeout 是 5 分钟）。若这个端口被一个「只接受连接、永不回包」
+   *   的半死进程占着（上一代内核被 kill 后端口还没释放、或被别的进程抢绑），单次探测就会挂几分钟甚至更久；
+   *   restart() 于是永不返回，settings:save 的 IPC 也不 settle——设置页看到的就是「保存并重启内核…」一直转。
+   * - 循环次数换算的是 sleep 时间，不含 fetch 自身耗时，所以按墙钟算截止点。
+   */
   private async waitHealthy(): Promise<void> {
-    for (let i = 0; i < 40; i++) {
+    const deadline = Date.now() + HEALTH_TIMEOUT_MS
+    let last = '未响应'
+    for (;;) {
+      // 内核自己已经退出（如端口冲突时 opencode 直接报 ServeError 退出）：立刻失败，别等满超时
+      if (!this.proc) throw new Error('OpenCode 内核启动失败（进程已退出，见主进程日志）')
       try {
-        const r = await fetch(this.base + '/global/health')
+        const ctrl = new AbortController()
+        const t = setTimeout(() => ctrl.abort(), HEALTH_PROBE_TIMEOUT_MS)
+        const r = await fetch(this.base + '/global/health', { signal: ctrl.signal })
+        clearTimeout(t)
         if (r.ok) return
-      } catch {
-        /* 还没起来 */
+        last = 'HTTP ' + r.status
+      } catch (e) {
+        last = e instanceof Error ? e.message : String(e)
       }
-      await new Promise((r) => setTimeout(r, 250))
+      if (Date.now() + HEALTH_PROBE_INTERVAL_MS > deadline)
+        throw new Error(`OpenCode 内核启动超时（${Math.round(HEALTH_TIMEOUT_MS / 1000)}s 内 ${this.base}/global/health 未就绪：${last}）`)
+      await new Promise((r) => setTimeout(r, HEALTH_PROBE_INTERVAL_MS))
     }
-    throw new Error('OpenCode 内核启动超时（/global/health 无响应）')
   }
 
   /** SSE 事件桥：内核 /event 全量转发渲染层；断线自动重连 */
@@ -239,9 +260,15 @@ class Adapter {
     try {
       do {
         this.restartAgain = false
-        this.stop()
-        await new Promise((r) => setTimeout(r, 300))
-        await this.start()
+        try {
+          this.stop()
+          await new Promise((r) => setTimeout(r, 300))
+          await this.start()
+        } catch (e) {
+          // 这一轮没起来。期间又被请求过重启（盘上设置已变）就再来一轮，
+          // 否则直接把错误交给调用方——不能把 restartAgain 挂着不管：等待方会当成「重启成功」返回
+          if (!this.restartAgain) throw e
+        }
       } while (this.restartAgain)
     } finally {
       this.restarting = false

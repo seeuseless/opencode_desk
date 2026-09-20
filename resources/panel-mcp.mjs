@@ -9,12 +9,12 @@ const base = 'http://127.0.0.1:' + (process.argv[2] || '39521')
 const TOOLS = [
   {
     name: 'panel_navigate',
-    description: '在应用内右侧的面板浏览器中打开网址。注意：这只控制青鸟窗口内的面板浏览器，不是用户桌面上的浏览器——用户要打开或操作桌面上的浏览器/软件时，改用 computer 工具。面板与用户看的是同一个浏览器（共享登录态），打开后先 panel_snapshot 获取页面元素再操作。',
+    description: '在应用内右侧的面板浏览器中打开网址。打开网页/链接/上网一律默认用本工具：面板与用户看的是同一个浏览器（共享登录态），打开后先 panel_snapshot 获取页面元素再操作。**不要为「看看有没有打开」去 computer 截屏**——面板的页面状态用 panel_snapshot 读文本就够了，截屏又慢又要求模型支持图片输入。只有用户明确点名要在桌面上、外部真实浏览器里打开时，才改用 computer 工具。',
     inputSchema: { type: 'object', properties: { url: { type: 'string', description: '完整网址，http(s):// 开头' } }, required: ['url'] }
   },
   {
     name: 'panel_snapshot',
-    description: '获取面板浏览器当前页面的可交互元素清单（[ref] 角色「文本」值），用 ref 定位点击与输入。页面导航后需重新 snapshot。',
+    description: '读面板浏览器当前页面：返回可交互元素清单（[ref] 角色「文本」值）与页面标题，用 ref 定位点击与输入。这就是「看面板页面」的唯一方式，不需要截屏。页面导航后需重新 snapshot。',
     inputSchema: { type: 'object', properties: {} }
   },
   {

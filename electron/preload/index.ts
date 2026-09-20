@@ -61,6 +61,10 @@ const api = {
   saveMedia: (source: string, name?: string): Promise<string> => ipcRenderer.invoke('media:save', { source, name }),
   /** 读本地图片为 data URL（聊天内嵌显示本地图用）；非图片或不存在的返回空串 */
   readMedia: (path: string): Promise<string> => ipcRenderer.invoke('media:read', path),
+  /** 读本地视频字节（聊天内嵌播放本地生成视频用，渲染层转 blob URL）；非视频扩展名或文件不存在返回 null */
+  readVideo: (path: string): Promise<Uint8Array | null> => ipcRenderer.invoke('media:read-video', path),
+  /** 读本地音频字节（聊天里试听配音结果用，渲染层转 blob URL）；非音频扩展名或文件不存在返回 null */
+  readAudio: (path: string): Promise<Uint8Array | null> => ipcRenderer.invoke('media:read-audio', path),
   /** 弹系统对话框选图片/视频（聊天附件上传）：图片返回 dataURL + 媒体目录落盘路径，视频返回 file:// 路径 */
   pickMedia: (): Promise<{ path: string; name: string; mime: string; url: string }[]> =>
     ipcRenderer.invoke('media:pick'),

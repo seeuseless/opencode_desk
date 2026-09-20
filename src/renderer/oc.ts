@@ -1,10 +1,10 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
-import { MODEL_DEFAULTS, isBuiltinModel } from '../../electron/main/types'
+import { MODEL_DEFAULTS, genRoleOf, isBuiltinModel } from '../../electron/main/types'
 
-export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, ThinkingMode } from '../../electron/main/types'
+export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, ThinkingMode } from '../../electron/main/types'
 export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount } from '../../electron/main/types'
-export { MODEL_DEFAULTS } from '../../electron/main/types'
+export { MODEL_DEFAULTS, genRoleOf } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 
@@ -49,15 +49,45 @@ export function isGenIntent(text: string): boolean {
   return GEN_INTENT_RE.test(text)
 }
 
-/** 是否有可用的生图/生视频模型（决定 generate_image / create_video 工具是否被挂载） */
-const GEN_MODEL_RE =
-  /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl|video|sora|kling|veo|wan)/i
+/** 常见桌面应用名（要模型看屏幕点窗口的这类，浏览器不在内——那走内置面板浏览器） */
+const DESKTOP_APP =
+  '微信|企业微信|weixin|wechat|qq|钉钉|dingtalk|飞书|lark|记事本|notepad|计算器|calculator|任务管理器|task\\s?manager|资源管理器|explorer|photoshop|illustrator|premiere\\s?pro|\\bword\\b|\\bexcel\\b|powerpoint|\\bwps\\b|steam|网易云音乐|酷狗|potplayer|typora|\\bvscode\\b'
+/**
+ * 「要操作本机桌面」意图的轻量识别：这类任务必须看屏幕截图（computer 工具回的是图），
+ * 所以纯文本模型接不了——命中就按缺图片输入处理，发送前换成能看画面的模型。
+ */
+const DESKTOP_INTENT_RE = new RegExp(
+  `(打开|启动|唤起|切换到|切到|关掉|关闭|最小化|最大化|退出)[^。！？\\n]{0,14}(${DESKTOP_APP})` +
+    `|(${DESKTOP_APP})[^。！？\\n]{0,14}(发消息|发送|回复|输入|点击|打开|启动|窗口)` +
+    `|操作电脑|控制电脑|控制一下电脑|看屏幕|看下屏幕|截个?屏|截图看看` +
+    `|(点击|单击|双击|勾选|滚动到)[^。！？\\n]{0,12}(按钮|图标|菜单|输入框|搜索框|窗口|任务栏|托盘)`,
+  'i'
+)
+export function isDesktopIntent(text: string): boolean {
+  if (!DESKTOP_INTENT_RE.test(text)) return false
+  // 「在代码里点击按钮的事件怎么处理」这类是写代码，不是操作本机桌面：点名要动电脑才照样算
+  if (/(代码|源码|函数|方法|组件|事件|监听|回调|接口|api|css|样式|选择器|报错|bug|调试|编译|仓库|脚本|正则|数据库)/i.test(text))
+    return /(操作电脑|控制电脑|看屏幕|看下屏幕|截屏|桌面上)/i.test(text)
+  // 「打开微信里的那个网页」这类其实是要浏览器，不需要看桌面；点名要在桌面上操作才照样算
+  if (!/(浏览器|网页|网址|链接|url)/i.test(text)) return true
+  return /(操作电脑|控制电脑|桌面上|看屏幕|截屏)/i.test(text)
+}
+
+/** 是否有可用的生图/生视频模型（决定 generate_image / create_video 工具是否被挂载）。
+ *  判定与主进程同一份 genRoleOf：用户在模型配置里显式选过的为准，没选过的按名字判。
+ *  只认这两个角色：语音模型（tts）满足不了「画一张图」，别让它把发送前的预警压掉。 */
 export function hasGenModel(providers: ProviderCfg[]): boolean {
-  return providers.some((p) => p.models.some((m) => GEN_MODEL_RE.test(m.id)))
+  return providers.some((p) =>
+    p.models.some((m) => {
+      const role = genRoleOf(m)
+      return role === 'image' || role === 'video'
+    })
+  )
 }
 
 /**
- * 所选模型是否支持图片输入（桌面控制 / 内置浏览器截图回传的硬依赖）。
+ * 所选模型是否支持图片输入（桌面控制的硬依赖：`computer` 工具回的是屏幕截图，收不了图就等于闭眼点鼠标。
+ * 内置浏览器不吃这一套——它回文本 DOM 快照，见 panel-mcp.mjs，所以面板浏览器不要求模型带视觉）。
  * key 为 'pid/mid'，'' = 跟随内核默认，无法判定，返回 true 不拦。
  */
 export function modelSupportsImage(list: ProviderCfg[], key: string): boolean {

@@ -6,8 +6,8 @@ import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
-import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
-import { MODEL_DEFAULTS, chatProviders, modelSupportsImage } from '../oc'
+import type { GenKind, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
+import { MODEL_DEFAULTS, genRoleOf } from '../oc'
 import type { SettingsTab } from '../App'
 
 /**
@@ -95,6 +95,8 @@ interface Draft {
   baseURL: string
   apiKey: string
   modelsText: string
+  /** 生视频任务查询地址模板（可选，见 ProviderCfg.videoPoll） */
+  videoPoll: string
   /** 每个模型已编辑过的接入参数（键=模型 ID）；没编辑过的模型用 MODEL_DEFAULTS */
   cfgs: Record<string, ModelCfg>
 }
@@ -137,15 +139,65 @@ function defaultModelCfg(): Omit<ModelCfg, 'id'> {
   return { context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input], thinking: 'toggle' }
 }
 
+/** 每个模型的生成角色（写进 ModelCfg.gen）：'auto' 按模型名判，其余是用户显式指定 */
+const GEN_LABELS: { key: GenKind; label: string; tip: string }[] = [
+  { key: 'auto', label: '自动', tip: '按模型名判：名字带 image / video / tts / flux 等算生成模型' },
+  { key: 'image', label: '生图', tip: '只认生图接口（文生图 /images/generations，改图 /images/edits），挂给生图工具，当对话模型用必被拒' },
+  { key: 'video', label: '生视频', tip: '只认异步 /videos 任务，挂给生视频工具，当对话模型用必被拒' },
+  { key: 'tts', label: '语音', tip: '只认语音合成接口（/audio/speech，MiMo 那类走 chat 带 audio 参数），挂给配音工具，当对话模型用必被拒' },
+  { key: 'none', label: '对话', tip: '强制按对话模型处理：名字像生图也不拿去出图' }
+]
+
+/**
+ * 模板里全新模型的生成角色与输入类型。判定走主进程那份 genRoleOf（名字规则），
+ * 这里只是把结果落成显式配置，让用户在表单里看得见、改得动。
+ * 生图/生视频不勾「文本」（它们收不了对话）；语音模型收的就是文本，照实勾上，
+ * 「不能当对话模型用」由生成角色这一列判定（见 ChatView.resolveChatModel）。
+ */
+function presetModelPatch(id: string, input?: Modality[]): Pick<ModelCfg, 'gen' | 'input'> {
+  const role = genRoleOf({ id })
+  if (role === 'tts') return { gen: role, input: ['text'] }
+  if (role !== 'none') return { gen: role, input: [role] }
+  return { gen: 'auto', input: input ?? [...MODEL_DEFAULTS.input] }
+}
+
+/** 模板的生成能力角标文案：与 presetModelPatch 同一套判定，两处说的必须是同一件事 */
+function presetGenText(models: string[]): string {
+  const roles = new Set(models.map((id) => presetModelPatch(id).gen))
+  return [roles.has('image') && '生图', roles.has('video') && '生视频', roles.has('tts') && '语音'].filter(Boolean).join('/')
+}
+
 /** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
-const PROVIDER_PRESETS: { id: string; name: string; baseURL: string; models: string[] }[] = [
+const PROVIDER_PRESETS: {
+  id: string
+  name: string
+  baseURL: string
+  models: string[]
+  /** 官方文档写明的输入模态（键=模型 ID）：模板里替用户勾好，否则桌面控制/识图/看视频用不上 */
+  input?: Record<string, Modality[]>
+}[] = [
   {
     id: 'agnes',
     name: 'agnes',
     baseURL: 'https://api.agnes-ai.cn/v1',
     models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash']
   },
-  { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] }
+  {
+    id: 'mimo',
+    name: 'mimo',
+    baseURL: 'https://api.xiaomimimo.com/v1',
+    // mimo-v2.5 是原生全模态理解（图/视频/音频进、文本出），mimo-v2.5-tts 是语音合成
+    models: ['mimo-v2.5', 'mimo-v2.5-tts'],
+    input: { 'mimo-v2.5': ['text', 'image', 'video'] }
+  },
+  {
+    id: 'stepfun',
+    name: 'stepfun',
+    baseURL: 'https://api.stepfun.com/v1',
+    models: ['step-3.7-flash', 'step-image-edit-2'],
+    input: { 'step-3.7-flash': ['text', 'image'] }
+  },
+  { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com', models: ['deepseek-flash'] }
 ]
 
 export function SettingsView(p: Props) {
@@ -172,8 +224,6 @@ export function SettingsView(p: Props) {
   const setTab = p.onTab
   /** 远程服务总开关（全局配置，不在此界面上）：关掉则「账号 / 使用量」两页不可见 */
   const remote = p.settings.remote
-  /** 桌面控制已开但当前模型不收图片：发送时会被 ChatView 拦下，这里提前在同处说明 */
-  const cuNoVision = p.settings.computerUse && !modelSupportsImage(chatProviders(p.settings), p.model)
   const tabs = TABS.filter((t) => remote || !REMOTE_TABS.includes(t.id))
   /**
    * 保存设置并重启内核：正在跑的任务会一起结束，所以先弹窗确认。
@@ -228,7 +278,7 @@ export function SettingsView(p: Props) {
 
   function openNew() {
     setFormMsg(null)
-    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })
+    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })
   }
 
   /** 应用提供商模板：本机已有同 ID 的配置原样带出（模型/参数/Base URL），但绝不带入 API Key */
@@ -237,6 +287,13 @@ export function SettingsView(p: Props) {
     const t = PROVIDER_PRESETS.find((x) => x.id === pid)
     if (!t) return
     const cur = providers.find((x) => x.id === t.id)
+    const ids = cur?.models.length ? cur.models.map((m) => m.id) : t.models
+    const known = cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
+    const cfgs: Record<string, ModelCfg> = {}
+    for (const mid of ids) {
+      // 已存过的参数（含用户选过的生成角色）不动，只对全新模型按名字预填
+      cfgs[mid] = known[mid] ?? { id: mid, ...defaultModelCfg(), ...presetModelPatch(mid, t.input?.[mid]) }
+    }
     setDraft({
       isNew: true,
       index: -1,
@@ -244,8 +301,9 @@ export function SettingsView(p: Props) {
       id: t.id,
       baseURL: cur?.baseURL ?? t.baseURL,
       apiKey: '',
-      modelsText: (cur?.models.length ? cur.models.map((m) => m.id) : t.models).join('\n'),
-      cfgs: cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
+      modelsText: ids.join('\n'),
+      videoPoll: cur?.videoPoll ?? '',
+      cfgs
     })
     setFormMsg({ text: '已填充模板，请填写 API Key', bad: false })
   }
@@ -261,6 +319,7 @@ export function SettingsView(p: Props) {
       baseURL: c.baseURL,
       apiKey: c.apiKey,
       modelsText: c.models.map((m) => m.id).join('\n'),
+      videoPoll: c.videoPoll ?? '',
       cfgs: Object.fromEntries(c.models.map((m) => [m.id, m]))
     })
   }
@@ -314,6 +373,8 @@ export function SettingsView(p: Props) {
       baseURL: draft.baseURL.trim(),
       apiKey: draft.apiKey.trim(),
       enabled: draft.isNew ? true : providers[draft.index].enabled,
+      // 留空不落这个键：生成工具会自己按默认的两种查询地址形态试
+      ...(draft.videoPoll.trim() ? { videoPoll: draft.videoPoll.trim() } : {}),
       models: parseModels(draft.modelsText).map((mid) => draft.cfgs[mid] ?? { id: mid, ...defaultModelCfg() })
     }
     const list = draft.isNew ? [...providers, cfg] : providers.map((x, i) => (i === draft.index ? cfg : x))
@@ -410,20 +471,6 @@ export function SettingsView(p: Props) {
     applySettings(
       { ...p.settings, mcps: p.settings.mcps.filter((_, k) => k !== i) },
       { note: `将删除 MCP「${m.name}」。` }
-    )
-  }
-
-  async function toggleBrowser() {
-    applySettings(
-      { ...p.settings, browser: !p.settings.browser },
-      { note: `将${p.settings.browser ? '关闭' : '开启'}内置浏览器。` }
-    )
-  }
-
-  async function toggleComputerUse() {
-    applySettings(
-      { ...p.settings, computerUse: !p.settings.computerUse },
-      { note: `将${p.settings.computerUse ? '关闭' : '开启'}桌面控制（computer-use）。` }
     )
   }
 
@@ -676,33 +723,28 @@ export function SettingsView(p: Props) {
             </button>
           </h3>
           <p className="sec-tip">
-            内置浏览器基于 Playwright MCP、桌面控制基于 computer-use-mcp（首次使用需本机有 Node.js，会自动经 npx 拉起）；
+            内置浏览器与桌面控制是内置能力，随内核自动开启、不提供开关（首次使用需本机有 Node.js，会自动经 npx 拉起）；
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="mcp-list">
           <div className="prow">
-            <Switch checked={p.settings.browser} onChange={toggleBrowser} />
+            <span className="prow-ico"><Globe size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
-                <Globe size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
                 内置浏览器
+                <span className="chip kind-local">内置 · 自动开启</span>
               </div>
-              <div className="prow-url">AI 与右侧面板共用同一个浏览器（登录态共享），可打开网页、按元素点击、填表</div>
+              <div className="prow-url">AI 与右侧面板共用同一个浏览器（登录态共享），打开网页/链接默认都走它</div>
             </div>
           </div>
           <div className="prow">
-            <Switch checked={p.settings.computerUse} onChange={toggleComputerUse} />
+            <span className="prow-ico"><Monitor size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
-                <Monitor size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
                 桌面控制
+                <span className="chip kind-local">内置 · 自动开启</span>
               </div>
-              <div className="prow-url">AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入）</div>
-              {cuNoVision && (
-                <div className="prow-warn bad">
-                  当前对话模型不支持图片输入，发任务时会被拦下。请在对话下方换用视觉模型，或关闭本开关。
-                </div>
-              )}
+              <div className="prow-url">AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入），仅用于用户点名要操作桌面的时候</div>
             </div>
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
@@ -777,15 +819,25 @@ export function SettingsView(p: Props) {
           {draft.isNew && (
             <div className="preset-row">
               <span className="preset-lab">快速填充</span>
-              {PROVIDER_PRESETS.map((t) => (
-                <button type="button" key={t.id} className={'preset-chip' + (draft.id === t.id ? ' on' : '')} onClick={() => applyPreset(t.id)}>
-                  {t.name}
-                </button>
-              ))}
+              {PROVIDER_PRESETS.map((t) => {
+                const gen = presetGenText(t.models)
+                return (
+                  <button
+                    type="button"
+                    key={t.id}
+                    className={'preset-chip' + (draft.id === t.id ? ' on' : '')}
+                    title={gen ? '模板自带' + gen + '模型，出图出片由生成工具完成' : undefined}
+                    onClick={() => applyPreset(t.id)}
+                  >
+                    {t.name}
+                    {gen && <span className="preset-badge">{gen}</span>}
+                  </button>
+                )
+              })}
               <button
                 type="button"
                 className="preset-chip"
-                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })}
+                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })}
               >
                 手动填写
               </button>
@@ -807,8 +859,16 @@ export function SettingsView(p: Props) {
             Base URL
             <input
               value={draft.baseURL}
-              placeholder="https://api.deepseek.com/v1"
+              placeholder="https://api.deepseek.com"
               onChange={(e) => setDraft({ ...draft, baseURL: e.target.value })}
+            />
+          </label>
+          <label title="创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个">
+            生视频任务查询地址（可选，仅带生视频模型时用得上）
+            <input
+              value={draft.videoPoll}
+              placeholder="如 https://xx/videos/{video_id}；占位符 {origin} {baseURL} {video_id} {model}"
+              onChange={(e) => setDraft({ ...draft, videoPoll: e.target.value })}
             />
           </label>
           <label>
@@ -841,7 +901,10 @@ export function SettingsView(p: Props) {
           </label>
           {parseModels(draft.modelsText).length > 0 && (
             <div className="model-cfgs">
-              <div className="model-cfgs-tip">每个模型的上下文窗口、最大输出（token）、输入类型与思考形态；输出固定为文本</div>
+              <div className="model-cfgs-tip">
+                每个模型的上下文窗口、最大输出（token）、输入类型、生成角色与思考形态；输出固定为文本。
+                标为「生图 / 生视频」的模型不进对话候选，由生成工具调用
+              </div>
               {parseModels(draft.modelsText).map((mid) => {
                 const c = cfgOf(mid)
                 return (
@@ -879,6 +942,20 @@ export function SettingsView(p: Props) {
                             onClick={() => toggleModality(mid, m.key)}
                           >
                             {m.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="model-cfg-in">
+                        生成
+                        {GEN_LABELS.map((g) => (
+                          <button
+                            key={g.key}
+                            type="button"
+                            className={'iochip' + ((c.gen ?? 'auto') === g.key ? ' on' : '')}
+                            title={g.tip}
+                            onClick={() => updateCfg(mid, { gen: g.key })}
+                          >
+                            {g.label}
                           </button>
                         ))}
                       </div>

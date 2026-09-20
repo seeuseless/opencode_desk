@@ -2,12 +2,50 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy, Download, ImageOff } from 'lucide-react'
+import { Check, Copy, Download, FolderOpen, Globe, ImageOff } from 'lucide-react'
 
 const VIDEO_RE = /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i
+/** 配音/音频结果：内嵌成播放器而不是图片 */
+const AUDIO_RE = /\.(mp3|wav|flac|ogg|opus|m4a|aac)(\?|#|$)/i
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  flac: 'audio/flac',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac'
+}
 
 function isLocalPath(u: string): boolean {
   return /^file:\/\//i.test(u) || /^[a-zA-Z]:[\\/]/.test(u) || /^\\\\/.test(u)
+}
+
+/** 需要浏览器渲染的文档：生成的 HTML 网页与 SVG */
+const BROWSER_DOC_RE = /\.(html?|svg)(\?|#|$)/i
+
+/** 交给 ChatView 的面板浏览器：对话里需要浏览器打开的链接一律走内置浏览器，不再跳系统浏览器 */
+function openInBrowser(url: string): void {
+  window.dispatchEvent(new CustomEvent('qingniao:open-in-browser', { detail: url }))
+}
+
+/** 本地路径 → file:// URL（webview 加载用）：C:\a\b.html → file:///C:/a/b.html，空格等字符逐段转义 */
+function toFileUrl(p: string): string {
+  if (/^file:\/\//i.test(p)) return p
+  const slash = p.replace(/\\/g, '/')
+  const drive = /^[a-zA-Z]:/.test(slash)
+  const body = slash
+    .split('/')
+    .map((seg, i) => (drive && i === 0 ? seg : encodeURIComponent(seg)))
+    .join('/')
+  return 'file:///' + body
+}
+
+/** 链接/媒体源（本地路径或网址）→ 面板浏览器可加载的地址；裸文件名（无目录）无法还原路径，返回空串 */
+function browserUrlOf(s: string): string {
+  if (/^https?:\/\//i.test(s)) return s
+  if (isLocalPath(s)) return toFileUrl(s)
+  return ''
 }
 
 /** 从 URL 或本地路径里取展示用文件名 */
@@ -79,7 +117,7 @@ function SaveButton({ source, label = '保存' }: { source: string; label?: stri
   )
 }
 
-/** 本地路径的媒体不做大肆渲染：dev 页面加载不了 file://，按用户要求只留纯文本，不给打开/保存按钮 */
+/** 本地媒体读不到时的纯文本降级 */
 function PlainMediaText({ source, label }: { source: string; label?: string }) {
   return (
     <span className="md-file-name" title={source}>
@@ -88,17 +126,134 @@ function PlainMediaText({ source, label }: { source: string; label?: string }) {
   )
 }
 
-/** 远程视频 → 内嵌播放器 + 保存；本地路径视频 → 纯文本 */
-function VideoEmbed({ source }: { source: string }) {
-  if (!/^https?:\/\//i.test(source)) {
-    return <PlainMediaText source={source} />
+// 本地视频 blob URL 缓存：路径唯一（每次生成新文件名），命中即同步出播放器，组件重挂载不再闪现
+const localVideoCache = new Map<string, string>()
+const localAudioCache = new Map<string, string>()
+
+/** 「打开位置」：本地媒体（视频/音频）所在目录在文件管理器里定位 */
+function OpenFolderButton({ source }: { source: string }) {
+  return (
+    <button
+      type="button"
+      className="md-btn"
+      title="在文件管理器中打开所在文件夹"
+      onClick={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        const dir = source.replace(/[\\/][^\\/]*$/, '')
+        if (dir) void window.qingniao.openFolder(dir)
+      }}
+    >
+      <FolderOpen size={13} />
+      打开位置
+    </button>
+  )
+}
+
+/** 配音结果内嵌播放器：本地路径经主进程读字节转 blob URL（file:// 在渲染层放不了） */
+function AudioEmbed({ source }: { source: string }) {
+  const remote = /^https?:\/\//i.test(source)
+  const [blobUrl, setBlobUrl] = useState(() => localAudioCache.get(source) ?? '')
+  const [missing, setMissing] = useState(false)
+  useEffect(() => {
+    if (remote) return
+    if (localAudioCache.has(source)) {
+      setBlobUrl(localAudioCache.get(source) ?? '')
+      return
+    }
+    setBlobUrl('')
+    setMissing(false)
+    let on = true
+    void window.qingniao
+      .readAudio(source)
+      .then((b) => {
+        if (!on) return
+        if (b && b.length) {
+          const ext = source.toLowerCase().match(/\.(mp3|wav|flac|ogg|opus|m4a|aac)(\?|$)/)?.[1] ?? 'mp3'
+          // IPC 回来的是 ArrayBuffer 支撑的 Uint8Array，新 lib 把 BlobPart 收紧到
+          // ArrayBufferView<ArrayBuffer>，泛型推断不出来，这里断言仅为过类型
+          const url = URL.createObjectURL(new Blob([b as unknown as BlobPart], { type: AUDIO_MIME[ext] }))
+          localAudioCache.set(source, url)
+          setBlobUrl(url)
+        } else setMissing(true)
+      })
+      .catch(() => {
+        if (on) setMissing(true)
+      })
+    return () => {
+      on = false
+    }
+  }, [source, remote])
+  if (missing) {
+    return (
+      <span className="md-img-missing" title={source}>
+        <ImageOff size={14} />
+        音频文件不存在（本地文件已删除或移动）
+      </span>
+    )
   }
+  const src = remote ? source : blobUrl
+  return (
+    <span className="md-audio">
+      {src ? <audio src={src} controls preload="none" /> : <span className="md-file-name">音频加载中…</span>}
+      <span className="md-video-bar">
+        <span className="md-file-name" title={source}>{mediaName(source)}</span>
+        <SaveButton source={source} label="保存音频" />
+        {!remote ? <OpenFolderButton source={source} /> : null}
+      </span>
+    </span>
+  )
+}
+/** 视频内嵌播放器 + 保存（下载）+ 定位本地文件：远程直接播放，本地路径经主进程读字节转 blob URL */
+function VideoEmbed({ source }: { source: string }) {
+  const remote = /^https?:\/\//i.test(source)
+  const [blobUrl, setBlobUrl] = useState(() => localVideoCache.get(source) ?? '')
+  const [missing, setMissing] = useState(false)
+  useEffect(() => {
+    if (remote) return
+    if (localVideoCache.has(source)) {
+      setBlobUrl(localVideoCache.get(source) ?? '')
+      return
+    }
+    setBlobUrl('')
+    setMissing(false)
+    let on = true
+    void window.qingniao
+      .readVideo(source)
+      .then((b) => {
+        if (!on) return
+        if (b && b.length) {
+          const mime = /\.(webm|mov|m4v)(\?|$)/i.test(source) ? `video/${source.toLowerCase().match(/\.(webm|mov|m4v)(\?|$)/i)?.[1]}` : 'video/mp4'
+          // IPC 回来的实际是 ArrayBuffer 支撑的 Uint8Array；新 lib 把 BlobPart 收紧到
+          // ArrayBufferView<ArrayBuffer>，泛型推断不出来，这里断言仅为过类型
+          const url = URL.createObjectURL(new Blob([b as unknown as BlobPart], { type: mime }))
+          localVideoCache.set(source, url)
+          setBlobUrl(url)
+        } else setMissing(true)
+      })
+      .catch(() => {
+        if (on) setMissing(true)
+      })
+    return () => {
+      on = false
+    }
+  }, [source, remote])
+  if (missing) {
+    return (
+      <span className="md-img-missing" title={source}>
+        <ImageOff size={14} />
+        视频文件不存在（本地文件已删除或移动）
+      </span>
+    )
+  }
+  const src = remote ? source : blobUrl
   return (
     <span className="md-video">
-      <video src={source} controls preload="metadata" />
+      {src ? <video src={src} controls preload="metadata" /> : <span className="md-file-name">视频加载中…</span>}
       <span className="md-video-bar">
         <span className="md-file-name" title={source}>{mediaName(source)}</span>
         <SaveButton source={source} label="保存视频" />
+        {!remote ? <OpenFolderButton source={source} /> : null}
       </span>
     </span>
   )
@@ -145,7 +300,7 @@ function MdImage(props: {
   const local = isLocalPath(s) || bareName
   useEffect(() => {
     setLocalMissing(false)
-    if (!local || typeof window.qingniao.readMedia !== 'function') return
+    if (!local || AUDIO_RE.test(s) || typeof window.qingniao.readMedia !== 'function') return
     if (localMediaCache.has(s)) {
       setLocalUrl(localMediaCache.get(s) ?? '')
       return
@@ -168,6 +323,7 @@ function MdImage(props: {
       on = false
     }
   }, [s, local])
+  if (AUDIO_RE.test(s)) return <AudioEmbed source={s} />
   if (VIDEO_RE.test(s)) return <VideoEmbed source={s} />
   if (local && localMissing) {
     if (bareName) return <PlainMediaText source={s} label={alt} />
@@ -195,6 +351,21 @@ function MdImage(props: {
       />
       <span className="md-img-tools">
         <SaveButton source={s} />
+        {/\.(svg)(\?|#|$)/i.test(s) && browserUrlOf(s) ? (
+          <button
+            type="button"
+            className="md-btn"
+            title="在内置浏览器中打开"
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              openInBrowser(browserUrlOf(s))
+            }}
+          >
+            <Globe size={13} />
+            浏览器
+          </button>
+        ) : null}
       </span>
     </span>
   )
@@ -207,7 +378,8 @@ function MdLink(props: {
   [key: string]: unknown
 }) {
   const { node, href, children, ...rest } = props
-  const h = typeof href === 'string' ? href : ''
+  // 与图片同理：normalizeMedia 写入的 %5C 与 CommonMark 规范化要还原成真实路径才能判本地
+  const h = fixupSrc(typeof href === 'string' ? href : '')
   return (
     <a
       {...rest}
@@ -215,8 +387,16 @@ function MdLink(props: {
       onClick={(e: React.MouseEvent) => {
         e.preventDefault()
         if (!h || /^javascript:/i.test(h)) return
-        if (/^https?:\/\//i.test(h)) void window.qingniao.openExternal(h)
-        else void window.qingniao.openFolder(h)
+        // http(s) 与本地 HTML/SVG 都交给内置浏览器（右侧面板 webview）；其他文件仍走系统默认程序
+        if (/^https?:\/\//i.test(h)) {
+          openInBrowser(h)
+          return
+        }
+        if (isLocalPath(h) && BROWSER_DOC_RE.test(h)) {
+          openInBrowser(toFileUrl(h))
+          return
+        }
+        void window.qingniao.openFolder(h)
       }}
     >
       {children}
@@ -233,18 +413,35 @@ function MdLink(props: {
 const CODE_SPLIT = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/
 const MEDIA_TOKEN =
   /!\[([^\]]*)\]\(<([^>]+)>\)|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]*)\]\(<([^>]+)>\)|\[([^\]]*)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>"'）\]】，。；：！？]+)/g
-const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|avi)(\?|#|$)/i
+const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|avi|mp3|wav|flac|ogg|opus|m4a|aac)(\?|#|$)/i
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
-// 本地图路径：只认盘符/UNC/file:// 三种开头；前面不能紧跟字母数字，避免把 https 里的 "s:/" 当盘符
-const BARE_LOCAL_IMG =
-  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:png|jpe?g|gif|webp|bmp|avif|svg)(?![a-zA-Z0-9])'
-// 裸图片文件名（无目录）：模型转述「本地文件：xxx.png」常剥掉目录，主进程按媒体目录兜底解析
+// 本地图/视频路径：只认盘符/UNC/file:// 三种开头；前面不能紧跟字母数字，避免把 https 里的 "s:/" 当盘符
+const BARE_LOCAL_MEDIA =
+  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v)(?![a-zA-Z0-9])'
+// 裸媒体文件名（无目录）：模型转述「本地文件：xxx.png / xxx.mp4」常剥掉目录，主进程按媒体目录兜底解析
 const BARE_IMG_NAME =
   '(?<![a-zA-Z0-9_./\\\\-])[^\\s`\'"<>|，。；：！？（）「」“”《》*?:/\\\\]+\\.(?:png|jpe?g|gif|webp|bmp|avif|svg)(?![a-zA-Z0-9])'
-const LOCAL_IMG_RE = new RegExp(`${BARE_LOCAL_IMG}|${BARE_IMG_NAME}`, 'gi')
-const LOCAL_IMG_ONE = new RegExp('^(?:' + BARE_LOCAL_IMG + '|' + BARE_IMG_NAME + ')$', 'i')
+const BARE_VID_NAME =
+  '(?<![a-zA-Z0-9_./\\\\-])[^\\s`\'"<>|，。；：！？（）「」“”《》*?:/\\\\]+\\.(?:mp4|webm|mov|m4v)(?![a-zA-Z0-9])'
+// 裸本地 HTML 路径：不能内嵌渲染，转成链接交给 MdLink → 内置浏览器打开
+const BARE_LOCAL_HTML =
+  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:html?|svg)(?![a-zA-Z0-9])'
+// 裸配音/音频路径与裸文件名：generate_speech 返回的本地文件常被模型直接贴出来，与视频同套前缀规则
+const BARE_LOCAL_AUDIO =
+  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:mp3|wav|flac|ogg|opus|m4a|aac)(?![a-zA-Z0-9])'
+const BARE_AUD_NAME =
+  '(?<![a-zA-Z0-9_./\\\\-])[^\\s`\'"<>|，。；：！？（）「」“”《》*?:/\\\\]+\\.(?:mp3|wav|flac|ogg|opus|m4a|aac)(?![a-zA-Z0-9])'
+const LOCAL_IMG_RE = new RegExp(`${BARE_LOCAL_MEDIA}|${BARE_IMG_NAME}`, 'gi')
+const LOCAL_VID_RE = new RegExp(`${BARE_LOCAL_MEDIA}|${BARE_VID_NAME}`, 'gi')
+const LOCAL_IMG_ONE = new RegExp('^(?:' + BARE_LOCAL_MEDIA + '|' + BARE_IMG_NAME + ')$', 'i')
+const LOCAL_VID_ONE = new RegExp('^(?:' + BARE_LOCAL_MEDIA + '|' + BARE_VID_NAME + ')$', 'i')
+const LOCAL_AUD_ONE = new RegExp('^(?:' + BARE_LOCAL_AUDIO + '|' + BARE_AUD_NAME + ')$', 'i')
+const LOCAL_HTML_ONE = new RegExp('^' + BARE_LOCAL_HTML + '$', 'i')
 // 媒体 token 优先整体消费，剩下的才按裸本地路径/裸文件名处理
-const COMBINED = new RegExp(`(?:${MEDIA_TOKEN.source})|(${BARE_LOCAL_IMG})|(${BARE_IMG_NAME})`, 'gi')
+const COMBINED = new RegExp(
+  `(?:${MEDIA_TOKEN.source})|(${BARE_LOCAL_MEDIA})|(${BARE_IMG_NAME})|(${BARE_VID_NAME})|(${BARE_LOCAL_HTML})|(${BARE_LOCAL_AUDIO})|(${BARE_AUD_NAME})`,
+  'gi'
+)
 
 function isImgPath(u: string): boolean {
   return IMG_EXT_RE.test(u.split(/[?#]/)[0])
@@ -263,9 +460,10 @@ function normalizeMedia(text: string): string {
   const seen = new Set<string>()
   const taken = new Set<string>()
   const localImgs: string[] = text.match(LOCAL_IMG_RE) ?? []
+  const localVids: string[] = text.match(LOCAL_VID_RE) ?? []
   const baseOf = (p: string): string => p.split(/[\\/]/).pop() ?? p
-  // 裸本地路径/文件名/行内代码路径的统一出口：没展示过就转内嵌图，展示过就还原文字（带转义）
-  // 按文件名去重：同一张图可能先给全路径又给裸文件名，只显示一次
+  // 裸本地路径/文件名/行内代码路径的统一出口：没展示过就转内嵌媒体，展示过就还原文字（带转义）
+  // 按文件名去重：同一份媒体可能先给全路径又给裸文件名，只显示一次
   const emitLocal = (p: string): string => {
     const b = baseOf(p)
     if (seen.has(p) || seen.has(b) || taken.has(p) || taken.has(b)) {
@@ -277,21 +475,36 @@ function normalizeMedia(text: string): string {
     taken.add(p)
     return `![${mediaName(p)}](<${encodeLocalSrc(p)}>)`
   }
+  // 裸 HTML 路径：转成普通链接，点击经 MdLink 走内置浏览器（同一份只转一次，重复出现还原文字）
+  const emitHtml = (p: string): string => {
+    const b = baseOf(p)
+    if (seen.has(p) || seen.has(b)) return escapeBs(p)
+    seen.add(p)
+    seen.add(b)
+    return `[${mediaName(p)}](<${encodeLocalSrc(p)}>)`
+  }
   return text
     .split(CODE_SPLIT)
     .map((seg, i) => {
       if (i % 2 === 1) {
-        // 行内代码整体就是一个本地图路径：还没展示过就换成内嵌图；已展示就保持代码原样（代码内显示不会被转义吞）
+        // 行内代码整体就是一个本地媒体路径：还没展示过就换成内嵌媒体；已展示就保持代码原样（代码内显示不会被转义吞）
         if (seg[0] === '`' && !seg.startsWith('```')) {
           const inner = seg.slice(1, -1)
-          if (LOCAL_IMG_ONE.test(inner) && !seen.has(inner) && !taken.has(inner)) return emitLocal(inner)
+          if ((LOCAL_IMG_ONE.test(inner) || LOCAL_VID_ONE.test(inner) || LOCAL_AUD_ONE.test(inner)) && !seen.has(inner) && !taken.has(inner)) return emitLocal(inner)
+          if (LOCAL_HTML_ONE.test(inner) && /\.html?(?![a-zA-Z0-9])$/i.test(inner) && !seen.has(inner)) return emitHtml(inner)
         }
         return seg
       }
       return seg.replace(COMBINED, (m, ...rest) => {
         const args = rest as (string | undefined)[]
-        const bare = args[9] ?? args[10]
+        const bare = args[9] ?? args[10] ?? args[11]
         if (bare) return emitLocal(bare)
+        // 第 13 组：裸本地 HTML/SVG 全路径（.svg 已被媒体组消费，这里实际就是 .html/.htm）
+        const bareHtml = args[12]
+        if (bareHtml) return emitHtml(bareHtml)
+        // 第 14/15 组：裸本地音频全路径与裸音频文件名 → 内嵌播放器
+        const bareAudio = args[13] ?? args[14]
+        if (bareAudio) return emitLocal(bareAudio)
         const [a1, b1, a2, b2, a3, b3, a4, b4] = args
         let url = ''
         let label: string | undefined
@@ -315,23 +528,25 @@ function normalizeMedia(text: string): string {
         if (seen.has(url)) return kind === 0 ? `[${name}](<${url}>)` : m
         seen.add(url)
         if (isLocalPath(url)) {
-          if (isImgPath(url)) {
+          if (isImgPath(url) || VIDEO_RE.test(url) || AUDIO_RE.test(url)) {
             taken.add(url)
             seen.add(baseOf(url))
           }
           return `![${name}](<${encodeLocalSrc(url)}>)${tail}`
         }
-        // 远程图 → 与回复中的本地图按顺序配对，只显示本地图
-        if (isImgPath(url)) {
-          const lp = localImgs.find((p) => !taken.has(p) && !seen.has(baseOf(p)))
+        // 远程图/视频 → 与回复中的本地文件按顺序配对，只展示本地那份（远程地址可能过期）
+        const isVidUrl = !isImgPath(url) && VIDEO_RE.test(url)
+        if (isImgPath(url) || isVidUrl) {
+          const pool = isVidUrl ? localVids : localImgs
+          const lp = pool.find((p) => !taken.has(p) && !seen.has(baseOf(p)))
           if (lp) {
             taken.add(lp)
             seen.add(lp)
             seen.add(baseOf(lp))
             return `![${name}](<${encodeLocalSrc(lp)}>)${tail}`
           }
-          // 本地图已在别处展示过（如行内代码被转成图）→ 远程降级为链接，不再出第二张图
-          if (localImgs.some((p) => taken.has(p))) {
+          // 本地文件已在别处展示过（如行内代码被转成图）→ 远程降级为链接，不再出第二个播放器
+          if (pool.some((p) => taken.has(p))) {
             return `[${name}](<${url}>)${tail}`
           }
         }

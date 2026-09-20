@@ -1,8 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { DeviceCfg, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings } from './types.ts'
-import { DEFAULT_PLATFORM_URL, MODEL_DEFAULTS, MODALITIES, isBuiltinModel } from './types.ts'
+import type { DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
+import { DEFAULT_PLATFORM_URL, MODEL_DEFAULTS, MODALITIES, genRoleOf, isBuiltinModel } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -29,6 +29,9 @@ function ratioOr(v: unknown): number | undefined {
   return Number.isFinite(n) && n >= 0 ? n : undefined
 }
 
+const GEN_KINDS: GenKind[] = ['auto', 'image', 'video', 'tts', 'none']
+const THINKING_MODES: ThinkingMode[] = ['off', 'toggle', 'low', 'medium', 'high']
+
 /** 单条模型记录归一化：兼容旧版字符串数组与手改文件的缺字段，缺失一律落默认参数 */
 function normalizeModel(m: unknown): ModelCfg | null {
   if (typeof m === 'string') return { id: m, context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
@@ -42,6 +45,9 @@ function normalizeModel(m: unknown): ModelCfg | null {
     context: Number(r.context) > 0 ? Number(r.context) : MODEL_DEFAULTS.context,
     output: Number(r.output) > 0 ? Number(r.output) : MODEL_DEFAULTS.output,
     input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => MODALITIES.includes(x)) : [...MODEL_DEFAULTS.input],
+    // 生成角色 / 思考形态：只透传合法值，非法或没选过的不落盘（两者缺省各自按 'auto' / 'toggle' 处理）
+    ...(GEN_KINDS.includes(r.gen as GenKind) ? { gen: r.gen } : {}),
+    ...(THINKING_MODES.includes(r.thinking as ThinkingMode) ? { thinking: r.thinking } : {}),
     // 计价信息（限免/折扣/倍率）只做展示用，原样透传；没有的键不落盘，省得第三方模型也带一堆 null
     ...(typeof r.free === 'boolean' ? { free: r.free } : {}),
     ...(r.discount === null || typeof r.discount === 'number' ? { discount: (r.discount ?? null) as number | null } : {}),
@@ -63,6 +69,8 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
           baseURL: String(p.baseURL ?? ''),
           apiKey: String(p.apiKey ?? ''),
           enabled: p.enabled !== false,
+          // 视频任务查询地址模板：留空不落盘（生成工具会按默认几种形态试）
+          ...(String(p.videoPoll ?? '').trim() ? { videoPoll: String(p.videoPoll).trim() } : {}),
           models: Array.isArray(p.models) ? p.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
         }))
     : []
@@ -103,8 +111,7 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
   return {
     providers,
     mcps,
-    browser: raw?.browser !== false,
-    computerUse: raw?.computerUse === true,
+    // 内置浏览器与桌面控制不再有开关（旧存档里那两个键读到时直接忽略）：见 writeOpencodeConfig 的挂载段
     // 远程服务默认关：只有显式存过 true 才开（老配置没有这个键，自然落到关）
     remote: raw?.remote === true,
     mobile: raw?.mobile === true,
@@ -262,11 +269,12 @@ let visionMcp: { path: string } | undefined
 export function setVisionMcp(v: { path: string }): void {
   visionMcp = v
 }
+/** 语音合成 MCP（generate_speech 配音工具）脚本路径 */
+let ttsMcp: { path: string } | undefined
+export function setTtsMcp(v: { path: string }): void {
+  ttsMcp = v
+}
 
-/** 纯生图模型的命名特征：这类模型只认 /images/generations，发 chat 必被拒，由生图工具代劳 */
-const IMAGE_MODEL_RE = /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i
-/** 生视频模型同理，只认异步 /videos 任务接口 */
-const VIDEO_MODEL_RE = /(^|[-_.])(video|sora|kling|veo|wan)/i
 /**
  * 视觉（能看图）模型的命名特征——挑识图目标时用。
  *
@@ -328,7 +336,8 @@ export function writeOpencodeConfig(s: Settings): void {
     }
   }
   const mcp: Record<string, unknown> = {}
-  if (s.browser && panelMcp) {
+  // 内置浏览器与桌面控制是内置能力，一律挂上，不再受设置开关控制（要停得改这份配置本身）
+  if (panelMcp) {
     // 内置浏览器 = 右侧面板里的 webview：AI 与用户看同一个浏览器（登录态共享），
     // 靠元素 ref 定位点击/输入，不依赖模型支持图片。playwright 独立浏览器已由它取代。
     mcp.panel = {
@@ -337,36 +346,37 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   }
-  if (s.computerUse) {
-    // 截屏 + 键鼠模拟控制本机（nut.js 实现，跨平台；模型需支持图片输入）
-    mcp['computer-use'] = {
-      type: 'local',
-      command: ['npx', '-y', 'computer-use-mcp'],
-      enabled: true
-    }
-    // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
-    if (desktopMcp) {
-      mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
-    }
+  // 截屏 + 键鼠模拟控制本机（nut.js 实现，跨平台；模型需支持图片输入）
+  mcp['computer-use'] = {
+    type: 'local',
+    command: ['npx', '-y', 'computer-use-mcp'],
+    enabled: true
   }
-  // 生图/生视频：只要任一可用提供商带了生成类模型就挂上工具，对话模型靠它们出图出片
+  // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
+  if (desktopMcp) {
+    mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
+  }
+  // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
+  // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
+  const pick = (role: 'image' | 'video' | 'tts') =>
+    usableProviders(s).flatMap((p) =>
+      p.apiKey.trim() && p.baseURL.trim()
+        ? p.models
+            .filter((m) => genRoleOf(m) === role)
+            .map((m) => ({
+              id: `${p.id}/${m.id}`,
+              label: m.name || m.id,
+              baseURL: p.baseURL.trim().replace(/\/+$/, ''),
+              apiKey: p.apiKey.trim(),
+              model: m.id,
+              // 查询地址模板只有生视频用得上：填过就带上，工具据此优先
+              ...(role === 'video' && p.videoPoll ? { poll: p.videoPoll } : {})
+            }))
+        : []
+    )
   if (mediaMcp) {
-    const pick = (re: RegExp) =>
-      usableProviders(s).flatMap((p) =>
-        p.apiKey.trim() && p.baseURL.trim()
-          ? p.models
-              .filter((m) => re.test(m.id))
-              .map((m) => ({
-                id: `${p.id}/${m.id}`,
-                label: m.name || m.id,
-                baseURL: p.baseURL.trim().replace(/\/+$/, ''),
-                apiKey: p.apiKey.trim(),
-                model: m.id
-              }))
-          : []
-      )
-    const imageTargets = pick(IMAGE_MODEL_RE)
-    const videoTargets = pick(VIDEO_MODEL_RE)
+    const imageTargets = pick('image')
+    const videoTargets = pick('video')
     if (imageTargets.length || videoTargets.length) {
       mcp['media'] = {
         type: 'local',
@@ -382,6 +392,18 @@ export function writeOpencodeConfig(s: Settings): void {
       }
     }
   }
+  if (ttsMcp) {
+    const ttsTargets = pick('tts')
+    if (ttsTargets.length) {
+      mcp.tts = {
+        type: 'local',
+        command: ['node', ttsMcp.path],
+        environment: { QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
+        timeout: 180000,
+        enabled: true
+      }
+    }
+  }
   // 识图：对话模型不支持 image 输入时，内核不会把图放进上下文，只剩一行 [Attached image/png: 路径]。
   // 挂一个视觉模型当「代看」——describe_image 读那个路径问视觉模型，把答案交还给对话模型。
   if (visionMcp) {
@@ -392,7 +414,7 @@ export function writeOpencodeConfig(s: Settings): void {
       // 平台清单不下发模态字段、内置模型的 input 又是硬编码全勾（见 platform.ts），那份 input 不可信
       const trustInput = p.id !== PLATFORM_PROVIDER_ID
       for (const m of p.models) {
-        if (IMAGE_MODEL_RE.test(m.id) || VIDEO_MODEL_RE.test(m.id)) continue // 生成类吃不了 chat
+        if (genRoleOf(m) !== 'none') continue // 生成类吃不了 chat
         const label = m.name || m.id
         const item = {
           id: `${p.id}/${m.id}`,
@@ -431,31 +453,40 @@ export function writeOpencodeConfig(s: Settings): void {
       mcp[m.name] = { type: 'local', command: argv, enabled: m.enabled }
     }
   }
-  // 桌面控制开启时注入工具路由约定：浏览器操作默认走桌面真实浏览器，panel_* 仅限用户点名面板时
+  // 内置浏览器与桌面控制常驻，这份工具路由约定也就常驻
   const instructions: string[] = []
-  if (s.computerUse) {
-    const routing = join(opencodeConfigDir(), 'qingniao-tools.md')
-    writeFileSync(
-      routing,
-      '# 工具路由约定\n' +
-        '- 「打开网页 / 上网 / 操作浏览器」默认指用户桌面上的真实浏览器：用 computer 工具（截屏 + 键鼠）完成，不要用 panel_*。\n' +
-        '- panel_* 只控制青鸟窗口右侧的内嵌面板浏览器，仅当用户明确要求「在面板 / 内置浏览器里打开」时使用。\n' +
-        '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
-        '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
-        '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
-        '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
-    )
-    instructions.push(routing)
-  }
+  const routing = join(opencodeConfigDir(), 'qingniao-tools.md')
+  writeFileSync(
+    routing,
+    '# 工具路由约定\n' +
+      '- 「打开网页 / 打开链接 / 上网 / 操作浏览器」一律用青鸟窗口右侧的内置浏览器（`panel_*` 工具）：' +
+      '它与用户看同一个浏览器、登录态共享，靠元素 ref 定位点击/输入，不需要截屏。**本回复里给出的 URL 要打开时同样走 panel_*。**\n' +
+      '- **网页内容一律用 `panel_snapshot` 读（文本元素清单 + 标题），严禁为了「看看打开没有 / 页面长什么样」去 `computer` 截屏**：' +
+      '截屏要移动鼠标、等画面、还要求当前模型支持图片输入，比 snapshot 慢一个数量级，而且面板页面本来就能直接读到结构。\n' +
+      '- 只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时，才用 computer 工具（截屏 + 键鼠）去操作桌面浏览器。\n' +
+      '- **操作本机桌面应用一律用 `computer` 工具**（它在内置清单里，永远可用）：`{"action":"get_screenshot"}` 看画面 → ' +
+      '`left_click` / `type` / `key` 动手 → 再截屏确认。典型任务如「打开微信给文件助手发条消息」：' +
+      '截屏找到窗口 → 点搜索框 → `type` 搜「文件传输助手」→ 点开 → 点输入框 → `type` 正文 → `key` Return。\n' +
+      '- **严禁改用写代码的方式操作桌面**：不要 `bash` 跑 PowerShell 的 SendKeys / `Add-Type` UIAutomation / user32 `keybd_event`，' +
+      '也不要装 pyautogui、AutoIt、RobotJS 之类去模拟点击输入。这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。' +
+      '`bash` 在这类任务里只允许用来「启动一个进程」，其余一律 `computer`。\n' +
+      '- `computer` 返回的是屏幕截图：若截图回不来（当前模型不支持图片输入）或工具报错，如实说明并让用户换支持图片输入的模型，' +
+      '**不要退化成写脚本硬猜**。\n' +
+      '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
+      '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
+      '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
+      '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
+  )
+  instructions.push(routing)
   /**
    * 工具路由约定（常驻指令）：模型看不到图片画面、或没意识到有生图工具时，光靠工具 description 里的
    * 触发条件基本不会调工具——实测它会直接回「我看不了图片」、或改用写代码的方式画图。这块把规则写进
    * 内核指令，重启内核即生效，不依赖渲染层改动（渲染层那次注入仍保留，它额外带上本轮附件的具体路径）。
    */
-  if (mcp.vision || mcp.media) {
+  if (mcp.vision || mcp.media || mcp.tts) {
     const attach = join(opencodeConfigDir(), 'qingniao-attach.md')
     const lines = [
-      '# 图片 / 视频附件处理约定',
+      '# 图片 / 视频 / 语音处理约定',
       '- 用户消息里出现 `[Attached image/png: 路径]` 这类占位文本，说明**你看不到图片画面**（当前模型不支持读图）。',
       '  此时严禁回答「我看不了图片 / 请你描述一下这张图」，也**严禁反问用户「要不要我识别一下」「需要我处理吗」**——' +
         '用户把图发出来就是要你处理，**直接调用下面对应的工具**，把占位里的路径**原样**填进参数（不要改成文件名，不要自己编造路径）。'
@@ -469,9 +500,18 @@ export function writeOpencodeConfig(s: Settings): void {
         '- 要**改图 / 按图出图**（换背景、换风格、去掉某物、做成某风格）→ 调 `generate_image`，把该路径放进 image 参数，文字要求写进 prompt。',
         '- 要**按视频出片**（续写、换风格、配音乐）→ 调 `create_video`，视频路径放进 videos（配音乐用 audios，参考图用 images）。',
         '- **没有附图、纯文字要求生图/生视频**（「画一张 / 设计 / 生成 / 出张 *图」「做个 *logo、图标、海报」「做个 *视频」）→ 同样必须调 `generate_image`（只填 prompt、不填 image）/ `create_video`。禁止自己写 Python / 装库的方式来画图。',
-        '- 若本轮**没有** `generate_image` 工具（说明当前没配生图模型），直接如实说明「需先在设置里配置一个生图模型」，不要假装用代码出图、更不要硬画。'
+        '- 若本轮**没有** `generate_image` 工具（说明当前没配生图模型），直接如实说明「需先在设置里配置一个生图模型」，不要假装用代码出图、更不要硬画。',
+        '- 生图/生视频成功后：结果原样转达，展示一律内嵌本地文件——`![图片](本地路径)` 或 `![视频](本地路径)`，另起一行用反引号给出该路径；远程 URL 可能过期，不要当媒体地址贴出来。'
       )
     }
+    if (mcp.tts)
+      lines.push(
+        '- 用户要**配音 / 朗读这段 / 念出来 / 生成语音 / 做成音频 / 换个音色读**→ 必须调 `generate_speech`：' +
+          '要念的正文放 text（别把风格要求混进去），语气情绪语速放 style，音色放 voice（不确定就不填，用默认音色）。' +
+          '严禁回答「我不能生成音频」，也严禁改用写代码合成波形的方式硬凑。',
+        '- 若本轮**没有** `generate_speech` 工具（说明当前没配语音模型），直接如实说明「需先在设置里配置一个语音合成模型」，不要假装出音频。',
+        '- 语音成功后：本地路径原样转达（另起一行用反引号包住），并直接用 `![音频](本地路径)` 内嵌——客户端会渲染成播放器试听。'
+      )
     lines.push('- 分不清意图时按上述顺序判断：先问内容 → describe_image；要求改画面 → generate_image。')
     writeFileSync(attach, lines.join('\n') + '\n')
     instructions.push(attach)

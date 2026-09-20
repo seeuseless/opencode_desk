@@ -15,7 +15,8 @@
 
 ## media MCP 侧（resources/media-mcp.mjs）
 
-- `generate_image` 同时支持**文生图**（只传 `prompt`）与**图生图**（追加 `image` 数组 → `body.extra_body.image`）。
+- `generate_image` 同时支持**文生图**（只传 `prompt`）与**图生图**（追加 `image` 数组）。请求体不写死一家：
+  agnes 的 `extra_body.image`、OpenAI 兼容形态、`/images/edits` multipart 依次试，见下文「通用性」。
   `image` 每项经 `normalizeImageRef` 归一化，接受 http(s) URL、data URL、本地绝对路径、`file://`、
   以及裸文件名（`QN_MEDIA_DIR` 兜底）——本地文件由 MCP 读流转 `data:image/...;base64`，
   **模型只需回传路径**，不必把几百 KB 的 data URL 抄进工具参数。
@@ -57,16 +58,43 @@
 - 排障入口：`curl http://127.0.0.1:<port>/mcp` 看 MCP 是否 connected；端口从 39421 起（adapter.ts PORT_START）。
   **内核只在启动时连 MCP**，改了配置必须重启内核才生效。
 
-## 通用性：挂载通用，协议分三种
+## 通用性：挂载通用，请求形态按「依次试 + 记账」
 
 | 能力 | 端点 | 是否通用 |
 |---|---|---|
-| 文生图 | `POST /images/generations` + `prompt` | ✅ OpenAI 标准，换 provider 也能用 |
-| 图生图 | 同上 + `extra_body.image` | ❌ agens 私有扩展（OpenAI 走 `/images/edits` multipart） |
-| 生视频 | `POST /videos`（mode 三态）+ `GET /agnesapi` 轮询 | ❌ agens 私有 |
+| 文生图 | `POST /images/generations` + `prompt` | ✅ 两种请求体依次试（agnes 的 `extra_body` → OpenAI 标准形态） |
+| 图生图 | `extra_body.image` → `POST /images/edits` multipart | ✅ 三种接口依次试，stepfun 这类只吃 edits 的也能通 |
+| 生视频 | `POST /videos`（mode 三态）+ 查询地址三档兜底 | ⚠️ 创建通用，查询按形态依次试 + 可手工配 |
+| 配音 | `POST /audio/speech` → `POST /chat/completions` + `audio` | ✅ 三种请求形态依次试（同生图思路，见下） |
 | 识图 | `POST /chat/completions` 多模态 content 数组 | ✅ OpenAI 标准 |
 
-targets 的挑选本身是通用的（按模型 ID 命名特征扫所有 provider），但挑中非 agens 的生图/视频模型大概率调不通。
+- **哪些模型算生成模型已显式化**：`ModelCfg.gen`（`'auto' | 'image' | 'video' | 'tts' | 'none'`，设置页每模型一行的「生成」chip）。
+  判定收在 `types.ts` 的 `genRoleOf()` 一份：主进程挑生图/生视频/配音目标、排除识图目标，渲染层 `hasGenModel`
+  与「拒绝对话」换模型兜底都吃它，不再各写一份名字正则。
+  `'auto'`（含旧配置里没这个键）仍按 `TTS_MODEL_RE` / `IMAGE_MODEL_RE` / `VIDEO_MODEL_RE` 判，所以老配置行为不变；
+  名字认不出的（seedream、即梦那类）在设置里点一下「生图」就进目标清单，反过来名字像生图的对话模型点「对话」即可排除。
+  快速填充模板按名字把 `gen` 与输入类型一起预填，用户改得动。
+- **生视频查询地址**（各家约定最乱的一处）：`check_video` 依次问 ① 提供商表单「生视频任务查询地址」里填的模板
+  （占位符 `{origin} {baseURL} {video_id} {model}`，经 `ProviderCfg.videoPoll` 注入成目标上的 `poll`）、
+  ② `{origin}/agnesapi?video_id&model_name`、③ `{baseURL}/videos/{video_id}`；
+  问通的那个按目标记账（`pollPicks`），一次出片轮询几十次不会反复重探。
+  任务已完成但响应里没有直链（各家字段不同，或直链已过期）时，再退一步请求 `{baseURL}/videos/{video_id}/content`
+  直接把字节存进媒体目录。
+- **生图请求形态按「依次试」而非「按家配表」**（`generateImage`，记账在 `imgShapePicks`）：
+  ① agnes 形态——参考图放 `extra_body.image`，尺寸是 `1K/2K` 档位、宽高比单列 `ratio`；
+  ② OpenAI 兼容形态——`response_format` 在顶层，只送 `model/prompt/size`，且 `size` 只在形如 `1024x1024` 时才送
+  （档位说法各家值域不同，送过去必 400）；③ 有参考图时再退到 `/images/edits` 的 multipart 文件上传
+  （字段 `model/prompt/response_format/image`，多数家一次只吃一张）。
+  问通的那种记在该目标上，后续直接用它，不再每次撞前两堵墙；三种全失败才把三家原因逐条回给模型。
+  stepfun（`step-image-edit-2`）即靠 ②③ 跑通，不需要任何 stepfun 专属代码。
+- **配音同理**（`resources/tts-mcp.mjs` 的 `generate_speech`，记账在 `speechPicks`）：① OpenAI 标准 `POST /audio/speech`
+  （正文 `input`、风格 `instructions`、`response_format`，响应多为音频字节流，也可能是 `{data:{url}}`——同一条上两种都收）；
+  ② `POST /chat/completions` + `audio:{voice,format}`，待合成文本在 assistant、风格指令在 user（MiMo `mimo-v2.5-tts` 那套）；
+  ③ ② 再加 `modalities:['audio','text']`。找音频按**值**判（`data:audio…;base64,` / `http(s)` / 200+ 字符的纯 base64），
+  不认字段名，所以各家把音频塞在 `message.audio.data` 还是 `data.url` 都能捞到；裸 PCM 补 44 字节 WAV 头再落盘。
+  生成后落 `QN_MEDIA_DIR`，工具结果里给本地路径并要求模型用 `![音频](路径)` 内嵌，渲染层 `AudioEmbed` 经
+  `media:read-audio` 读字节转 blob URL 播放（`file://` 在渲染层放不了，与视频同一条路）。
+- 生视频的 `mode` / `audios` / `size: 720P` 等参数仍是 agnes 约定，非 agnes 家要真跑通得按家做参数适配表——目前没做。
 
 ## 识图（vision MCP，resources/vision-mcp.mjs）
 

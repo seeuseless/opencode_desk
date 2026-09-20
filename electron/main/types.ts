@@ -11,7 +11,7 @@ export const MODALITIES: Modality[] = ['text', 'image', 'video']
  * 图片/视频不默认勾：绝大多数模型（含大量号称多模态的）实际吃不了图，默认全勾会把
  * 伪视觉模型灌进识图 MCP 的目标清单（靠 NO_IMAGE 逐试兜底，白白浪费一轮），
  * 也会让内核误以为模型能读图。真支持的需要用户在该模型上显式勾一次，勾选即生效。
- * 生成类模型不受影响：生图/生视频/识图目标另按模型名正则挑，不依赖这个勾选。
+ * 生成类模型不受影响：生图/生视频/识图目标另按模型的生成角色（见 GenKind）挑，不依赖这个勾选。
  */
 export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: ['text'] as Modality[] }
 
@@ -21,6 +21,38 @@ export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: ['te
  *  - 'low' | 'medium' | 'high'：固定档位，选择器给「低 / 中 / 高」，默认就是这一档。
  *  缺省（undefined）按 'toggle' 处理：思考默认开启，用户在「关 / 开」之间切。 */
 export type ThinkingMode = 'off' | 'toggle' | 'low' | 'medium' | 'high'
+
+/**
+ * 模型的生成角色（设置里逐模型显式选）。
+ *
+ * 生图/生视频/语音模型不走普通 chat 接口（只认 /images/generations、异步 /videos、/audio/speech），
+ * 当对话模型用必被拒，主进程据此把它们挂进生成工具的目标清单、并从识图清单里排除。
+ *  - 'auto'（含未设置）：按模型名判，等价于旧行为；
+ *  - 'image' | 'video' | 'tts'：强制认作生图 / 生视频 / 语音合成模型（seedream、即梦这类名字认不出的靠它）；
+ *  - 'none'：强制按对话模型处理，名字像生图也不拿去出图。
+ */
+export type GenKind = 'auto' | 'image' | 'video' | 'tts' | 'none'
+/** 判定结果：'none' = 普通对话模型 */
+export type GenRole = Exclude<GenKind, 'auto'>
+
+/** 纯生图模型的命名特征：这类模型只认 /images/generations，发 chat 必被拒，由生图工具代劳 */
+export const IMAGE_MODEL_RE = /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i
+/** 生视频模型同理，只认异步 /videos 任务接口 */
+export const VIDEO_MODEL_RE = /(^|[-_.])(video|sora|kling|veo|wan)/i
+/**
+ * 语音合成模型：tts / 配音 / 音色复刻那类命名。
+ * 'speech' 单列在备选里而非合并进前缀类：asr（识别）也常带 speech，会把听写模型错挂成合成目标。
+ */
+export const TTS_MODEL_RE = /(^|[-_.])(tts|text[-_.]?to[-_.]?speech|voice[-_.]?clone|cosyvoice|sambert|speech[-_.]?synth)/i
+
+/** 这个模型到底算生图、生视频、语音合成还是对话：用户在配置里显式选过的为准，'auto'/未设置按名字判 */
+export function genRoleOf(m: { id: string; gen?: GenKind }): GenRole {
+  if (m.gen === 'image' || m.gen === 'video' || m.gen === 'tts' || m.gen === 'none') return m.gen
+  if (TTS_MODEL_RE.test(m.id)) return 'tts'
+  if (IMAGE_MODEL_RE.test(m.id)) return 'image'
+  if (VIDEO_MODEL_RE.test(m.id)) return 'video'
+  return 'none'
+}
 
 /** 单个模型的接入参数，写入内核 opencode.json 的 limit / modalities */
 export interface ModelCfg {
@@ -34,6 +66,8 @@ export interface ModelCfg {
   output: number
   /** 输入类型 */
   input: Modality[]
+  /** 生成角色（见 GenKind）；undefined / 'auto' = 按模型名判 */
+  gen?: GenKind
   /** 思考形态（见 ThinkingMode）；undefined = 默认「关闭/开启」 */
   thinking?: ThinkingMode
   /**
@@ -74,6 +108,14 @@ export interface ProviderCfg {
   apiKey: string
   enabled: boolean
   models: ModelCfg[]
+  /**
+   * 生视频任务查询地址模板（可选），占位符 {video_id} / {model} / {baseURL} / {origin}。
+   *
+   * 创建任务各家都是 POST {baseURL}/videos，但查询进度没有统一约定：agnes 在 {origin}/agnesapi，
+   * OpenAI 兼容端点在 {baseURL}/videos/{video_id}。留空时生视频工具按这两种依次试并记住命中的那个，
+   * 只有两种都不对的提供商才需要手工填这一条。
+   */
+  videoPoll?: string
 }
 
 /** 自定义 MCP 服务器（local 用 command，remote 用 url） */
@@ -128,10 +170,6 @@ export interface PlatformCfg {
 export interface Settings {
   providers: ProviderCfg[]
   mcps: McpCfg[]
-  /** 内置浏览器（Playwright MCP），依赖本机 npx */
-  browser: boolean
-  /** 桌面控制（computer-use-mcp），依赖本机 npx；开启后 AI 可截屏并操控键鼠 */
-  computerUse: boolean
   /**
    * 全局总开关：是否启用「远程服务」（平台账号那套），只改全局配置文件，不在设置界面里。
    *
@@ -151,8 +189,6 @@ export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:9002'
 export const DEFAULT_SETTINGS: Settings = {
   providers: [],
   mcps: [],
-  browser: true,
-  computerUse: false,
   remote: false,
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null }

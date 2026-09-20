@@ -7,9 +7,9 @@ import {
   Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
-import type { Modality, ProviderCfg } from '../../../electron/main/types'
+import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { ProjectPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
@@ -24,8 +24,6 @@ interface Props {
   model: string
   onModelChange: (key: string) => void
   settings: ProviderCfg[]
-  /** 桌面控制（computer-use）开关：开着但选了不支持图片输入的模型时，拦下发送并提示换模型 */
-  computerUse: boolean
   /** 设置已加载完成（区分"提供商还没加载"与"真的没有提供商"，防止启动时清掉存档模型） */
   settingsReady: boolean
   /** 草稿首发：内核会话此刻才创建 */
@@ -338,6 +336,10 @@ export function ChatView(p: Props) {
   /** 标题栏中间的浏览器工具栏挂载点（Titlebar 渲染的槽位，DOM 提交后查一次） */
   const [tbSlot, setTbSlot] = useState<HTMLElement | null>(null)
   const browserDismissedIn = useRef('')
+  /** 用户点击要浏览器打开的链接（HTML/SVG 产物、网页地址）：面板优先导航到它，盖过 AI 的 browserView.url */
+  const [pinnedUrl, setPinnedUrl] = useState('')
+  /** 点击开链的计数：同一地址重复点击也强制重新导航 */
+  const [pinSeq, setPinSeq] = useState(0)
 
   const browserView = useMemo(() => {
     let url = ''
@@ -386,6 +388,26 @@ export function ChatView(p: Props) {
     })
   }, [])
 
+  // 对话里点击需浏览器打开的链接（Markdown 组件派发）：打开面板并导航到该地址
+  useEffect(() => {
+    const onOpen = (e: Event): void => {
+      const u = (e as CustomEvent).detail
+      if (typeof u !== 'string' || !u) return
+      setPinnedUrl(u)
+      setPinSeq((n) => n + 1)
+      browserDismissedIn.current = ''
+      setBrowserOpen(false)
+      setManualBrowser(true)
+    }
+    window.addEventListener('qingniao:open-in-browser', onOpen)
+    return () => window.removeEventListener('qingniao:open-in-browser', onOpen)
+  }, [])
+
+  // 切会话时清掉用户点开的地址：面板若开着回到新会话的 AI 浏览上下文
+  useEffect(() => {
+    setPinnedUrl('')
+  }, [p.sessionId])
+
   // 收藏夹落盘：状态即事实源，变化即写
   useEffect(() => {
     save('qingniao.bookmarks', marks)
@@ -401,6 +423,7 @@ export function ChatView(p: Props) {
     setBrowserOpen(false)
     setManualBrowser(false)
     setBrowserMax(false)
+    setPinnedUrl('')
     browserDismissedIn.current = p.sessionId
   }
 
@@ -511,6 +534,10 @@ export function ChatView(p: Props) {
   const anyBusy = Object.keys(busySet).some((s) => busySet[s])
   /** 当前会话的自动重试状态（pending=等待下一次重试；无定时器=次数耗尽等手动重试） */
   const retryState = p.sessionId ? retryView[p.sessionId] : undefined
+  // 自动续跑发的「继续」不出用户气泡，统一由尾部「重试 x/10」状态条体现：
+  // pending=本轮 runPrompt 是续跑发起的；ids=已确认属于续跑的真实用户消息 id（含别的会话，防止切会话漏隐藏）
+  const autoContinuePending = useRef(false)
+  const autoContinueIds = useRef<Set<string>>(new Set())
   /** 助手消息 → 所属用户消息 id（差量按用户消息拉，这里做渲染期的映射） */
   const turnOwner = turnOwners(msgs)
   // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
@@ -536,6 +563,15 @@ export function ChatView(p: Props) {
     busy &&
     !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
       (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
+    )
+  /**
+   * 桌面控制真的被调用过、但当前对话模型收不了图（截图回传发不出去）才提示。
+   * 桌面控制是内置常驻能力，设置页长期挂这条太吵，所以放到动作发生的这一轮。
+   */
+  const cuBlind =
+    !modelSupportsImage(p.settings, p.model) &&
+    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
+      (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
     )
 
   /** busySet 的同步镜像 + 修改入口：事件回调（effect 只注册一次）里要用最新值 */
@@ -730,14 +766,15 @@ export function ChatView(p: Props) {
     const prov = p.settings.find((x) => x.enabled && x.id === pid)
     if (!prov) return false
     const tried = (fallbackTried.current[sid] ??= [])
-    const cand = prov.models.find(
+    const cands = prov.models.filter(
       (m) =>
         m.id !== key.slice(i + 1) &&
-        // 名字带 image/video 的按生成模型处理（agnes-image-* / flux / sd 等），它们不收对话，别再撞一次拒绝
-        !/(^|[-_.])(image|img|video|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i.test(m.id) &&
-        !tried.includes(m.id) &&
-        !(p.computerUse && !(m.input ?? MODEL_DEFAULTS.input).includes('image'))
+        // 生成角色非「对话」的（显式选过的，或名字带 image/video/flux 等）不收对话，别再撞一次拒绝
+        genRoleOf(m) === 'none' &&
+        !tried.includes(m.id)
     )
+    // 桌面控制/内置浏览器常驻，所以能接图的优先；只剩纯文本模型时也照样自救，别因换不到人就放弃
+    const cand = cands.find((m) => (m.input ?? MODEL_DEFAULTS.input).includes('image')) ?? cands[0]
     if (!cand) return false
     tried.push(cand.id)
     p.onModelChange(`${pid}/${cand.id}`)
@@ -783,6 +820,8 @@ export function ChatView(p: Props) {
     texts.current.clear()
     toolRaw.current.clear()
     shown.current.clear()
+    // 切会话：未认领的续跑标记作废，避免把下个会话的用户消息误隐藏
+    autoContinuePending.current = false
     // 切任务/切项目：上一条失败反馈与切换提示都属于旧对话，不能跟过来
     setError('')
     setNotice('')
@@ -818,7 +857,13 @@ export function ChatView(p: Props) {
       const e = raw as { type: string; properties: Record<string, unknown> }
       if (e.type === 'message.updated') {
         const info = e.properties.info as MessageView['info'] | undefined
-        if (info) roles.current.set(info.id, info.role)
+        if (!info) return
+        roles.current.set(info.id, info.role)
+        // 续跑的「继续」：真实用户消息到达即记为隐藏，并消费一次待认领标记
+        if (info.role === 'user' && info.sessionID === sidRef.current && autoContinuePending.current) {
+          autoContinuePending.current = false
+          autoContinueIds.current.add(info.id)
+        }
       } else if (e.type === 'message.part.delta') {
         const pr = e.properties as { sessionID: string; messageID: string; partID: string; field: string; delta: string }
         // 手机扫码发起的回合：本端不是发起者，busy 只能从事件里认领。
@@ -1222,14 +1267,16 @@ export function ChatView(p: Props) {
   }
 
   /** 发送前挑一个能胜任本轮的聊天模型，返回覆盖用的 ModelSel（不用换则 undefined）。
-   *  两种情况会换，且都只在**同提供商**内挑（跨提供商静默跳会让用户莫名换到别家）：
-   *  1. 当前是纯生图/生视频模型（没有 text 输入，端点只收 /images|/videos）——换到能聊天的模型，
-   *     图生图由聊天模型 + generate_image 工具完成，本来就不需要选生图模型当对话模型；
+   *  三种情况会换，且都只在**同提供商**内挑（跨提供商静默跳会让用户莫名换到别家）：
+   *  1. 当前是纯生成模型（生图 / 生视频 / 语音，端点只收 /images｜/videos｜音频接口）——换到能聊天的模型，
+   *     图生图、配音由聊天模型 + 对应工具完成，本来就不需要选生成模型当对话模型；
    *  2. 带了图片/视频附件但当前模型不支持该输入模态——换到同提供商支持该模态的聊天模型。
    *     否则模型只看到 [Attached image/png: 路径] 一行文本、看不到画面，识图答不上、
    *     「把背景换成海边」这类改图意图也容易判成普通问答。
+   *  3. 没附件但任务是操作本机桌面（打开某应用、点按钮、发消息）——computer 工具回的是截图，
+   *     收不了图的模型等于闭眼点鼠标，实测会弃用工具改去写脚本，所以照样换视觉模型。
    *  换成功会在对话里留一句提示，不静默。 */
-  function resolveChatModel(files: Attachment[]): ModelSel | undefined {
+  function resolveChatModel(files: Attachment[], text: string): ModelSel | undefined {
     const i = p.model.indexOf('/')
     if (i <= 0) return undefined // 跟随内核默认，无法判定，不干预
     const pid = p.model.slice(0, i)
@@ -1237,27 +1284,65 @@ export function ChatView(p: Props) {
     const curM = cur?.models.find((mm) => mm.id === p.model.slice(i + 1))
     const curInput = curM?.input ?? MODEL_DEFAULTS.input
     const inputs = (mm: { input?: readonly Modality[] }): readonly Modality[] => mm.input ?? MODEL_DEFAULTS.input
+    /**
+     * 能不能当对话模型：生成角色（生图 / 生视频 / 语音）一律不算，哪怕它勾了文本输入。
+     * 语音模型尤其容易被漏判——MiMo 的 TTS 就是从 /chat/completions 出的，字段上看得到「文本进」，
+     * 但它回的是音频不是话，选它当对话模型这一轮等于白发。
+     */
+    const chattable = (mm: ModelCfg): boolean => genRoleOf(mm) === 'none' && inputs(mm).includes('text')
     // 附件需要的输入模态（视频附件同理，看不了视频就换能看的）
     const need: Modality[] = []
     if (files.some((a) => a.mime.startsWith('image/'))) need.push('image')
     if (files.some((a) => a.mime.startsWith('video/'))) need.push('video')
-    // 先保证能聊天：纯生图/生视频模型根本收不了对话
-    if (!curInput.includes('text')) {
-      const cand = cur?.models.find((mm) => inputs(mm).includes('text'))
+    /**
+     * 没带附件但任务是「操作本机桌面」也一样要收图：computer 工具回的就是屏幕截图，
+     * 纯文本模型收不到画面，只能瞎猜坐标——实测它会放弃工具改去写 PowerShell 模拟键鼠。
+     */
+    const desk = !need.includes('image') && !!text && isDesktopIntent(text)
+    if (desk) need.push('image')
+    // 先保证能聊天：纯生成模型根本收不了对话
+    if (curM && !chattable(curM)) {
+      const cand = cur?.models.find(chattable)
       if (!cand) return undefined
       p.onModelChange(`${pid}/${cand.id}`)
-      setNotice(`当前模型只能生成、不能对话，已切到「${cand.name || cand.id}」；出图仍由生图工具完成。`)
+      setNotice(`当前模型只能生成、不能对话，已切到「${cand.name || cand.id}」；出图、出片、配音都由对应工具完成。`)
       return { providerID: pid, modelID: cand.id }
     }
-    // 再看缺不缺附件对应的模态
+    // 再看缺不缺图片/视频输入（附件要的，或桌面控制要看截屏要的）
     const lack = need.filter((n) => !curInput.includes(n))
     if (!lack.length) return undefined
-    const cand = cur?.models.find((mm) => inputs(mm).includes('text') && lack.every((n) => inputs(mm).includes(n)))
-    if (!cand) return undefined // 同提供商没有能看的，就原样发：路径照样能交给生图工具改图
+    const cand = cur?.models.find((mm) => chattable(mm) && lack.every((n) => inputs(mm).includes(n)))
+    if (!cand) {
+      if (desk) {
+        /**
+         * 桌面控制这一轮收不了图就是瞎点，所以允许跨提供商找人（附件那两种情况仍不跨，
+         * 免得用户发张图被静默送到别家）。切换必须写在提示里，不静默。
+         */
+        const away = p.settings
+          .filter((x) => x.enabled && x.id !== pid)
+          .flatMap((x) =>
+            x.models.filter((mm) => chattable(mm) && lack.every((n) => inputs(mm).includes(n))).map((mm) => ({ prov: x, m: mm }))
+          )
+        if (away.length) {
+          const { prov, m } = away[0]
+          p.onModelChange(`${prov.id}/${m.id}`)
+          setNotice(
+            `桌面控制要看屏幕截图，「${cur?.name || pid}」里没有支持图片输入的模型，已切到「${prov.name || prov.id} / ${m.name || m.id}」。`
+          )
+          return { providerID: prov.id, modelID: m.id }
+        }
+        setNotice(
+          '这个任务要看屏幕截图（桌面控制），而当前模型和已配置的提供商里没有支持图片输入的对话模型。请在 设置 → 模型 配一个视觉模型（如 mimo-v2.5）再发，否则 AI 只能瞎猜坐标。'
+        )
+      }
+      return undefined // 原样发：路径照样能交给生图工具改图
+    }
     p.onModelChange(`${pid}/${cand.id}`)
     setNotice(
-      `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
-        `已切到「${cand.name || cand.id}」以便看懂附件内容。`
+      desk
+        ? `桌面控制要看屏幕截图，已切到支持图片输入的「${cand.name || cand.id}」。`
+        : `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
+          `已切到「${cand.name || cand.id}」以便看懂附件内容。`
     )
     return { providerID: pid, modelID: cand.id }
   }
@@ -1277,7 +1362,7 @@ export function ChatView(p: Props) {
       )
     }
     // 当前模型不能聊天，或看不懂本轮附件时，自动换成同提供商能胜任的模型（详见 resolveChatModel）
-    const promptModel = resolveChatModel(files)
+    const promptModel = resolveChatModel(files, text)
     if (busy && atts.length) {
       setError('处理中不能发送附件，请等当前任务结束后再发送')
       return
@@ -1358,7 +1443,8 @@ export function ChatView(p: Props) {
             BROWSER_CTX_PREFIX +
               '用户正在内置浏览器里看下面这个页面，本轮对话默认针对该页面（网页浏览场景，不是本地项目开发）：\n' +
               `- 当前页面：${panelUrl}\n` +
-              '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）。\n' +
+              '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）：' +
+              '看页面内容就再调一次 panel_snapshot（文本元素清单），**不要用 computer 截屏来看网页**——截屏又慢又要求模型支持图片输入，而面板页面本来就能读到结构。\n' +
               '不要读写项目文件或执行终端命令，除非用户明确要求；回答优先基于当前页面的实际内容。'
           )
           browserCtxRef.current = { sid, url: panelUrl }
@@ -1395,6 +1481,12 @@ export function ChatView(p: Props) {
     atBottomRef.current = true
     setAtBottom(true)
     const tmpId = 'tmp-' + Date.now()
+    // 自动续跑（含手动点重试按钮）发的「继续」：不落用户气泡，尾部状态条已有「重试 x/10」提示；
+    // 真实消息 id 由 message.updated 认领后补记
+    if (text === RETRY_CONTINUE) {
+      autoContinuePending.current = true
+      autoContinueIds.current.add(tmpId)
+    }
     turnBase.current = new Set(msgs.map((m) => m.info.id))
     const optimistic: MessageView = {
       info: { id: tmpId, role: 'user', sessionID: sid },
@@ -1541,6 +1633,8 @@ export function ChatView(p: Props) {
           )}
           {msgs.map((m) => {
             if (m.info.role === 'user') {
+              // 自动续跑发的「继续」：隐藏气泡，重试进度走尾部状态条（第 x/10 次）
+              if (autoContinueIds.current.has(m.info.id)) return null
               const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
               // 「仅上下文」注入（项目记忆 / 浏览器页面上下文），AI 可见但界面不渲染，保持对话顶部干净
               if (isCtxOnly(txt)) return null
@@ -1581,6 +1675,14 @@ export function ChatView(p: Props) {
                 <button className="icon-btn" title="关闭" onClick={() => setNotice('')}>
                   <X size={13} />
                 </button>
+              </div>
+            </div>
+          )}
+          {cuBlind && (
+            <div className="amsg">
+              <div className="msgnotice">
+                <Info size={13} />{' '}
+                <span>桌面控制要看屏幕截图，当前对话模型不支持图片输入，这一步发不出去。请在对话下方换用支持图片输入的模型再让它继续。</span>
               </div>
             </div>
           )}
@@ -1792,7 +1894,7 @@ export function ChatView(p: Props) {
       </div>
     </main>
     {(browserOpen || manualBrowser) && (
-      <BrowserPanel url={browserView.url} max={browserMax} slot={tbSlot} onUrl={setPanelUrl} marks={marks} onToggleMark={toggleMark} />
+      <BrowserPanel url={pinnedUrl || browserView.url} navSeq={pinSeq} max={browserMax} slot={tbSlot} onUrl={setPanelUrl} marks={marks} onToggleMark={toggleMark} />
     )}
     {browserMax && (
       <button
@@ -1810,8 +1912,10 @@ export function ChatView(p: Props) {
   )
 }
 /** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
-function BrowserPanel({ url, max, slot, onUrl, marks, onToggleMark }: {
+function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark }: {
   url: string
+  /** 用户点链开面板的计数：变化时即使地址相同也强制重新导航 */
+  navSeq: number
   max: boolean
   slot: HTMLElement | null
   /** 页面导航（AI / 手输 / 页内跳转）回传当前 URL：浏览器对话上下文与星标判断的数据源 */
@@ -1836,14 +1940,17 @@ function BrowserPanel({ url, max, slot, onUrl, marks, onToggleMark }: {
   /** 调宽拖拽护罩：拖动期间盖住 webview，指针事件留在主文档 */
   const [dragShield, setDragShield] = useState(false)
 
+  const lastNavSeq = useRef(navSeq)
   useEffect(() => {
-    if (url && url !== addr) {
+    const force = navSeq !== lastNavSeq.current
+    lastNavSeq.current = navSeq
+    if (url && (force || url !== addr)) {
       setAddr(url)
       if (wvRef.current) wvRef.current.loadURL(url)
       else setSrc(url) // webview 未挂载：带 src 挂载即完成首航
     }
-    // 只跟随 AI 的新导航；addr 是用户手输值，不作为依赖
-  }, [url])
+    // 只跟随 AI 的新导航与用户点链（navSeq）；addr 是用户手输值，不作为依赖
+  }, [url, navSeq])
 
   // webview 由 React 直接管理 src（addr 变化即导航）；这里挂内核事件把页内跳转同步回地址栏
   /** 每次导航后查一遍历史状态，驱动前进/后退按钮可用性 */

@@ -34,6 +34,9 @@ extraResources:
   # 图片理解 MCP 脚本（describe_image，非视觉模型发图时由视觉模型代看）
   - from: resources/vision-mcp.mjs
     to: vision-mcp.mjs
+  # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
+  - from: resources/tts-mcp.mjs
+    to: tts-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"

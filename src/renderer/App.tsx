@@ -59,8 +59,6 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsCfg>({
     providers: [],
     mcps: [],
-    browser: false,
-    computerUse: false,
     remote: false,
     mobile: false,
     platform: { baseUrl: '', token: '', user: null, models: [], device: null }
@@ -377,8 +375,11 @@ export default function App() {
       // 主进程写 ~/.qingniaoai 并重启内核后返回，配置即刻生效
       await window.qingniao.saveSettings(next)
     } catch (e) {
-      // 重启失败：回读磁盘上的真实设置，别让 UI 显示没生效的状态
+      // 重启失败/超时：回读磁盘上的真实设置，并弹窗说清原因——不然按钮一转就再没下文，
+      // 用户只能对着转圈的「保存并重启内核…」干等
+      const msg = e instanceof Error ? e.message : String(e)
       setSettings(await window.qingniao.getSettings())
+      setNotice(`设置已写入，但内核没能重启成功：${msg}。可以重新保存一次，或重启本应用。`)
       throw e
     } finally {
       setSaving(false)
@@ -494,7 +495,6 @@ export default function App() {
             model={model}
             onModelChange={setModel}
             settings={chatProviders(settings)}
-            computerUse={settings.computerUse}
             settingsReady={settingsReady}
             onDraftCreated={onDraftCreated}
             onRefreshSessions={refreshSessions}

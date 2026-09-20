@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -131,8 +131,9 @@ ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) 
   }
 })
 
-// 聊天内嵌显示本地图片：渲染层（http 页面）加载不了 file://，由主进程读文件转 data URL
-// 只放行图片扩展名，其他一律返回空串
+// 聊天内嵌显示本地媒体：渲染层（http 页面）加载不了 file://。
+// 图片走 data URL；视频返回原始字节，渲染层转 blob URL 交给 <video>（data URL 会再膨胀三分之一，本地视频动辄几十 MB）
+// 只放行表内扩展名，其他一律拒绝
 const IMG_MIME: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -143,21 +144,61 @@ const IMG_MIME: Record<string, string> = {
   '.avif': 'image/avif',
   '.svg': 'image/svg+xml'
 }
+const READ_VIDEO_MIME: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v'
+}
+/** 配音结果内嵌播放放行的音频类型（与视频同理：只回字节，白名单外一律不放） */
+const READ_AUDIO_MIME: Record<string, string> = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac'
+}
 /** 模型转述生图结果时常把目录剥掉只剩裸文件名（"本地文件：xxx.png"）：无目录时到媒体目录兜底解析 */
 function locateMediaFile(p: string): string {
   if (!p || /[\\/]/.test(p) || existsSync(p)) return p
   const cand = join(qingniaoHome(), 'media', p)
   return existsSync(cand) ? cand : p
 }
-ipcMain.handle('media:read', (_e, target: string) => {
+/** 渲染层路径 → { 真实路径, 扩展名 }（file:// 还原、裸文件名媒体目录兜底；扩展名算上数字，.mp4 这类 [a-z]+ 匹配不上） */
+function readMediaTarget(target: string): { p: string; ext: string } {
   let p = String(target ?? '').trim()
   if (/^file:\/\//i.test(p)) p = fileURLToPath(p)
   p = locateMediaFile(p)
-  // 扩展名要算上数字：.mp3/.mp4 这类用 [a-z]+ 匹配不上（media-mcp 踩过同一个坑）
   const ext = p.split(/[?#]/)[0].toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
+  return { p, ext }
+}
+ipcMain.handle('media:read', (_e, target: string) => {
+  const { p, ext } = readMediaTarget(target)
   const mime = IMG_MIME[ext]
   if (!mime || !existsSync(p)) return ''
   return `data:${mime};base64,${readFileSync(p).toString('base64')}`
+})
+// 本地视频内嵌播放：返回原始字节给渲染层转 blob URL；不放行图片以外的可执行等任意类型
+ipcMain.handle('media:read-video', (_e, target: string): Uint8Array | null => {
+  const { p, ext } = readMediaTarget(target)
+  if (!READ_VIDEO_MIME[ext] || !existsSync(p)) return null
+  try {
+    return new Uint8Array(readFileSync(p))
+  } catch {
+    return null
+  }
+})
+// 本地音频内嵌播放（配音结果）：与视频同一套路，只回字节，渲染层转 blob URL
+ipcMain.handle('media:read-audio', (_e, target: string): Uint8Array | null => {
+  const { p, ext } = readMediaTarget(target)
+  if (!READ_AUDIO_MIME[ext] || !existsSync(p)) return null
+  try {
+    return new Uint8Array(readFileSync(p))
+  } catch {
+    return null
+  }
 })
 
 // ---------- 聊天附件上传（输入框回形针）：图片转 data URL + 落盘媒体目录，视频回 file:// ----------
@@ -428,6 +469,11 @@ function visionMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'vision-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'vision-mcp.mjs')
+}
+
+/** 语音合成 MCP（generate_speech 配音工具）脚本位置（随安装包分发） */
+function ttsMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'tts-mcp.mjs') : join(app.getAppPath(), 'resources', 'tts-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -736,6 +782,7 @@ app.whenReady().then(async () => {
   setDesktopMcp({ path: desktopMcpPath() })
   setMediaMcp({ path: mediaMcpPath() })
   setVisionMcp({ path: visionMcpPath() })
+  setTtsMcp({ path: ttsMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
