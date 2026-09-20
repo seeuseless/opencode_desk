@@ -53,8 +53,8 @@ export default function App() {
   const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
   /** 自增计数：全屏浏览时标题栏「AI 对话」按钮收起/展开右下角浮动对话卡 */
   const [floatSignal, setFloatSignal] = useState(0)
-  /** 浏览器面板开合/放大/浮动对话卡状态镜像（ChatView 上报），驱动标题栏按钮行为与图标 */
-  const [browserUi, setBrowserUi] = useState({ open: false, max: false, float: false })
+  /** 浏览器面板开合/放大/浮动对话卡/对话彻底隐藏（ChatView 上报），驱动标题栏按钮行为与图标 */
+  const [browserUi, setBrowserUi] = useState({ open: false, max: false, float: false, chatHidden: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -458,7 +458,7 @@ export default function App() {
         onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
         browserOpen={browserUi.open}
         browserMax={browserUi.max}
-        floatOpen={browserUi.float}
+        chatHidden={browserUi.chatHidden}
         onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
         onToggleFloat={() => setFloatSignal((v) => v + 1)}
       />

@@ -4,10 +4,10 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Monitor, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -45,8 +45,8 @@ interface Props {
   browserMaxSignal: number
   /** 全屏浏览时标题栏「AI 对话」开关的触发计数（App 转发，收起/展开右下角浮动对话卡） */
   floatToggleSignal: number
-  /** 上报浏览器面板开合与放大状态（驱动标题栏按钮行为与图标） */
-  onBrowserUi: (s: { open: boolean; max: boolean; float: boolean }) => void
+  /** 上报浏览器面板开合、放大、浮动卡与对话彻底隐藏状态（驱动标题栏按钮行为与图标） */
+  onBrowserUi: (s: { open: boolean; max: boolean; float: boolean; chatHidden: boolean }) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -76,6 +76,10 @@ function hostOf(u: string): string {
 /** 任务被中断后的自动重试：间隔 10 秒，最多 10 次；耗尽后交给界面上的手动重试按钮 */
 const RETRY_INTERVAL_MS = 10000
 const RETRY_MAX = 10
+/** 「任务已完成」通报条的停留时长：秒级可扫一眼即可，久留会顶掉聊天区顶部空间 */
+const TURN_DONE_MS = 3000
+/** 通报条退场动画时长（与 CSS .topstat.out 对齐）：动画走完才卸载节点，避免硬切 */
+const TURN_DONE_OUT_MS = 220
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
 
@@ -144,6 +148,39 @@ function metaDiffs(part: Part): FileDiff[] {
     }
   }
   return out
+}
+
+/**
+ * 本轮成果的提供方：从生成类工具的回执里抠出「生图 / 生视频 / 配音由 X 提供」。
+ *
+ * 生成模型是**跨提供商全库查找**的（生图可能落到 A 家、配音落到 B 家），光说「本轮由谁服务」
+ * 交代不了成果是谁出的，所以三个 MCP 脚本在回执开头固定写了归属短句，这里解析出来给状态条用。
+ * 同轮多个成果（先出图再配音）按出现顺序去重，用「 · 」串起来。
+ */
+function toolSources(m: MessageView | undefined): string {
+  if (!m) return ''
+  const kinds: { re: RegExp; tag: string }[] = [
+    { re: /生图由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生图' },
+    { re: /生视频由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生视频' },
+    { re: /配音由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '配音' }
+  ]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const p of m.parts) {
+    if (p.type !== 'tool') continue
+    const raw = String(p.state?.output ?? '')
+    if (!raw) continue
+    for (const k of kinds) {
+      const hit = k.re.exec(raw)
+      if (!hit) continue
+      // 同轮同来源同类型只报一次：视频任务「创建 + 完成」两条回执不要重复刷屏
+      const key = `${k.tag}:${hit[1]}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(`${k.tag}由 ${hit[1]}`)
+    }
+  }
+  return out.join(' · ')
 }
 
 /** 助手消息 → 所属用户消息 id：内核把整轮差量挂在用户消息上，拉差量必须用用户消息 id */
@@ -302,6 +339,17 @@ export function ChatView(p: Props) {
   const [browserMax, setBrowserMax] = useState(false)
   /** 放大时右下角浮动聊天卡是否展开 */
   const [floatOpen, setFloatOpen] = useState(false)
+  /** 全屏时彻底隐藏 AI 对话：浮动卡收起 + 右下角气泡一并消失（打游戏等完全不需要对话的场景） */
+  const [chatHidden, setChatHidden] = useState(false)
+  /**
+   * 本轮结束提示（聊天区上方的状态条）：{ model: 服务的对话模型展示名, media: 成果来源说明, at: 结算时刻 }。
+   * 从 busy 变 false 那一刻由 effect 结算出来；at 用于让「每完成一轮就重新计 3 秒」——
+   * 连续两轮完成时对象引用会变、但 at 变化才是真正要重启定时器的信号。
+   * 提示亮 3 秒自动消失，不等用户手动关。
+   */
+  const [turnDone, setTurnDone] = useState<{ model: string; media: string; at: number } | null>(null)
+  /** 通报条是否已进入退场动画（播放中仍挂载，动画结束才连同节点一起卸载） */
+  const [turnDoneOut, setTurnDoneOut] = useState(false)
   /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
   const [manualBrowser, setManualBrowser] = useState(false)
   /** 面板当前页 URL（含用户手输导航，BrowserPanel 回传）：浏览器对话的上下文锚点 */
@@ -426,6 +474,7 @@ export function ChatView(p: Props) {
     setManualBrowser(false)
     setBrowserMax(false)
     setPinnedUrl('')
+    setChatHidden(false) // 面板都关了，隐藏态一起复位，别再带着回右栏布局
     browserDismissedIn.current = p.sessionId
   }
 
@@ -435,6 +484,7 @@ export function ChatView(p: Props) {
     setManualBrowser(true)
     setBrowserMax(true)
     setFloatOpen(true)
+    setChatHidden(false)
   }
 
   /**
@@ -459,6 +509,8 @@ export function ChatView(p: Props) {
     const next = !browserMax
     setBrowserMax(next)
     if (next) setFloatOpen(true)
+    // 退出全屏：连「彻底隐藏」也一并复位，回到右栏布局时对话必须可见
+    else setChatHidden(false)
   }
 
   /**
@@ -467,6 +519,20 @@ export function ChatView(p: Props) {
    */
   function toggleFloatFromHeader() {
     setFloatOpen((v) => !v)
+    setChatHidden(false) // 手动唤回对话时，把「彻底隐藏」复位，否则气泡被藏住没法再唤回
+  }
+
+  /**
+   * 全屏时「隐藏 AI 对话」（地址栏右侧那颗按钮）：逐级隐藏——对话卡开着就只收卡片
+   * （右下角气泡仍在，点它随时唤回）；对话卡已收起时再点才连气泡一起藏掉，
+   * 这之后由标题栏的「显示 AI 对话」按钮负责唤回。
+   */
+  function hideChat() {
+    if (floatOpen) {
+      setFloatOpen(false)
+      return
+    }
+    setChatHidden(true)
   }
 
   /** 拖动浮动聊天卡（顶部拖拽条）：pointer capture 防止划过 webview 丢事件，松手记住位置 */
@@ -550,6 +616,32 @@ export function ChatView(p: Props) {
   const anyBusy = Object.keys(busySet).some((s) => busySet[s])
   /** 当前会话的自动重试状态（pending=等待下一次重试；无定时器=次数耗尽等手动重试） */
   const retryState = p.sessionId ? retryView[p.sessionId] : undefined
+
+  /**
+   * 本轮结束时结算「任务已完成 · 由 X 服务（生图由 Y 提供）」。
+   *
+   * 用上一帧的 busy 对比本帧：只有 true→false 且**当前会话**才结算（别的会话跑完不该在这里弹）。
+   * 结算时读 msgs 最新一轮的助手消息——服务方取当前对话模型展示名，成果提供方从工具回执里抠。
+   * busy 变 false 与 msgs 落盘不保证同一帧（session.idle 里先 markBusy 再拉历史），
+   * 所以这里等 msgs 里真的出现一条助手消息再结算，避免结算出空内容。
+   */
+  const wasBusy = useRef(false)
+  const lastAidId = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id ?? ''
+  useEffect(() => {
+    const now = busy
+    const ended = wasBusy.current && !now
+    wasBusy.current = now
+    if (!ended || !p.sessionId) return
+    const last = [...msgs].reverse().find((m) => m.info.role === 'assistant')
+    // 用户主动停止（MessageAbortedError）：不算完成，交给重试条与用户自己决定
+    const aborted = (last?.info as unknown as { error?: { name?: string } })?.error?.name === 'MessageAbortedError'
+    if (!last || aborted) return
+    const i = p.model.indexOf('/')
+    const prov = i > 0 ? p.settings.find((x) => x.id === p.model.slice(0, i)) : undefined
+    const mm = i > 0 ? prov?.models.find((x) => x.id === p.model.slice(i + 1)) : undefined
+    setTurnDone({ model: mm?.name || mm?.id || p.model, media: toolSources(last), at: Date.now() })
+    // lastAidId 进依赖：idle 与 msgs 落盘不同帧时，等内容到位后这次 effect 会重跑并结算
+  }, [busy, p.sessionId, lastAidId, msgs, p.model, p.settings])
   // 自动续跑发的「继续」不出用户气泡，统一由尾部「重试 x/10」状态条体现：
   // pending=本轮 runPrompt 是续跑发起的；ids=已确认属于续跑的真实用户消息 id（含别的会话，防止切会话漏隐藏）
   const autoContinuePending = useRef(false)
@@ -593,6 +685,8 @@ export function ChatView(p: Props) {
     )
   /** 当前对话模型看不到画面，但配了视觉模型 → 截图正由视觉模型代看（界面要给个明确交代） */
   const cuVisionAssist = !modelSupportsImage(p.settings, p.model) && hasVisionModel(p.settings)
+  /** 代看那个模型的名字（跟内核挑人同序），横幅里点名，用户才知道是谁在看 */
+  const cuVisionWho = cuVisionAssist ? visionModelName(p.settings) : ''
   /**
    * 桌面控制进行中、或本轮调用过 computer 工具 → 顶部横幅的显示窗口。
    * 进行中要显示（用户得知道键鼠在自己动），本轮用过也要留一会儿（刚操作完的收尾说明）。
@@ -763,20 +857,28 @@ export function ChatView(p: Props) {
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
   // 平台「内置模型」的计价信息（限免/折扣/倍率）一并带过去，二级列表里要打标签、写倍率。
+  //
+  // 这里**只列能当对话用的模型**（生成角色为「对话」且输入含文本）：生图 / 生视频 / 语音
+  // 三类模型不走对话接口，选了这轮必被端点拒绝，它们由工具在对话中按需触发——
+  // 生图、生视频挂 media MCP，语音（音频）挂 tts MCP。放进候选只会让用户白选一次。
   const groups: ModelGroup[] = p.settings
     .filter((x) => x.enabled && x.id && x.models.length)
     .map((c) => ({
       id: c.id,
       label: c.name || c.id,
-      models: c.models.map((m) => ({
-        mid: m.id,
-        name: m.name,
-        free: m.free,
-        discount: m.discount,
-        ratio: m.ratio,
-        effRatio: m.effRatio
-      }))
+      models: c.models
+        .filter((m) => genRoleOf(m) === 'none' && (m.input ?? MODEL_DEFAULTS.input).includes('text'))
+        .map((m) => ({
+          mid: m.id,
+          name: m.name,
+          free: m.free,
+          discount: m.discount,
+          ratio: m.ratio,
+          effRatio: m.effRatio
+        }))
     }))
+    // 组内一个可对话模型都没有的提供商直接不显示，免得点进去是空列
+    .filter((g) => g.models.length > 0)
 
   /** 自动换模型链路里已试过的模型（按会话记账）：新发送重置，避免 A↔B 来回弹跳 */
   const fallbackTried = useRef<Record<string, string[]>>({})
@@ -1099,7 +1201,7 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserMaxSignal])
 
-  // 全屏时标题栏「AI 对话」按钮：收起/展开右下角浮动聊天卡
+  // 全屏时标题栏「AI 对话」按钮：彻底隐藏后点它把对话（含右下角气泡）找回来
   useEffect(() => {
     if (p.floatToggleSignal > 0) toggleFloatFromHeader()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1107,9 +1209,9 @@ export function ChatView(p: Props) {
 
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
-    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax, float: floatOpen })
+    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax, float: floatOpen, chatHidden })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserOpen, manualBrowser, browserMax, floatOpen])
+  }, [browserOpen, manualBrowser, browserMax, floatOpen, chatHidden])
 
   // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
   useEffect(() => {
@@ -1433,6 +1535,8 @@ export function ChatView(p: Props) {
   async function runPrompt(text: string, sidOverride?: string, dirOverride?: string, modelOverride?: ModelSel, attsOverride?: Attachment[]) {
     // 新执行一律先清上一条错误：否则换话题/换模型续跑时，旧错误气泡会赖在对话尾部
     setError('')
+    // 新一轮开始：上一轮的「任务已完成」提示功成身退，不然它会一直挂在那儿骗人
+    setTurnDone(null)
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
@@ -1624,6 +1728,24 @@ export function ChatView(p: Props) {
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
+  // 「任务已完成」是收尾通报，不是待办事项：亮 3 秒自己退场，别一直占着聊天窗口上方。
+  // 两段时间线：0~3000ms 亮着 → 3000ms 切成退场动画（topstat-out，仍占位，只做淡出）
+  // → 3220ms 真正卸载节点、槽位高度收回。
+  // 只对 turnDone 生效——中断重试条要一直挂着，用户得能点「取消重试」。
+  const turnDoneAt = turnDone?.at ?? 0
+  useEffect(() => {
+    if (!turnDone) {
+      setTurnDoneOut(false)
+      return
+    }
+    const t1 = setTimeout(() => setTurnDoneOut(true), TURN_DONE_MS)
+    const t2 = setTimeout(() => setTurnDone(null), TURN_DONE_MS + TURN_DONE_OUT_MS)
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [turnDone, turnDoneAt])
+
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
@@ -1646,6 +1768,24 @@ export function ChatView(p: Props) {
             </button>
           </div>
         </>
+      )}
+      {/* 任务完成通报：嵌在消息流上方、输入框以上，撑高自己的一条，不走绝对定位浮层。
+          放这里是因为它是「聊天窗口上方」的收尾状态，用户视线从最后一条回复抬头就能看到；
+          3 秒后自动退场（定时器见上方 effect），高度收回、消息流不跳动。
+          重试条仍然走下面的浮层：它要压住消息流顶端，不能挤走用户的阅读位置。 */}
+      {!retryState && turnDone && (
+        <div className="doneline">
+          <div className={'topstat done ' + (turnDoneOut ? 'out' : 'in')}>
+            <Check size={13} />
+            <span>
+              任务已完成 · 由 {turnDone.model} 服务
+              {turnDone.media && <em>（{turnDone.media}）</em>}
+            </span>
+            <button className="icon-btn" title="关闭" onClick={() => setTurnDone(null)}>
+              <X size={13} />
+            </button>
+          </div>
+        </div>
       )}
       <div
         className="msgs"
@@ -1724,7 +1864,11 @@ export function ChatView(p: Props) {
             <div className="amsg">
               <div className="msgnotice">
                 <Info size={13} />{' '}
-                <span>桌面控制要看屏幕截图，但当前模型不支持图片输入、设置里也没有可用的视觉模型，AI 这轮看不到屏幕。请在 设置 → 模型 给带视觉能力的模型勾选「图片」输入后再让它操作电脑。</span>
+                <span>
+                  桌面控制要看屏幕截图，但<strong>没有任何模型能做视觉代看</strong>，AI 这轮看不到屏幕。
+                  请到 设置 → 模型，给有识图能力的模型勾上输入类型里的「视觉」（可与「图片」一起勾），
+                  它就会在控制电脑时替对话模型看画面。
+                </span>
               </div>
             </div>
           )}
@@ -1739,7 +1883,8 @@ export function ChatView(p: Props) {
                     {desktopCtl
                       ? '鼠标和键盘由 AI 操作中，请不要碰键鼠，以免打断它。'
                       : '刚才的操作使用过鼠标和键盘。'}
-                    {cuVisionAssist && ' 当前模型看不了画面，截图已交给视觉模型代看。'}
+                    {cuVisionAssist &&
+                      ` 当前模型看不了画面，截图已交给视觉模型${cuVisionWho ? `「${cuVisionWho}」` : ''}代看。`}
                   </span>
                 </div>
               </div>
@@ -1765,24 +1910,6 @@ export function ChatView(p: Props) {
               )}
             </div>
           )}
-          {retryState?.pending && (
-            <div className="amsg retrystatus">
-              <LoaderCircle size={13} className="spin" />
-              <span>任务已中断，{RETRY_INTERVAL_MS / 1000} 秒后自动重试（第 {retryState.count}/{RETRY_MAX} 次）</span>
-              <button className="icon-btn" title="取消自动重试" onClick={() => cancelRetry(p.sessionId)}>
-                <X size={13} />
-              </button>
-            </div>
-          )}
-          {retryState && !retryState.pending && (
-            <div className="amsg retryfail">
-              <AlertCircle size={13} />
-              <span>已自动重试 {RETRY_MAX} 次仍未完成，点右侧按钮让 AI 继续处理</span>
-              <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
-                <RotateCw size={13} /> 重试
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -1791,6 +1918,39 @@ export function ChatView(p: Props) {
           <button className="jump" title="回到底部" onClick={jumpBottom}>
             <ArrowDown size={16} />
           </button>
+        </div>
+      )}
+
+      {/* 中断重试条：浮在消息流顶部居中。
+          刻意不放在消息流里——流式输出时它会跟着内容一起滚走，用户根本看不到；
+          浮在顶部固定位置，一眼就能扫到"正在重试第几次"。
+          （「任务已完成」不在这里，走上面的 .doneline 嵌条：它 3 秒就退场，不必压住阅读位置。） */}
+      {retryState && (
+        <div className="topstat-wrap">
+          {retryState.pending && (
+            <div className="topstat retry in">
+              <LoaderCircle size={13} className="spin" />
+              <span>
+                任务已中断 · 重试 {retryState.count}/{RETRY_MAX}
+                <em>{RETRY_INTERVAL_MS / 1000} 秒后自动重试</em>
+              </span>
+              <button className="icon-btn" title="取消自动重试" onClick={() => cancelRetry(p.sessionId)}>
+                <X size={13} />
+              </button>
+            </div>
+          )}
+          {!retryState.pending && (
+            <div className="topstat retry fail in">
+              <AlertCircle size={13} />
+              <span>
+                已自动重试 {RETRY_MAX}/{RETRY_MAX} 次仍未完成
+                <em>可点右侧按钮让 AI 接着处理</em>
+              </span>
+              <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
+                <RotateCw size={13} /> 重试
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1953,9 +2113,20 @@ export function ChatView(p: Props) {
       </div>
     </main>
     {(browserOpen || manualBrowser) && (
-      <BrowserPanel url={pinnedUrl || browserView.url} navSeq={pinSeq} max={browserMax} slot={tbSlot} onUrl={setPanelUrl} marks={marks} onToggleMark={toggleMark} />
+      <BrowserPanel
+        url={pinnedUrl || browserView.url}
+        navSeq={pinSeq}
+        max={browserMax}
+        slot={tbSlot}
+        onUrl={setPanelUrl}
+        marks={marks}
+        onToggleMark={toggleMark}
+        chatHidden={chatHidden}
+        onHideChat={hideChat}
+      />
     )}
-    {browserMax && (
+    {/* 全屏 + 对话未彻底隐藏时才留这颗气泡；藏掉后由标题栏「AI 对话」按钮负责唤回 */}
+    {browserMax && !chatHidden && (
       <button
         ref={fabRef}
         className="chat-fab"
@@ -1971,7 +2142,7 @@ export function ChatView(p: Props) {
   )
 }
 /** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
-function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark }: {
+function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onHideChat }: {
   url: string
   /** 用户点链开面板的计数：变化时即使地址相同也强制重新导航 */
   navSeq: number
@@ -1981,6 +2152,10 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark }: {
   onUrl: (u: string) => void
   marks: Bookmark[]
   onToggleMark: (url: string, title: string) => void
+  /** AI 对话是否已被彻底隐藏（连右下角气泡一起藏掉）：决定地址栏那颗按钮的图标与提示 */
+  chatHidden: boolean
+  /** 彻底隐藏 AI 对话：收起浮动卡并藏掉右下角气泡 */
+  onHideChat: () => void
 }) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
@@ -2094,6 +2269,17 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark }: {
       >
         <Star size={14} fill={starred ? 'currentColor' : 'none'} />
       </button>
+      {/* 全屏时才显示：紧跟地址栏，一键把 AI 对话彻底藏起来（连右下角气泡一起） */}
+      {max && (
+        <button
+          className="icon-btn bp-hide-chat"
+          title={chatHidden ? 'AI 对话已隐藏（点标题栏「AI 对话」按钮可重新显示）' : '隐藏 AI 对话（连右下角气泡一起藏起来）'}
+          onClick={onHideChat}
+          disabled={chatHidden}
+        >
+          <MessageCircleOff size={15} />
+        </button>
+      )}
     </div>
   )
 
