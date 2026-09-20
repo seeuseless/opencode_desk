@@ -19,7 +19,7 @@ export interface SettingsReq {
   tick: number
 }
 
-/** 输入类型可选项（输出固定为文本，无需配置） */
+/** 输入类型可选项（输出恒为文本，不对外暴露配置项） */
 const MODALITY_LABELS: { key: Modality; label: string }[] = [
   { key: 'text', label: '文本' },
   { key: 'image', label: '图片' },
@@ -142,8 +142,8 @@ function defaultModelCfg(): Omit<ModelCfg, 'id'> {
 /** 每个模型的生成角色（写进 ModelCfg.gen）：'auto' 按模型名判，其余是用户显式指定 */
 const GEN_LABELS: { key: GenKind; label: string; tip: string }[] = [
   { key: 'auto', label: '自动', tip: '按模型名判：名字带 image / video / tts / flux 等算生成模型' },
-  { key: 'image', label: '生图', tip: '只认生图接口（文生图 /images/generations，改图 /images/edits），挂给生图工具，当对话模型用必被拒' },
-  { key: 'video', label: '生视频', tip: '只认异步 /videos 任务，挂给生视频工具，当对话模型用必被拒' },
+  { key: 'image', label: '图片', tip: '只认生图接口（文生图 /images/generations，改图 /images/edits），挂给生图工具，当对话模型用必被拒' },
+  { key: 'video', label: '视频', tip: '只认异步 /videos 任务，挂给生视频工具，当对话模型用必被拒' },
   { key: 'tts', label: '语音', tip: '只认语音合成接口（/audio/speech，MiMo 那类走 chat 带 audio 参数），挂给配音工具，当对话模型用必被拒' },
   { key: 'none', label: '对话', tip: '强制按对话模型处理：名字像生图也不拿去出图' }
 ]
@@ -161,12 +161,6 @@ function presetModelPatch(id: string, input?: Modality[]): Pick<ModelCfg, 'gen' 
   return { gen: 'auto', input: input ?? [...MODEL_DEFAULTS.input] }
 }
 
-/** 模板的生成能力角标文案：与 presetModelPatch 同一套判定，两处说的必须是同一件事 */
-function presetGenText(models: string[]): string {
-  const roles = new Set(models.map((id) => presetModelPatch(id).gen))
-  return [roles.has('image') && '生图', roles.has('video') && '生视频', roles.has('tts') && '语音'].filter(Boolean).join('/')
-}
-
 /** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
 const PROVIDER_PRESETS: {
   id: string
@@ -175,12 +169,16 @@ const PROVIDER_PRESETS: {
   models: string[]
   /** 官方文档写明的输入模态（键=模型 ID）：模板里替用户勾好，否则桌面控制/识图/看视频用不上 */
   input?: Record<string, Modality[]>
+  /** 生视频任务查询地址模板（带生视频模型的模板预填，省得用户去查文档） */
+  videoPoll?: string
 }[] = [
   {
     id: 'agnes',
     name: 'agnes',
     baseURL: 'https://api.agnes-ai.cn/v1',
-    models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash']
+    models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash'],
+    // agnes 的进度查询不在标准 /videos/{id} 上，而在同源 /agnesapi 上按查询参数问（与 media-mcp 内置兜底同形）
+    videoPoll: '{origin}/agnesapi?video_id={video_id}&model_name={model}'
   },
   {
     id: 'mimo',
@@ -302,7 +300,8 @@ export function SettingsView(p: Props) {
       baseURL: cur?.baseURL ?? t.baseURL,
       apiKey: '',
       modelsText: ids.join('\n'),
-      videoPoll: cur?.videoPoll ?? '',
+      // 已存过的配置带出现有值；全新填写时用模板预填的查询地址（agnes 这类非标准端点省得用户去查文档）
+      videoPoll: cur?.videoPoll ?? t.videoPoll ?? '',
       cfgs
     })
     setFormMsg({ text: '已填充模板，请填写 API Key', bad: false })
@@ -819,21 +818,16 @@ export function SettingsView(p: Props) {
           {draft.isNew && (
             <div className="preset-row">
               <span className="preset-lab">快速填充</span>
-              {PROVIDER_PRESETS.map((t) => {
-                const gen = presetGenText(t.models)
-                return (
-                  <button
-                    type="button"
-                    key={t.id}
-                    className={'preset-chip' + (draft.id === t.id ? ' on' : '')}
-                    title={gen ? '模板自带' + gen + '模型，出图出片由生成工具完成' : undefined}
-                    onClick={() => applyPreset(t.id)}
-                  >
-                    {t.name}
-                    {gen && <span className="preset-badge">{gen}</span>}
-                  </button>
-                )
-              })}
+              {PROVIDER_PRESETS.map((t) => (
+                <button
+                  type="button"
+                  key={t.id}
+                  className={'preset-chip' + (draft.id === t.id ? ' on' : '')}
+                  onClick={() => applyPreset(t.id)}
+                >
+                  {t.name}
+                </button>
+              ))}
               <button
                 type="button"
                 className="preset-chip"
@@ -902,8 +896,8 @@ export function SettingsView(p: Props) {
           {parseModels(draft.modelsText).length > 0 && (
             <div className="model-cfgs">
               <div className="model-cfgs-tip">
-                每个模型的上下文窗口、最大输出（token）、输入类型、生成角色与思考形态；输出固定为文本。
-                标为「生图 / 生视频」的模型不进对话候选，由生成工具调用
+                每个模型的上下文窗口、最大输出（token）、输入类型、生成角色与思考形态。
+                标为「生图 / 生视频 / 语音」的模型不进对话候选，由对应工具调用；输出恒为文本，无需配置
               </div>
               {parseModels(draft.modelsText).map((mid) => {
                 const c = cfgOf(mid)
@@ -911,7 +905,6 @@ export function SettingsView(p: Props) {
                   <div className="model-cfg" key={mid}>
                     <div className="model-cfg-head">
                       <span className="model-cfg-name">{mid}</span>
-                      <span className="model-cfg-out">输出：文本</span>
                     </div>
                     <div className="model-cfg-row">
                       <label>
@@ -945,21 +938,7 @@ export function SettingsView(p: Props) {
                           </button>
                         ))}
                       </div>
-                      <div className="model-cfg-in">
-                        生成
-                        {GEN_LABELS.map((g) => (
-                          <button
-                            key={g.key}
-                            type="button"
-                            className={'iochip' + ((c.gen ?? 'auto') === g.key ? ' on' : '')}
-                            title={g.tip}
-                            onClick={() => updateCfg(mid, { gen: g.key })}
-                          >
-                            {g.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="model-cfg-in">
+                      <div className="model-cfg-in sep">
                         思考
                         {THINK_LABELS.map((t) => (
                           <button
@@ -970,6 +949,20 @@ export function SettingsView(p: Props) {
                             onClick={() => updateCfg(mid, { thinking: t.key })}
                           >
                             {t.label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="model-cfg-in gen">
+                        生成
+                        {GEN_LABELS.map((g) => (
+                          <button
+                            key={g.key}
+                            type="button"
+                            className={'iochip' + ((c.gen ?? 'auto') === g.key ? ' on' : '')}
+                            title={g.tip}
+                            onClick={() => updateCfg(mid, { gen: g.key })}
+                          >
+                            {g.label}
                           </button>
                         ))}
                       </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -16,7 +16,6 @@ import {
 } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
-import { load, save } from '../store'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
 
 export interface Project {
@@ -70,14 +69,18 @@ interface Props {
 }
 
 export function Sidebar(p: Props) {
-  /** 每个文件夹「已显示会话条数」——持久化，重启后记住；点「显示更多会话」每次 +5 */
-  const [shownCount, setShownCount] = useState<Record<string, number>>(() => load('qingniao.sessShown', {}))
+  /**
+   * 每个文件夹「已显示会话条数」，点「显示更多会话」每次 +5。
+   *
+   * **刻意不持久化**：会话列表是「最近几条」的用途，展开状态属于当下这一次浏览的心智，
+   * 存到磁盘的后果是——用户某次点开看多了的目录，下次重启还是长长一列，
+   * 而他要的是「一打开就只看到最近 5 个」。所以每次启动都从 5 开始。
+   */
+  const [shownCount, setShownCount] = useState<Record<string, number>>({})
   const [confirmDel, setConfirmDel] = useState<Project | null>(null)
   const [confirmDelSess, setConfirmDelSess] = useState<{ proj: Project; sess: Session } | null>(null)
   /** 项目行右键菜单（自绘，位置跟鼠标）；记录坐标与目标项目 */
   const [menu, setMenu] = useState<{ x: number; y: number; proj: Project } | null>(null)
-
-  useEffect(() => save('qingniao.sessShown', shownCount), [shownCount])
 
   function openMenu(proj: Project, e: React.MouseEvent): void {
     e.preventDefault()
