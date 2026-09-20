@@ -104,7 +104,7 @@ function VideoEmbed({ source }: { source: string }) {
   )
 }
 
-const BARE_NAME_RE = /^[^\s/\\]+\.(png|jpe?g|gif|webp|bmp|avif)$/i
+const BARE_NAME_RE = /^[^\s/\\]+\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
 
 // 本地图片 data URL 缓存：路径唯一（每次生成新文件名），命中即同步出图，
 // 组件重挂载/跨消息引用同一文件时不再「空白→重读→闪现」
@@ -233,14 +233,14 @@ function MdLink(props: {
 const CODE_SPLIT = /(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/
 const MEDIA_TOKEN =
   /!\[([^\]]*)\]\(<([^>]+)>\)|!\[([^\]]*)\]\(([^)\s]+)\)|\[([^\]]*)\]\(<([^>]+)>\)|\[([^\]]*)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>"'）\]】，。；：！？]+)/g
-const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|mp4|webm|mov|m4v|avi)(\?|#|$)/i
+const MEDIA_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg|mp4|webm|mov|m4v|avi)(\?|#|$)/i
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|avif|svg)$/i
 // 本地图路径：只认盘符/UNC/file:// 三种开头；前面不能紧跟字母数字，避免把 https 里的 "s:/" 当盘符
 const BARE_LOCAL_IMG =
-  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:png|jpe?g|gif|webp|bmp|avif)(?![a-zA-Z0-9])'
+  '(?<![a-zA-Z0-9])(?:file:\\/\\/\\/|[a-zA-Z]:[\\\\/]|\\\\\\\\)[^\\s`\'"<>|，。；：！？（）「」“”《》*?]*\\.(?:png|jpe?g|gif|webp|bmp|avif|svg)(?![a-zA-Z0-9])'
 // 裸图片文件名（无目录）：模型转述「本地文件：xxx.png」常剥掉目录，主进程按媒体目录兜底解析
 const BARE_IMG_NAME =
-  '(?<![a-zA-Z0-9_./\\\\-])[^\\s`\'"<>|，。；：！？（）「」“”《》*?:/\\\\]+\\.(?:png|jpe?g|gif|webp|bmp|avif)(?![a-zA-Z0-9])'
+  '(?<![a-zA-Z0-9_./\\\\-])[^\\s`\'"<>|，。；：！？（）「」“”《》*?:/\\\\]+\\.(?:png|jpe?g|gif|webp|bmp|avif|svg)(?![a-zA-Z0-9])'
 const LOCAL_IMG_RE = new RegExp(`${BARE_LOCAL_IMG}|${BARE_IMG_NAME}`, 'gi')
 const LOCAL_IMG_ONE = new RegExp('^(?:' + BARE_LOCAL_IMG + '|' + BARE_IMG_NAME + ')$', 'i')
 // 媒体 token 优先整体消费，剩下的才按裸本地路径/裸文件名处理
