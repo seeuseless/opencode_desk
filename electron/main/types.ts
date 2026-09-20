@@ -5,8 +5,15 @@ export type Modality = 'text' | 'image' | 'video'
 
 export const MODALITIES: Modality[] = ['text', 'image', 'video']
 
-/** 新模型的默认接入参数：上下文窗口 100 万、最大输出 128K、输入不限 */
-export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: [...MODALITIES] }
+/**
+ * 新模型的默认接入参数：上下文窗口 100 万、最大输出 128K、**输入只勾文本**。
+ *
+ * 图片/视频不默认勾：绝大多数模型（含大量号称多模态的）实际吃不了图，默认全勾会把
+ * 伪视觉模型灌进识图 MCP 的目标清单（靠 NO_IMAGE 逐试兜底，白白浪费一轮），
+ * 也会让内核误以为模型能读图。真支持的需要用户在该模型上显式勾一次，勾选即生效。
+ * 生成类模型不受影响：生图/生视频/识图目标另按模型名正则挑，不依赖这个勾选。
+ */
+export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: ['text'] as Modality[] }
 
 /** 单个模型的接入参数，写入内核 opencode.json 的 limit / modalities */
 export interface ModelCfg {

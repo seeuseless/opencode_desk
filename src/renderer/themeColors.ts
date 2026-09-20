@@ -75,7 +75,8 @@ export function deriveVars(c: CustomColors): Record<string, string> {
   const sideLight = luminance(hexToRgb(c.sideBg)) >= 0.45
   const sideFg = sideLight ? '#1f232b' : '#ffffff'
 
-  const user = mix(c.accent, content, 0.32)
+  // 用户气泡统一白底（与内置主题一致）：深色字保证可读
+  const user = '#ffffff'
   const onUser = luminance(hexToRgb(user)) >= 0.5 ? '#1c2129' : '#ffffff'
 
   return {

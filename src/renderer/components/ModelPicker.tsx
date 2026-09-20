@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, LoaderCircle, Sparkles } from 'lucide-react'
 
 export interface ModelGroupModel {
@@ -46,10 +46,18 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const sub = useRef<HTMLDivElement>(null)
+  /** 二级列顶边相对面板顶边的偏移 = 被点中那一行的位置（见下方 useLayoutEffect 说明） */
+  const [subTop, setSubTop] = useState(0)
+  /** 夹回窗口内的二次修正量：长列表展开后可能顶出屏幕上下沿 */
+  const [subShift, setSubShift] = useState(0)
 
   useEffect(() => {
     if (!open) return
     setExpanded('')
+    setSubTop(0)
+    setSubShift(0)
     const onDown = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false)
     }
@@ -69,6 +77,22 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
         : '选择模型'
   const active = groups.find((g) => g.id === expanded)
 
+  /**
+   * 二级模型列**浮在面板左侧**，顶边必须跟被点中的一级行对齐：
+   * 写死 top:0 会让它永远贴着列表顶部——选中的提供商在下面几行时，模型列就飘到老远的地方去了。
+   * 对齐后再夹一次：面板是向上展开的，模型一多容易顶出窗口上/下沿。
+   */
+  useLayoutEffect(() => {
+    const el = sub.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const pad = 8
+    let d = 0
+    if (r.bottom > window.innerHeight - pad) d = window.innerHeight - pad - r.bottom
+    if (r.top + d < pad) d = pad - r.top
+    if (Math.abs(d) > 0.5) setSubShift((s) => s + d)
+  }, [expanded, active?.models.length])
+
   return (
     <div className="menu-wrap mp" ref={wrap}>
       <button type="button" className="menu-trigger mp" onClick={() => setOpen((v) => !v)}>
@@ -77,15 +101,21 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
       </button>
       {open && (
-        <div className="menu-panel mp up">
+        <div className="menu-panel mp up" ref={panel}>
           <div className="mp-col">
             {groups.map((g) => (
               <button
                 key={g.id}
                 type="button"
                 className={'mp-item' + (g.id === active?.id ? ' on' : '')}
-                onClick={() => {
+                onClick={(e) => {
                   const willExpand = active?.id !== g.id
+                  const p = panel.current
+                  // 用 rect 差值而不是 offsetTop：offsetParent 与 padding 的口径容易算错，rect 是屏幕实测值
+                  setSubTop(
+                    willExpand && p ? e.currentTarget.getBoundingClientRect().top - p.getBoundingClientRect().top : 0
+                  )
+                  setSubShift(0)
                   setExpanded(willExpand ? g.id : '')
                   if (willExpand) onExpandGroup?.(g.id)
                 }}
@@ -110,12 +140,12 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
             </button>
           </div>
           {active && active.models.length > 0 && (
-            <div className="mp-col2-float">
+            <div className="mp-col2-float" ref={sub} style={{ top: subTop + subShift }}>
               {active.models.map((m) => (
                 <button
                   key={m.mid}
                   type="button"
-                  className="mp-item mp-model"
+                  className={'mp-item mp-model' + (`${active.id}/${m.mid}` === value ? ' on' : '')}
                   onClick={() => {
                     onChange(`${active.id}/${m.mid}`)
                     setOpen(false)
