@@ -151,18 +151,23 @@ function metaDiffs(part: Part): FileDiff[] {
 }
 
 /**
- * 本轮成果的提供方：从生成类工具的回执里抠出「生图 / 生视频 / 配音由 X 提供」。
+ * 本轮成果的提供方：从生成类工具的回执里抠出「生图 / 生视频 / 配音 / 音乐 / 识别由 X 提供」。
  *
  * 生成模型是**跨提供商全库查找**的（生图可能落到 A 家、配音落到 B 家），光说「本轮由谁服务」
- * 交代不了成果是谁出的，所以三个 MCP 脚本在回执开头固定写了归属短句，这里解析出来给状态条用。
+ * 交代不了成果是谁出的，所以各 MCP 脚本在回执开头固定写了归属短句，这里解析出来给状态条用。
  * 同轮多个成果（先出图再配音）按出现顺序去重，用「 · 」串起来。
+ *
+ * 归属句是**各 MCP 脚本自己写的**，正则要跟着脚本同步：
+ * 加新工具时在对应脚本的回执里写上「<类型>由 <提供方> 提供」，再来这里加一条。
  */
-function toolSources(m: MessageView | undefined): string {
+function toolSources(m: MessageView | undefined, visionWho?: string): string {
   if (!m) return ''
   const kinds: { re: RegExp; tag: string }[] = [
     { re: /生图由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生图' },
     { re: /生视频由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生视频' },
-    { re: /配音由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '配音' }
+    { re: /配音由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '配音' },
+    { re: /音乐由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '音乐' },
+    { re: /识别由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '识别' }
   ]
   const seen = new Set<string>()
   const out: string[] = []
@@ -179,6 +184,22 @@ function toolSources(m: MessageView | undefined): string {
       seen.add(key)
       out.push(`${k.tag}由 ${hit[1]}`)
     }
+  }
+  /**
+   * 视觉代看：不是「成果」，是真的换了个模型在干这轮的活，必须说清楚。
+   *
+   * 这条不走回执解析 —— screen MCP 的返回里只写"画面内容"，不提是谁看的，
+   * 代看人由主进程按三级优先挑（见 config.ts 的 pickVision），所以名字从
+   * 渲染层已算好的 visionWho 拿，跟顶部横幅点名的是同一个人。
+   *
+   * 只在本轮真的调过 computer 时才算：配了视觉模型但压根没用桌面控制，
+   * 报「视觉由 X 提供」会让人以为它干了活。
+   */
+  if (visionWho) {
+    const usedComputer = m.parts.some(
+      (p) => p.type === 'tool' && (p.tool ?? '').toLowerCase().includes('computer')
+    )
+    if (usedComputer) out.push(`视觉由 ${visionWho}`)
   }
   return out.join(' · ')
 }
@@ -618,6 +639,16 @@ export function ChatView(p: Props) {
   const retryState = p.sessionId ? retryView[p.sessionId] : undefined
 
   /**
+   * 视觉代看人：当前对话模型看不到画面、但配置里有视觉模型 → 截图是由**另一个**模型看的。
+   *
+   * 提前算（下面的结算 effect 要用）：它只依赖 props，与 msgs 无关，放前面没有副作用。
+   * 名字跟内核挑人同序（visionModelName 与主进程 pickVision 同口径），
+   * 顶部横幅和结束时的「视觉由 X 提供」点的是同一个人。
+   */
+  const modelSeesImage = modelSupportsImage(p.settings, p.model)
+  const visionWho = !modelSeesImage ? visionModelName(p.settings) : ''
+
+  /**
    * 本轮结束时结算「任务已完成 · 由 X 服务（生图由 Y 提供）」。
    *
    * 用上一帧的 busy 对比本帧：只有 true→false 且**当前会话**才结算（别的会话跑完不该在这里弹）。
@@ -639,9 +670,9 @@ export function ChatView(p: Props) {
     const i = p.model.indexOf('/')
     const prov = i > 0 ? p.settings.find((x) => x.id === p.model.slice(0, i)) : undefined
     const mm = i > 0 ? prov?.models.find((x) => x.id === p.model.slice(i + 1)) : undefined
-    setTurnDone({ model: mm?.name || mm?.id || p.model, media: toolSources(last), at: Date.now() })
+    setTurnDone({ model: mm?.name || mm?.id || p.model, media: toolSources(last, visionWho), at: Date.now() })
     // lastAidId 进依赖：idle 与 msgs 落盘不同帧时，等内容到位后这次 effect 会重跑并结算
-  }, [busy, p.sessionId, lastAidId, msgs, p.model, p.settings])
+  }, [busy, p.sessionId, lastAidId, msgs, p.model, p.settings, visionWho])
   // 自动续跑发的「继续」不出用户气泡，统一由尾部「重试 x/10」状态条体现：
   // pending=本轮 runPrompt 是续跑发起的；ids=已确认属于续跑的真实用户消息 id（含别的会话，防止切会话漏隐藏）
   const autoContinuePending = useRef(false)
@@ -678,15 +709,15 @@ export function ChatView(p: Props) {
    * 判定用「配置里没有任何视觉模型」：一个都没有才真的没眼睛。
    */
   const cuBlind =
-    !modelSupportsImage(p.settings, p.model) &&
+    !modelSeesImage &&
     hasVisionModel(p.settings) === false &&
     !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
       (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
     )
   /** 当前对话模型看不到画面，但配了视觉模型 → 截图正由视觉模型代看（界面要给个明确交代） */
-  const cuVisionAssist = !modelSupportsImage(p.settings, p.model) && hasVisionModel(p.settings)
+  const cuVisionAssist = !modelSeesImage && hasVisionModel(p.settings)
   /** 代看那个模型的名字（跟内核挑人同序），横幅里点名，用户才知道是谁在看 */
-  const cuVisionWho = cuVisionAssist ? visionModelName(p.settings) : ''
+  const cuVisionWho = cuVisionAssist ? visionWho : ''
   /**
    * 桌面控制进行中、或本轮调用过 computer 工具 → 顶部横幅的显示窗口。
    * 进行中要显示（用户得知道键鼠在自己动），本轮用过也要留一会儿（刚操作完的收尾说明）。
@@ -2514,13 +2545,22 @@ function upsertPart(
 function Collapsible({
   children,
   maxPx,
-  forceText
+  forceText,
+  live
 }: {
   children: ReactNode
   /** 折叠阈值（px） */
   maxPx: number
   /** 判定用纯文本；不传则只看高度 */
   forceText?: string
+  /**
+   * 这条正文正在流式输出。
+   *
+   * 流式中**一律不折叠**：文字一长过阈值就立刻塌成「展开全文」条，用户正读着的那段
+   * 突然消失、接着新文字又冒出来，看起来就是"回复中间断出空白又继续输出"。
+   * 等这轮结束（live 转 false）再按高度折叠，用户读的是连续的整段。
+   */
+  live?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [over, setOver] = useState(false)
@@ -2529,8 +2569,9 @@ function Collapsible({
   useEffect(() => {
     const el = ref.current
     if (el) setOver(el.scrollHeight > maxPx + 8)
-  }, [forceText, maxPx])
-  const clipped = over && !open
+  }, [forceText, maxPx, live])
+  // 流式中不裁：over 照常算（结束后按钮立刻可用），但这一帧不套 maxHeight
+  const clipped = over && !open && !live
   return (
     <div className="cbl">
       <div
@@ -2540,7 +2581,9 @@ function Collapsible({
       >
         {children}
       </div>
-      {over && (
+      {/* 「展开全文」按钮流式中也不显示：它一出现就说明正文被裁，而这时并没裁，
+          摆一颗点了没反应的按钮只会让人困惑 */}
+      {over && !live && (
         <button className="cbl-toggle" onClick={() => setOpen((v) => !v)}>
           <ChevronDown size={12} className={open ? 'up' : undefined} />
           {open ? '收起' : '展开全文'}
@@ -2951,7 +2994,7 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
       )
     }
     return (
-      <Collapsible maxPx={520} forceText={part.text}>
+      <Collapsible maxPx={520} forceText={part.text} live={live}>
         <Markdown text={part.text} />
       </Collapsible>
     )
