@@ -414,11 +414,55 @@ input, textarea { font: inherit; }
 :root[data-theme='light'] .md pre,
 :root[data-theme='light'] .md code { background: var(--ai); }
 .amsg.busyline { display: flex; align-items: center; gap: 7px; color: var(--fg2); font-size: 13px; }
-/* 中断自动重试状态行：等待重试（灰）/ 次数耗尽待手动重试（红） */
-.amsg.retrystatus, .amsg.retryfail {
-  display: flex; align-items: center; gap: 7px; color: var(--fg2); font-size: 12.5px;
+/* 任务完成通报条：消息流之上、输入框以上的一条实心槽位（参与布局，不是浮层）。
+   放这儿是因为它是「聊天窗口上方」的收尾状态——用户从最后一条回复抬头即见；
+   3 秒后由定时器收起，槽位随内容消失、高度自然收回，消息流不跳动。 */
+.doneline {
+  flex: none;
+  display: flex; justify-content: center;
+  padding: 8px 24px 2px;
+  background: var(--content);
 }
-.amsg.retryfail { color: var(--err); }
+/* 这行文案不省略号截断：它是一次性通报，宁可占两行说完（「由谁服务 + 成果来源」） */
+.doneline .topstat span { white-space: normal; text-align: center; }
+/* 中断重试状态条容器：不参与消息流布局（消息流照常从顶部滚），
+   浮在它上面，一眼扫得到"正在重试第几次" */
+.topstat-wrap {
+  position: absolute; top: 10px; left: 0; right: 0;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  pointer-events: none; z-index: 20;
+}
+.topstat {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 7px;
+  max-width: min(560px, calc(100% - 32px));
+  padding: 5px 6px 5px 11px;
+  border-radius: 999px;
+  background: var(--bg2); border: 1px solid var(--line);
+  box-shadow: 0 3px 14px rgba(0, 0, 0, .10);
+  color: var(--fg2); font-size: 12.5px;
+}
+.topstat span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topstat em { color: var(--fg2); opacity: .8; font-style: normal; margin-left: 5px; }
+/* 任务完成：绿意点缀（浅色主题下用低饱和的绿，不刺眼） */
+.topstat.done { color: var(--fg); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.topstat.done > svg { color: var(--ok); flex: none; }
+/* 重试中（灰，带转圈）/ 次数耗尽（红） */
+.topstat.retry > svg { color: var(--fg2); flex: none; }
+.topstat.retry.fail { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+.topstat.retry.fail > svg { color: var(--err); flex: none; }
+.topstat .icon-btn { flex: none; width: 20px; height: 20px; }
+/* 通报条生命周期动画：进场从上滑入，退场向上淡出（退场在动画结束后才由 JS 卸载节点） */
+.topstat.in { animation: topstat-in .18s ease-out; }
+.topstat.out { animation: topstat-out .22s ease-in forwards; }
+@keyframes topstat-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes topstat-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-6px); }
+}
 .retrybtn {
   display: inline-flex; align-items: center; gap: 5px;
   background: var(--bg3); color: var(--fg); border: none; border-radius: 8px; padding: 4px 10px; font-size: 12px;
@@ -935,6 +979,9 @@ input, textarea { font: inherit; }
   border-radius: 8px; padding: 7px 12px; font-size: 13px;
 }
 .ghost:hover { color: var(--fg); filter: brightness(1.15); }
+/* 小号 ghost：列表行内操作按钮用（「编辑」这类），比常规按钮矮一档才不撑高行。
+   圆角跟 .model-row 的 12px 差一档取 9px，视觉上贴合行内缩进 */
+.ghost.sm { padding: 4px 9px; font-size: 12px; border-radius: 9px; }
 .primary {
   background: var(--accent); color: var(--on-accent); border: none;
   border-radius: 8px; padding: 8px 16px; font-size: 13px;
@@ -1015,6 +1062,42 @@ input, textarea { font: inherit; }
 }
 .prow:hover { background: var(--bg3); }
 .prow.off .prow-main { opacity: 0.5; }
+/* 拖动排序手柄与状态：手柄发起拖拽，其余区域仍可正常点击（编辑/删除/开关） */
+.prow-grip {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  color: var(--fg2); cursor: grab; border-radius: 6px; padding: 2px 1px;
+  transition: color .12s, background .12s;
+}
+.prow-grip:hover { color: var(--fg); background: var(--bg3); }
+.prow-grip:active { cursor: grabbing; }
+/* 拖拽期间全局 grabbing：鼠标早就离开手柄了，靠 :active 会立刻弹回 grab 误导用户 */
+body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
+/* 被拖的行：留个淡淡的"取走了"的痕迹，但不要太透明——45% 那档看起来像出了 bug 而不是"拿起来了" */
+.prow.dragging,
+.model-row.dragging { opacity: .4; outline: 1px dashed var(--line); outline-offset: -2px; }
+/* 落点指示：贴一条粗的强调色边线在上沿或下沿，明确"松手会插到这里"。
+   原来的做法是整行描边（box-shadow 环），看不出要插到上方还是下方，用户以为没生效 */
+.prow.dragover,
+.model-row.dragover { position: relative; }
+.prow.dragover.top::before,
+.prow.dragover.bottom::after,
+.model-row.dragover.top::before,
+.model-row.dragover.bottom::after {
+  content: '';
+  position: absolute; left: 0; right: 0; height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+  /* 两端的圆点让这条线更像"插入位"而不是"边框" */
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
+  z-index: 2;
+}
+.prow.dragover.top::before,
+.model-row.dragover.top::before { top: -1px; }
+.prow.dragover.bottom::after,
+.model-row.dragover.bottom::after { bottom: -1px; }
+/* 目标行本身也给一点底色，避免插入线落在和背景接近的位置上看不清 */
+.prow.dragover,
+.model-row.dragover { background: color-mix(in srgb, var(--accent) 7%, var(--bg2)); }
 /* 内置能力没有开关、也不给编辑删除，整行置灰并去掉 hover 反馈，看起来就知道不可点 */
 .prow.builtin { opacity: 0.55; cursor: default; }
 .prow.builtin:hover { background: var(--bg2); }
@@ -1050,14 +1133,18 @@ input, textarea { font: inherit; }
   box-shadow: 0 18px 60px var(--shadow);
 }
 .modal.wide { width: 720px; }
+/* 窄档：字段少的补充表单（模型编辑/添加）。540 太宽会留一大片空白，看着散 */
+.modal.narrow { width: 460px; }
 .mhead { display: flex; align-items: center; padding: 16px 18px 12px; }
 .mhead h3 { flex: 1; font-size: 16px; }
 .mbody { padding: 0 18px 18px; }
 .mbody label { display: block; font-size: 13px; color: var(--fg2); margin-bottom: 12px; }
+/* 控件圆角 10px：跟 .modal 的 16px 外圆角、.model-row 的 12px 面要素递进，
+   整体是「外圆内方」的柔和观感；早先的 8px 在 720px 宽的弹窗里显得方正 */
 .mbody input, .mbody textarea {
   display: block; width: 100%; margin-top: 5px;
   background: var(--bg3); color: var(--fg); border: none;
-  border-radius: 8px; padding: 9px 10px; outline: none;
+  border-radius: 10px; padding: 9px 10px; outline: none;
 }
 .mbody textarea { resize: vertical; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 13px; }
 .mbody input:focus, .mbody textarea:focus { box-shadow: 0 0 0 2px var(--accent); }
@@ -1095,30 +1182,58 @@ input, textarea { font: inherit; }
   color: var(--accent); border-radius: 999px; padding: 0 5px; font-size: 9.5px; line-height: 1.6;
 }
 
-/* ================= 提供商弹窗：每模型的接入参数 ================= */
-.model-cfgs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-.model-cfgs-tip { font-size: 11.5px; color: var(--fg2); }
-.model-cfg { background: var(--bg3); border-radius: 10px; padding: 10px 12px; }
-.model-cfg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
-.model-cfg-name {
+/* ================= 提供商弹窗：模型列表 =================
+   列表只承担「一眼扫全貌」：名称、输入模态、操作。
+   接入参数（上下文窗口/最大输出/思考/生成）收进二级弹窗，见下方 .mform */
+.model-cfgs { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.model-cfgs-tip { font-size: 11.5px; color: var(--fg2); line-height: 1.7; margin-bottom: 2px; }
+.model-empty { font-size: 12.5px; color: var(--fg2); padding: 12px 0; text-align: center; }
+.model-row {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  /* 圆角与模型编辑弹窗里的输入框（12px）对齐：同一套弹窗里的面要素要看起来是一家人 */
+  background: var(--bg3); border-radius: 12px; padding: 7px 8px 7px 4px;
+}
+/* 拖拽排序手柄与状态：整行可接收放置，手柄负责发起拖拽（避免在按钮上误拖） */
+.model-row-grip {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  color: var(--fg2); cursor: grab; border-radius: 5px; padding: 1px;
+  transition: color .12s, background .12s;
+}
+.model-row-grip:hover { color: var(--fg); background: var(--bg2); }
+.model-row-grip:active { cursor: grabbing; }
+.model-row-name {
   flex: 1; min-width: 0;
   font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
   font-size: 12.5px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.model-cfg-row { display: flex; align-items: center; gap: 14px; row-gap: 8px; flex-wrap: wrap; }
-.model-cfg-row label { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; color: var(--fg2); }
-.model-cfg-row input {
-  display: block; width: 108px; margin: 0;
-  background: var(--bg2); color: var(--fg); border: none;
-  border-radius: 7px; padding: 6px 8px; font-size: 12.5px; outline: none;
-}
-.model-cfg-row input:focus { box-shadow: 0 0 0 2px var(--accent); }
-.model-cfg-in { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg2); }
-/* 思考与生成是「这一行」里最靠后的两组：思考前加竖线做视觉分隔，
-   生成再靠右边推一点，让「生成」自成一块（左侧数字/输入/思考、右侧生成） */
-.model-cfg-in.sep { padding-left: 14px; border-left: 1px solid var(--line); }
-.model-cfg-in.gen { margin-left: auto; }
+/* 「输入」与「生成」两格并排：输入=它吃什么（模态），生成=它做什么（角色），两个都要留。
+   生成这格前面加条竖线分隔，避免两组胶囊连成一片看不出边界。
+   两格都允许收缩（min-width:0 + 胶囊自己不换行）：模型名有 flex:1 会先让位，
+   但名字让到底之后挤的是这两格，硬撑会被按钮顶出弹窗 */
+.model-row-io { display: flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; }
+.model-row-io-lab { font-size: 11px; color: var(--fg2); flex: none; }
+.model-row-io.sep { padding-left: 9px; border-left: 1px solid var(--line); }
+.model-row-none { font-size: 11.5px; color: var(--fg2); opacity: .75; }
+.model-row-acts { display: flex; align-items: center; gap: 2px; flex: none; margin-left: 2px; }
+.model-add { align-self: flex-start; margin-top: 2px; }
+/* 列表内的小号胶囊（比弹窗内的勾选控件小一档，避免列表行过高）。
+   不许换行：换行会把行撑成两截高，列表看起来就乱了 */
+.iochip.sm { padding: 1px 7px; font-size: 10.5px; pointer-events: none; white-space: nowrap; }
+
+/* 弹窗内字段旁的提示句（如「调用时填的 model 字段」） */
+.lab-tip { display: block; font-size: 11px; color: var(--fg2); opacity: .8; margin: 2px 0 4px; }
+
+/* ================= 模型编辑二级弹窗的表单 ================= */
+.mform { display: flex; flex-direction: column; }
+.mform-row { display: flex; gap: 14px; }
+.mform-row > label { flex: 1; }
+.mform-group { margin-bottom: 13px; }
+.mform-lab { display: block; font-size: 13px; color: var(--fg2); margin-bottom: 6px; }
+.mform-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.del-text { font-size: 13px; line-height: 1.8; margin-bottom: 16px; }
+.del-text b { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; }
 .iochip {
   border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);
   border-radius: 999px; padding: 2.5px 10px; font-size: 11.5px;
@@ -1267,6 +1382,7 @@ input, textarea { font: inherit; }
 .bp-url:focus { color: var(--side-fg); }
 /* 地址栏星标：收藏当前页，已收藏时填充主题色 */
 .bp-star.starred { color: var(--accent); }
+/* 地址栏右侧的「隐藏 AI 对话」：紧跟网址，一键连右下角气泡一起藏掉 */
 /* 全屏时的收藏夹条：页面标题胶囊横向排布，点击直达，hover 出现取消收藏；超宽横向滚动且不显滚动条 */
 .bp-marks {
   flex-shrink: 0; display: flex; align-items: center; gap: 6px;

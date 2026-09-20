@@ -2,7 +2,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
-import { DEFAULT_PLATFORM_URL, MODEL_DEFAULTS, MODALITIES, genRoleOf, isBuiltinModel } from './types.ts'
+import { DEFAULT_PLATFORM_URL, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -29,7 +29,7 @@ function ratioOr(v: unknown): number | undefined {
   return Number.isFinite(n) && n >= 0 ? n : undefined
 }
 
-const GEN_KINDS: GenKind[] = ['auto', 'image', 'video', 'tts', 'none']
+const GEN_KINDS: GenKind[] = ['auto', 'image', 'video', 'tts', 'music', 'asr', 'none']
 const THINKING_MODES: ThinkingMode[] = ['off', 'toggle', 'low', 'medium', 'high']
 
 /** 单条模型记录归一化：兼容旧版字符串数组与手改文件的缺字段，缺失一律落默认参数 */
@@ -44,7 +44,9 @@ function normalizeModel(m: unknown): ModelCfg | null {
     name: typeof r.name === 'string' && r.name.trim() ? r.name.trim() : undefined,
     context: Number(r.context) > 0 ? Number(r.context) : MODEL_DEFAULTS.context,
     output: Number(r.output) > 0 ? Number(r.output) : MODEL_DEFAULTS.output,
-    input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => MODALITIES.includes(x)) : [...MODEL_DEFAULTS.input],
+    // 输入模态按 INPUT_OPTIONS 白名单过滤（**不是** MODALITIES）：后者是写进内核的真实模态，
+    // 不含本机专用的 'vision' 标记，用它过滤会把用户勾的「视觉」丢掉。
+    input: Array.isArray(r.input) ? r.input.filter((x): x is Modality => INPUT_OPTIONS.includes(x)) : [...MODEL_DEFAULTS.input],
     // 生成角色 / 思考形态：只透传合法值，非法或没选过的不落盘（两者缺省各自按 'auto' / 'toggle' 处理）
     ...(GEN_KINDS.includes(r.gen as GenKind) ? { gen: r.gen } : {}),
     ...(THINKING_MODES.includes(r.thinking as ThinkingMode) ? { thinking: r.thinking } : {}),
@@ -104,7 +106,9 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     baseUrl: String(rawPlatform.baseUrl ?? DEFAULT_PLATFORM_URL).trim().replace(/\/+$/, '') || DEFAULT_PLATFORM_URL,
     token: String(rawPlatform.token ?? ''),
     user: rawPlatform.user && typeof rawPlatform.user === 'object' ? rawPlatform.user : null,
-    models: Array.isArray(rawPlatform.models) ? rawPlatform.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : [],
+    models: Array.isArray(rawPlatform.models)
+      ? rawPlatform.models.map(normalizeModel).filter((m): m is ModelCfg => !!m).map(healPlatformModalities)
+      : [],
     syncedAt: Number(rawPlatform.syncedAt) > 0 ? Number(rawPlatform.syncedAt) : undefined,
     device
   }
@@ -117,6 +121,25 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     mobile: raw?.mobile === true,
     platform
   }
+}
+
+/**
+ * 修正平台内置模型存档里那份**假的输入模态**。
+ *
+ * 老版本在同步平台清单时把 input 写死成全勾（文本+图片+视频），导致所有内置模型
+ * 在界面和判定里都"支持读图"——设置里看到的勾选是假的，而挑代看目标时又只能反过来
+ * 按名字猜，两边口径不一致。现在同步侧已改成按名字给保守初值（见 platform.ts），
+ * 但已落盘的老存档还带着全勾，这里在读盘时修一次。
+ *
+ * 只改"明显是全勾的老数据"，不动用户手改过的：用户真去设置里逐模型调过之后，
+ * 那份勾选是他自己定的，不该被覆盖。判据是"三模态齐全且没有 vision"——这正是老版本的写法。
+ */
+function healPlatformModalities(m: ModelCfg): ModelCfg {
+  const isLegacyAllOn =
+    m.input.includes('text') && m.input.includes('image') && m.input.includes('video') && !m.input.includes('vision')
+  if (!isLegacyAllOn) return m
+  const looksVision = VISION_MODEL_RE.test(m.id + ' ' + (m.name ?? ''))
+  return { ...m, input: looksVision ? ['text', 'image', 'vision'] : ['text'] }
 }
 
 /** 旧数据目录一次性迁移（codexdesk / qingniao / justdo 时代的设置） */
@@ -279,16 +302,16 @@ let ttsMcp: { path: string } | undefined
 export function setTtsMcp(v: { path: string }): void {
   ttsMcp = v
 }
-
-/**
- * 视觉（能看图）模型的命名特征——挑识图目标时用。
- *
- * 平台下发的模型清单不带模态字段，内置模型的 input 又是硬编码全勾（见 platform.ts），
- * 那份 input 不可信，只能按名字认；名字是最可靠的公开信号（厂商自己都这么命名）。
- * 匹配的是「id + 展示名」：平台内置模型对外 ID 常是 qn-xxx，靠展示名才认得出。
- */
-const VISION_MODEL_RE =
-  /(vision|omni|gemini|internvl|minicpm|llava|pixtral|gpt-4o|gpt-4-turbo|gpt-5|claude-3|claude-4|glm-4v|glm-4\.5v|glm-v|qwen.*vl|doubao.*(vision|vl)|(^|[-_.\s])vl([-_.\s]|$)|(^|[-_.\s])o[1-9])/i
+/** 音乐生成 MCP（generate_music / check_music 工具）脚本路径 */
+let musicMcp: { path: string } | undefined
+export function setMusicMcp(v: { path: string }): void {
+  musicMcp = v
+}
+/** 语音识别 MCP（transcribe_audio 听写工具）脚本路径 */
+let asrMcp: { path: string } | undefined
+export function setAsrMcp(v: { path: string }): void {
+  asrMcp = v
+}
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
@@ -310,18 +333,21 @@ const THINK_VARIANTS: Record<string, unknown> = {
 /**
  * 识图目标清单：能被派去「代看」的视觉模型。
  *
- * 平台清单不下发模态字段、内置模型的 input 又是硬编码全勾（见 platform.ts），那份 input 不可信，
- * 只能按名字认；用户第三方提供商里显式勾了「图片」输入的排在最前（可信）。
- * vision MCP 与电脑控制的视觉叠加（screen MCP）共用这一份。
+ * 三级优先（前面的更可信，vision MCP 与 screen MCP 都按这个顺序试）：
+ *  1. **显式勾了「视觉」** —— 用户亲手标注这个模型能代看画面，最可信，排最前。
+ *     平台内置模型也纳入这一档（勾选是用户在本机做的，比按名字猜准）；
+ *  2. **勾了「图片」输入的第三方模型** —— 能读图，通常也能代看，但用户勾它本意是"我能发图给它"，
+ *     不一定是让它当眼睛，所以排在显式「视觉」之后；
+ *  3. 按模型名猜（VISION_MODEL_RE）：留给没勾过的老配置，以及平台清单里那些名字就写着 vl/vision 的。
  */
 function collectVisionTargets(
   s: Settings
 ): { id: string; label: string; baseURL: string; apiKey: string; model: string }[] {
+  const explicit: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
   const flagged: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
   const guessed: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
   for (const p of usableProviders(s)) {
     if (!p.apiKey.trim() || !p.baseURL.trim()) continue
-    const trustInput = p.id !== PLATFORM_PROVIDER_ID
     for (const m of p.models) {
       if (genRoleOf(m) !== 'none') continue // 生成类吃不了 chat
       const label = m.name || m.id
@@ -332,11 +358,13 @@ function collectVisionTargets(
         apiKey: p.apiKey.trim(),
         model: m.id
       }
-      if (trustInput && (m.input ?? []).includes('image')) flagged.push(item)
+      const input = m.input ?? []
+      if (input.includes('vision')) explicit.push(item)
+      else if (input.includes('image')) flagged.push(item)
       else if (VISION_MODEL_RE.test(m.id + ' ' + label)) guessed.push(item)
     }
   }
-  return [...flagged, ...guessed]
+  return [...explicit, ...flagged, ...guessed]
 }
 
 /**
@@ -359,13 +387,19 @@ export function writeOpencodeConfig(s: Settings): void {
       // 思考档位 → variants（内核 model variant，key 为档位名，值为请求选项覆盖）：
       // reasonEffort 经 @ai-sdk/openai-compatible 变成请求体 reasoning_effort（见 docs/内核variant思考档位机制.md）
       // name 只在有展示名时写（平台模型对外 ID 是 qn-xxx，靠它显示人话）
+      //
+      // 输入模态必须按 MODALITIES 白名单过滤：设置里多出来的 'vision' 是本机能力标记
+      // （挑代看目标用），内核不认这个词，原样写进 modalities.input 会被判配置非法。
       models: Object.fromEntries(
         p.models.map((m) => [
           m.id,
           {
             ...(m.name ? { name: m.name } : {}),
             limit: { context: m.context, output: m.output },
-            modalities: { input: m.input, output: ['text'] },
+            modalities: {
+              input: MODALITIES.filter((x) => (m.input ?? []).includes(x)),
+              output: ['text']
+            },
             variants: THINK_VARIANTS
           }
         ])
@@ -389,7 +423,11 @@ export function writeOpencodeConfig(s: Settings): void {
   }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
   // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
-  const pick = (role: 'image' | 'video' | 'tts') =>
+  //
+  // 注意是**从全部启用的提供商里挑**（usableProviders 返回的是平台内置 + 所有第三方，不是「当前分组」）：
+  // 用户把生图模型配在 A 家、对话模型选 B 家是常态，只认当前组会直接找不到可用目标。
+  // 候选顺序：平台内置在前（usableProviders 的排列），第三方按用户在设置里的拖拽顺序——同角色多个时取第一个。
+  const pick = (role: 'image' | 'video' | 'tts' | 'music' | 'asr') =>
     usableProviders(s).flatMap((p) =>
       p.apiKey.trim() && p.baseURL.trim()
         ? p.models
@@ -397,6 +435,8 @@ export function writeOpencodeConfig(s: Settings): void {
             .map((m) => ({
               id: `${p.id}/${m.id}`,
               label: m.name || m.id,
+              // 提供方展示名：工具回执里写「生图由 agnes 提供」这类说明要用它（id 是给机器看的技术串）
+              provider: p.name || p.id,
               baseURL: p.baseURL.trim().replace(/\/+$/, ''),
               apiKey: p.apiKey.trim(),
               model: m.id,
@@ -431,6 +471,34 @@ export function writeOpencodeConfig(s: Settings): void {
         command: ['node', ttsMcp.path],
         environment: { QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
         timeout: 180000,
+        enabled: true
+      }
+    }
+  }
+  // 音乐生成：与生视频同属「异步任务 + 轮询」形态，工具拆成 generate_music / check_music 两步
+  if (musicMcp) {
+    const musicTargets = pick('music')
+    if (musicTargets.length) {
+      mcp.music = {
+        type: 'local',
+        command: ['node', musicMcp.path],
+        environment: { QN_MUSIC_TARGETS: JSON.stringify(musicTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
+        // 一首歌数十秒到几分钟，单次 generate 只提交，但请求体可能含几十兆的参考音频，超时给宽些
+        timeout: 300000,
+        enabled: true
+      }
+    }
+  }
+  // 语音识别（听写）：一次提交整段音频、SSE 边识别边推，长音频可能要跑几分钟
+  if (asrMcp) {
+    const asrTargets = pick('asr')
+    if (asrTargets.length) {
+      mcp.asr = {
+        type: 'local',
+        command: ['node', asrMcp.path],
+        environment: { QN_ASR_TARGETS: JSON.stringify(asrTargets) },
+        // 一小时音频约 2.8 元，长会议转写要几分钟，默认 5s 超时必被掐
+        timeout: 600000,
         enabled: true
       }
     }
@@ -522,13 +590,13 @@ export function writeOpencodeConfig(s: Settings): void {
    * 触发条件基本不会调工具——实测它会直接回「我看不了图片」、或改用写代码的方式画图。这块把规则写进
    * 内核指令，重启内核即生效，不依赖渲染层改动（渲染层那次注入仍保留，它额外带上本轮附件的具体路径）。
    */
-  if (mcp.vision || mcp.media || mcp.tts) {
+  if (mcp.vision || mcp.media || mcp.tts || mcp.music || mcp.asr) {
     const attach = join(opencodeConfigDir(), 'qingniao-attach.md')
     const lines = [
-      '# 图片 / 视频 / 语音处理约定',
-      '- 用户消息里出现 `[Attached image/png: 路径]` 这类占位文本，说明**你看不到图片画面**（当前模型不支持读图）。',
-      '  此时严禁回答「我看不了图片 / 请你描述一下这张图」，也**严禁反问用户「要不要我识别一下」「需要我处理吗」**——' +
-        '用户把图发出来就是要你处理，**直接调用下面对应的工具**，把占位里的路径**原样**填进参数（不要改成文件名，不要自己编造路径）。'
+      '# 图片 / 视频 / 音频处理约定',
+      '- 用户消息里出现 `[Attached image/png: 路径]`、`[Attached audio/mpeg: 路径]` 这类占位文本，说明**你拿不到该素材的内容**。',
+      '  此时严禁回答「我看不了图片 / 我听不了音频 / 请你描述一下」，也**严禁反问用户「要不要我识别一下」「需要我处理吗」**——' +
+        '用户把素材发出来就是要你处理，**直接调用下面对应的工具**，把占位里的路径**原样**填进参数（不要改成文件名，不要自己编造路径）。'
     ]
     if (mcp.vision)
       lines.push(
@@ -540,7 +608,9 @@ export function writeOpencodeConfig(s: Settings): void {
         '- 要**按视频出片**（续写、换风格、配音乐）→ 调 `create_video`，视频路径放进 videos（配音乐用 audios，参考图用 images）。',
         '- **没有附图、纯文字要求生图/生视频**（「画一张 / 设计 / 生成 / 出张 *图」「做个 *logo、图标、海报」「做个 *视频」）→ 同样必须调 `generate_image`（只填 prompt、不填 image）/ `create_video`。禁止自己写 Python / 装库的方式来画图。',
         '- 若本轮**没有** `generate_image` 工具（说明当前没配生图模型），直接如实说明「需先在设置里配置一个生图模型」，不要假装用代码出图、更不要硬画。',
-        '- 生图/生视频成功后：结果原样转达，展示一律内嵌本地文件——`![图片](本地路径)` 或 `![视频](本地路径)`，另起一行用反引号给出该路径；远程 URL 可能过期，不要当媒体地址贴出来。'
+        '- 生图/生视频成功后：结果原样转达，展示一律内嵌本地文件——`![图片](本地路径)` 或 `![视频](本地路径)`，另起一行用反引号给出该路径；远程 URL 可能过期，不要当媒体地址贴出来。',
+        '- **成果归属要说清**：工具回执里带了「生图由 X 提供 / 生视频由 X 提供」，转达时必须把这句一起说给用户（如「生图由 agnes 提供」）——' +
+          '用户常常在这家聊天、用别家出图，不说他就不知道成品是谁家出的。'
       )
     }
     if (mcp.tts)
@@ -549,9 +619,36 @@ export function writeOpencodeConfig(s: Settings): void {
           '要念的正文放 text（别把风格要求混进去），语气情绪语速放 style，音色放 voice（不确定就不填，用默认音色）。' +
           '严禁回答「我不能生成音频」，也严禁改用写代码合成波形的方式硬凑。',
         '- 若本轮**没有** `generate_speech` 工具（说明当前没配语音模型），直接如实说明「需先在设置里配置一个语音合成模型」，不要假装出音频。',
-        '- 语音成功后：本地路径原样转达（另起一行用反引号包住），并直接用 `![音频](本地路径)` 内嵌——客户端会渲染成播放器试听。'
+        '- 语音成功后：本地路径原样转达（另起一行用反引号包住），并直接用 `![音频](本地路径)` 内嵌——客户端会渲染成播放器试听。' +
+          '同时把回执里的「配音由 X 提供」一并说给用户。'
       )
-    lines.push('- 分不清意图时按上述顺序判断：先问内容 → describe_image；要求改画面 → generate_image。')
+    if (mcp.music)
+      lines.push(
+        '- 用户要**生成音乐 / 写首歌 / 做 BGM / 配背景音乐 / 翻唱 / 给清唱配伴奏**→ 必须调 `generate_music`：' +
+          '风格描述放 prompt，歌词放 lyrics（[Verse]/[Chorus] 等标签独占一行），' +
+          'mode 选 song（歌曲）/ instrumental（纯器乐）/ cover（翻唱）/ vocal_to_music（干声配伴奏），' +
+          '参考歌曲或干声放 reference。严禁回答「我不会作曲」，也严禁改用写代码合成波形的方式硬凑。',
+        '- **音乐是异步长任务**：`generate_music` 只返回 task_id，不会等出曲。拿到后先告知用户「音乐生成中」，' +
+          '随后反复调 `check_music`（每次内部已静默等约 15 秒，返回「还在生成中」就立即再查），' +
+          '两次之间用一句话向用户播报进度。完成或失败都要原样转达。',
+        '- 若本轮**没有** `generate_music` 工具（说明当前没配音乐模型），直接如实说明「需先在设置里配置一个音乐生成模型」。',
+        '- 音乐成功后：本地路径原样转达（另起一行用反引号包住），并直接用 `![音频](本地路径)` 内嵌试听；' +
+          '同时把回执里的「音乐由 X 提供」一并说给用户。'
+      )
+    if (mcp.asr)
+      lines.push(
+        '- 用户要**把录音/音频转成文字**（听写、转录、会议纪要、生成字幕、「这段音频说了什么」）→ 必须调 `transcribe_audio`：' +
+          '音频路径放 audio（用户上传的附件把 `[Attached audio/mpeg: 路径]` 里的路径原样填进去），' +
+          '人名/地名/专有名词等易错词放 hotwords 能明显提升准确率。' +
+          '严禁回答「我听不了音频」，也严禁靠猜内容编造转录结果。',
+        '- 若本轮**没有** `transcribe_audio` 工具（说明当前没配语音识别模型），直接如实说明「需先在设置里配置一个语音识别模型」。',
+        '- **转录结果要把识别出的正文完整原样给用户**（用户要的就是这段文字）：不要自己总结、改写或节选，除非用户另外要求。' +
+          '同时把回执里的「识别由 X 提供」一并说给用户。'
+      )
+    lines.push(
+      '- 分不清意图时按上述顺序判断：先问内容 → describe_image；要求改画面 → generate_image；' +
+        '要听见文字 → transcribe_audio；要音乐 → generate_music；要念出来的声音 → generate_speech。'
+    )
     writeFileSync(attach, lines.join('\n') + '\n')
     instructions.push(attach)
   }

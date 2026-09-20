@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, Monitor, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
-import type { GenKind, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
+import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, genRoleOf } from '../oc'
 import type { SettingsTab } from '../App'
 
@@ -19,11 +19,23 @@ export interface SettingsReq {
   tick: number
 }
 
-/** 输入类型可选项（输出恒为文本，不对外暴露配置项） */
-const MODALITY_LABELS: { key: Modality; label: string }[] = [
-  { key: 'text', label: '文本' },
-  { key: 'image', label: '图片' },
-  { key: 'video', label: '视频' }
+/**
+ * 输入类型可选项（输出恒为文本，不对外暴露配置项）。
+ *
+ * 「图片」和「视觉」是两件事，tip 里必须讲清，否则用户会以为勾了「图片」就是"有视觉了"：
+ *  - 图片：这个模型自己能把图读进上下文（发张图它能看懂）；
+ *  - 视觉：这个模型能当"眼睛"替**别的**模型看画面（截图、图片交给它，它把内容写成文字），
+ *    识图工具与电脑控制的视觉代看就是靠这个标记挑人。
+ */
+const MODALITY_LABELS: { key: Modality; label: string; tip?: string }[] = [
+  { key: 'text', label: '文本', tip: '能吃文字消息——绝大多数模型都要勾，否则不能当对话模型用' },
+  { key: 'image', label: '图片', tip: '这个模型自己能读图：用户发图片它能直接看懂内容' },
+  { key: 'video', label: '视频', tip: '这个模型自己能看视频：用户发视频它能直接理解画面' },
+  {
+    key: 'vision',
+    label: '视觉',
+    tip: '这个模型能当"眼睛"替别的模型看画面：截图/图片交给它，它把看到的内容写成文字。用于识图工具与电脑控制（当前模型看不到屏幕时由它代看）'
+  }
 ]
 
 /** 每个模型的思考形态选项（输入框思考选择器据此给档位，缺省=关/开） */
@@ -34,6 +46,81 @@ const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
   { key: 'high', label: '高', tip: '固定高档思考' },
   { key: 'off', label: '不支持', tip: '禁用思考' }
 ]
+
+/**
+ * 把数组里 from 位置的元素挪到 to 位置（其余顺次让位）。越界时原样返回，调用方不必自己夹。
+ */
+function moveItem<T>(list: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list
+  const next = [...list]
+  const [x] = next.splice(from, 1)
+  next.splice(to, 0, x)
+  return next
+}
+
+/**
+ * 极简 HTML5 拖拽排序：返回让容器/行展开的 props 与「正在拖的行下标」。
+ *
+ * 用原生 draggable 而不是第三方库：这里只有「竖排若干行、拖到别处换顺序」一个诉求，
+ * 引一个 dnd 库进来（拖拽预览、指针传感器、键盘无障碍那一整套）得不偿失。
+ * 拖拽手柄单独给 `draggable`（见 handleProps），避免在输入框里选文字时被误当成拖拽。
+ */
+function useDragSort(onReorder: (from: number, to: number) => void) {
+  /** 正在拖的行下标：驱动「哪一行是幽灵态」的样式 */
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  /** 拖到哪一行上了：驱动插入位置的高亮线 */
+  const [overIdx, setOverIdx] = useState<number | null>(null)
+  /** 插入线画在目标行的上沿还是下沿（由鼠标落在该行上半/下半决定） */
+  const [overPos, setOverPos] = useState<'top' | 'bottom'>('top')
+  /** dragenter/dragover 里 preventDefault 才能收到 drop；同时读 dragIdx 判断是不是自己发起的拖拽 */
+  const dragIdxRef = useRef<number | null>(null)
+  dragIdxRef.current = dragIdx
+
+  const rowProps = (i: number) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (dragIdxRef.current === null) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      // 鼠标落在上半还是下半，决定插入线画在它上沿还是下沿——
+      // 只看「悬停在哪一行」不够，用户以为要插到 A 上面结果插到下面，会以为没生效
+      const r = e.currentTarget.getBoundingClientRect()
+      setOverPos(e.clientY < r.top + r.height / 2 ? 'top' : 'bottom')
+      setOverIdx(i)
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault()
+      const from = dragIdxRef.current
+      setOverIdx(null)
+      setDragIdx(null)
+      document.body.classList.remove('dragging-row')
+      if (from !== null) onReorder(from, i)
+    },
+    onDragEnd: () => {
+      setDragIdx(null)
+      setOverIdx(null)
+      document.body.classList.remove('dragging-row')
+    }
+  })
+
+  const handleProps = (i: number) => ({
+    draggable: true,
+    onDragStart: (e: React.DragEvent) => {
+      // 不用 setData 的内容，但必须调一次：部分浏览器（含 Electron/Chromium）不设 data 就不启动拖拽
+      e.dataTransfer.setData('text/plain', String(i))
+      e.dataTransfer.effectAllowed = 'move'
+      // 拖拽期间给 body 打标记：手柄要全局进 grabbing 态（鼠标可能已经离开手柄本身）
+      document.body.classList.add('dragging-row')
+      setDragIdx(i)
+    },
+    onDragEnd: () => {
+      document.body.classList.remove('dragging-row')
+      setDragIdx(null)
+      setOverIdx(null)
+    }
+  })
+
+  return { dragIdx, overIdx, overPos, rowProps, handleProps }
+}
 
 interface Props {
   settings: SettingsCfg
@@ -101,6 +188,25 @@ interface Draft {
   cfgs: Record<string, ModelCfg>
 }
 
+/**
+ * 单个模型的编辑草稿（提供商弹窗内的二级弹窗）。
+ *
+ * 用独立草稿而不是直接改 draft.cfgs：用户在二级弹窗里点了「取消」要能整份丢掉，
+ * 半途误改的上下文窗口/生成角色不能污染提供商表单。
+ * input 存成副本，取消时原配置的数组引用不被就地改动。
+ */
+interface ModelForm {
+  /** 编辑的是第几个模型（新增时等于 modelsText 解析后的长度，即追加到末尾） */
+  index: number
+  isNew: boolean
+  id: string
+  context: number
+  output: number
+  input: Modality[]
+  thinking: ModelCfg['thinking']
+  gen: GenKind
+}
+
 interface McpDraft {
   isNew: boolean
   index: number
@@ -141,24 +247,36 @@ function defaultModelCfg(): Omit<ModelCfg, 'id'> {
 
 /** 每个模型的生成角色（写进 ModelCfg.gen）：'auto' 按模型名判，其余是用户显式指定 */
 const GEN_LABELS: { key: GenKind; label: string; tip: string }[] = [
-  { key: 'auto', label: '自动', tip: '按模型名判：名字带 image / video / tts / flux 等算生成模型' },
+  { key: 'auto', label: '自动', tip: '按模型名判：名字带 image / video / tts / music / asr 等算生成模型' },
   { key: 'image', label: '图片', tip: '只认生图接口（文生图 /images/generations，改图 /images/edits），挂给生图工具，当对话模型用必被拒' },
   { key: 'video', label: '视频', tip: '只认异步 /videos 任务，挂给生视频工具，当对话模型用必被拒' },
   { key: 'tts', label: '语音', tip: '只认语音合成接口（/audio/speech，MiMo 那类走 chat 带 audio 参数），挂给配音工具，当对话模型用必被拒' },
+  { key: 'music', label: '音乐', tip: '只认音乐生成接口（异步提交 + 轮询，如阶跃 stepaudio-3-music），挂给音乐工具，当对话模型用必被拒' },
+  { key: 'asr', label: '识别', tip: '只认语音识别接口（音频转文字，如阶跃 stepaudio-3-asr-max），挂给听写工具，当对话模型用必被拒' },
   { key: 'none', label: '对话', tip: '强制按对话模型处理：名字像生图也不拿去出图' }
 ]
 
 /**
  * 模板里全新模型的生成角色与输入类型。判定走主进程那份 genRoleOf（名字规则），
  * 这里只是把结果落成显式配置，让用户在表单里看得见、改得动。
- * 生图/生视频不勾「文本」（它们收不了对话）；语音模型收的就是文本，照实勾上，
- * 「不能当对话模型用」由生成角色这一列判定（见 ChatView.resolveChatModel）。
+ *
+ * 「输入」指的是**它吃什么**，不是「它产出什么」——两者容易混，逐角色写清楚：
+ *  - 生图 / 生视频：收文本提示词（改图另说），不勾「图片」那种模态语义，给纯文本最稳；
+ *  - 语音合成（tts）：收要念的文本 → 文本；
+ *  - 音乐生成（music）：收风格描述与歌词 → 文本；
+ *  - 语音识别（asr）：收的是**音频**，但本机模态里没有 audio 这一项可勾，给纯文本占位即可，
+ *    真正决定它去听写 MCP 的是 `gen` 这一列。
+ * 「不能当对话模型用」一律由生成角色（gen）判定，见 ChatView.resolveChatModel。
  */
-function presetModelPatch(id: string, input?: Modality[]): Pick<ModelCfg, 'gen' | 'input'> {
+function presetModelPatch(id: string, input?: Modality[], gen?: GenKind): Pick<ModelCfg, 'gen' | 'input'> {
+  // 模板显式指定的角色优先：用户打开编辑弹窗一眼就能看到「生成 = 语音」，
+  // 不必去猜为什么它不出现在模型选择器里（名字规则认不出的模型更是只能靠这个）
+  if (gen) return { gen, input: input ?? ['text'] }
   const role = genRoleOf({ id })
-  if (role === 'tts') return { gen: role, input: ['text'] }
-  if (role !== 'none') return { gen: role, input: [role] }
-  return { gen: 'auto', input: input ?? [...MODEL_DEFAULTS.input] }
+  if (role === 'none') return { gen: 'auto', input: input ?? [...MODEL_DEFAULTS.input] }
+  // 五个生成角色都吃文本类入参（图片/视频那两个也靠 prompt 工作），统一给纯文本
+  const genInput: Modality[] = ['text']
+  return { gen: role, input: genInput }
 }
 
 /** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
@@ -169,6 +287,11 @@ const PROVIDER_PRESETS: {
   models: string[]
   /** 官方文档写明的输入模态（键=模型 ID）：模板里替用户勾好，否则桌面控制/识图/看视频用不上 */
   input?: Record<string, Modality[]>
+  /**
+   * 显式指定生成角色（键=模型 ID）：名字规则认不出来的靠它兜。
+   * 名字里带 tts/image/video 的能自动认出，这里写出来只是让配置更明确、便于将来改名。
+   */
+  gen?: Record<string, GenKind>
   /** 生视频任务查询地址模板（带生视频模型的模板预填，省得用户去查文档） */
   videoPoll?: string
 }[] = [
@@ -184,16 +307,29 @@ const PROVIDER_PRESETS: {
     id: 'mimo',
     name: 'mimo',
     baseURL: 'https://api.xiaomimimo.com/v1',
-    // mimo-v2.5 是原生全模态理解（图/视频/音频进、文本出），mimo-v2.5-tts 是语音合成
+    // mimo-v2.5 是原生全模态理解（图/视频/音频进、文本出），mimo-v2.5-tts 是语音合成。
+    // 能读图的模型顺带勾上「视觉」：它本来就能看懂画面，也能当眼睛替别人代看。
+    // tts 那个显式写进 gen：名字规则虽然也能认出（带 -tts），但写出来用户打开编辑就能看到
+    // 「生成 = 语音」，不用自己去猜为什么它不出现在模型选择器里
     models: ['mimo-v2.5', 'mimo-v2.5-tts'],
-    input: { 'mimo-v2.5': ['text', 'image', 'video'] }
+    input: { 'mimo-v2.5': ['text', 'image', 'video', 'vision'], 'mimo-v2.5-tts': ['text'] },
+    gen: { 'mimo-v2.5-tts': 'tts' }
   },
   {
     id: 'stepfun',
     name: 'stepfun',
     baseURL: 'https://api.stepfun.com/v1',
-    models: ['step-3.7-flash', 'step-image-edit-2'],
-    input: { 'step-3.7-flash': ['text', 'image'] }
+    // step-3.7-flash 对话（原生多模态）、step-image-edit-2 改图；
+    // stepaudio-3-asr-max 语音识别、stepaudio-3-music-preview 音乐生成、stepaudio-3-tts 语音合成。
+    // 后三个不走 chat 接口，靠生成角色分别挂到听写 / 音乐 / 配音工具（名字规则能自动认出，也可手动指定）
+    models: [
+      'step-3.7-flash',
+      'step-image-edit-2',
+      'stepaudio-3-asr-max',
+      'stepaudio-3-music-preview',
+      'stepaudio-3-tts'
+    ],
+    input: { 'step-3.7-flash': ['text', 'image', 'vision'] }
   },
   { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com', models: ['deepseek-flash'] }
 ]
@@ -250,6 +386,29 @@ export function SettingsView(p: Props) {
   /** 右侧正文滚动容器：外部跳页后置顶，避免停在上一页的半截位置 */
   const body = useRef<HTMLDivElement>(null)
 
+  /**
+   * 提供商排序：拖完立即落盘（providers 是设置的一部分）。
+   * 顺序会记进 settings.json，模型选择器的级联菜单就按这个顺序排——用户把常用的拖到最前，
+   * 每次选模型不必再往下翻。
+   */
+  const provSort = useDragSort((from, to) =>
+    applySettings({ ...p.settings, providers: moveItem(providers, from, to) }, null)
+  )
+
+  /** 弹窗内模型排序：只改草稿，点保存才生效（与其它表单字段一致，取消即丢弃） */
+  const modelSort = useDragSort((from, to) => {
+    if (!draft) return
+    setDraft({ ...draft, modelsText: moveItem(parseModels(draft.modelsText), from, to).join('\n') })
+  })
+
+  /**
+   * 模型列表不再是把参数摊在每行里，而是「名称 + 输入 + 编辑/删除」的紧凑列表，
+   * 全部参数收进二级弹窗——列表只用来扫一眼「有哪几个模型、各自吃什么模态」。
+   */
+  const [modelForm, setModelForm] = useState<ModelForm | null>(null)
+  /** 待删除的模型（自绘确认框，不用原生 confirm） */
+  const [modelDel, setModelDel] = useState<string | null>(null)
+
   // 关掉远程服务时正停在「账号 / 使用量」上：那两页已经不可见了，退回主题页免得白屏
   useEffect(() => {
     if (!remote && REMOTE_TABS.includes(tab)) setTab('theme')
@@ -266,7 +425,7 @@ export function SettingsView(p: Props) {
     const t = !remote && REMOTE_TABS.includes(p.req.tab) ? 'theme' : p.req.tab
     setTab(t)
     setConfirmDel(null)
-    setDraft(null)
+    closeProviderModal()
     setMcpDraft(null)
     setPending(null)
     setSkDel(null)
@@ -274,8 +433,21 @@ export function SettingsView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.req?.tick])
 
+  /**
+   * 关闭提供商弹窗。二级弹窗（模型编辑 / 删除确认）必须一起关掉——
+   * 它们挂在提供商的 draft 上，draft 没了还留着就会读到空值渲染出错。
+   * 所有关闭路径都走这里，别直接 setDraft(null)。
+   */
+  function closeProviderModal() {
+    setDraft(null)
+    setModelForm(null)
+    setModelDel(null)
+  }
+
   function openNew() {
     setFormMsg(null)
+    setModelForm(null)
+    setModelDel(null)
     setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })
   }
 
@@ -284,13 +456,16 @@ export function SettingsView(p: Props) {
     if (!draft) return
     const t = PROVIDER_PRESETS.find((x) => x.id === pid)
     if (!t) return
+    setModelForm(null)
+    setModelDel(null)
     const cur = providers.find((x) => x.id === t.id)
     const ids = cur?.models.length ? cur.models.map((m) => m.id) : t.models
     const known = cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
     const cfgs: Record<string, ModelCfg> = {}
     for (const mid of ids) {
-      // 已存过的参数（含用户选过的生成角色）不动，只对全新模型按名字预填
-      cfgs[mid] = known[mid] ?? { id: mid, ...defaultModelCfg(), ...presetModelPatch(mid, t.input?.[mid]) }
+      // 已存过的参数（含用户选过的生成角色）不动，只对全新模型按名字/模板预填
+      cfgs[mid] =
+        known[mid] ?? { id: mid, ...defaultModelCfg(), ...presetModelPatch(mid, t.input?.[mid], t.gen?.[mid]) }
     }
     setDraft({
       isNew: true,
@@ -310,6 +485,8 @@ export function SettingsView(p: Props) {
   function openEdit(i: number) {
     const c = providers[i]
     setFormMsg(null)
+    setModelForm(null)
+    setModelDel(null)
     setDraft({
       isNew: false,
       index: i,
@@ -345,14 +522,96 @@ export function SettingsView(p: Props) {
     return draft?.cfgs[id] ?? { id, ...defaultModelCfg() }
   }
 
-  function updateCfg(id: string, patch: Partial<ModelCfg>) {
-    if (!draft) return
-    setDraft({ ...draft, cfgs: { ...draft.cfgs, [id]: { ...cfgOf(id), ...patch } } })
+  // ===== 模型编辑二级弹窗 =====
+  //
+  // 列表里只显示「名称 + 输入 + 编辑/删除」，参数全收进弹窗。这里所有操作都只动 draft.cfgs，
+  // 点提供商弹窗的「保存」才落盘——与其它字段一致，中途取消整份丢弃。
+
+  /** 打开编辑：把当前生效的参数（草稿优先，其次默认值）拍成一份独立草稿 */
+  function openModelForm(mid: string, index: number) {
+    const c = cfgOf(mid)
+    setModelForm({
+      index,
+      isNew: false,
+      id: mid,
+      context: c.context,
+      output: c.output,
+      input: [...c.input],
+      thinking: c.thinking ?? 'toggle',
+      gen: c.gen ?? 'auto'
+    })
   }
 
-  function toggleModality(id: string, key: Modality) {
-    const cur = cfgOf(id).input
-    updateCfg(id, { input: cur.includes(key) ? cur.filter((x) => x !== key) : [...cur, key] })
+  /** 打开新增：给一份空表单，模型名待填 */
+  function openNewModelForm(total: number) {
+    const d = defaultModelCfg()
+    setModelForm({
+      index: total,
+      isNew: true,
+      id: '',
+      context: d.context,
+      output: d.output,
+      input: [...d.input],
+      thinking: 'toggle',
+      gen: 'auto'
+    })
+  }
+
+  /**
+   * 提交模型表单：新增时插到 modelsText 末尾，编辑时就地替换（可改名）。
+   *
+   * 只改草稿——提供商弹窗的「保存」才真正落盘，中途取消整份丢弃。
+   * 新增的 index 记的是「提交那一刻列表长度」，所以连点两次添加不会互相插队。
+   */
+  function commitModelForm() {
+    const f = modelForm
+    if (!draft || !f) return
+    const mid = f.id.trim()
+    if (!mid) return
+    // 不许重名：编辑时改的是自己，跳过同下标；拿不到下标（理论上不会）就拦下来别静默出错
+    const ids = parseModels(draft.modelsText)
+    if (ids.some((x, i) => x === mid && i !== f.index)) return
+    const cfg: ModelCfg = {
+      id: mid,
+      context: f.context,
+      output: f.output,
+      input: [...f.input],
+      thinking: f.thinking,
+      gen: f.gen
+    }
+    const nextIds = f.isNew ? [...ids.slice(0, f.index), mid, ...ids.slice(f.index)] : ids
+    // 改名时把旧名字的配置一并清掉，不然 cfgs 里会留一条永远用不到的孤儿配置
+    const cfgs = { ...draft.cfgs }
+    if (!f.isNew && ids[f.index] !== mid) delete cfgs[ids[f.index]]
+    cfgs[mid] = cfg
+    setDraft({ ...draft, modelsText: nextIds.join('\n'), cfgs })
+    setModelForm(null)
+  }
+
+  function delModel(mid: string, index: number) {
+    if (!draft) return
+    const ids = parseModels(draft.modelsText)
+    const cfgs = { ...draft.cfgs }
+    delete cfgs[mid]
+    setDraft({ ...draft, modelsText: ids.filter((_, i) => i !== index).join('\n'), cfgs })
+    setModelDel(null)
+  }
+
+  /** 列表里显示的「输入」摘要：按 MODALITY_LABELS 的顺序，与弹窗内勾选顺序无关 */
+  function inputSummary(c: ModelCfg): Modality[] {
+    return MODALITY_LABELS.map((m) => m.key).filter((k) => c.input.includes(k))
+  }
+
+  /**
+   * 列表里显示的「生成」标签：它干什么用（出文本 / 出图 / 配音 / 听写）。
+   * 与「输入」并列展示——输入回答「它吃什么」，生成回答「它做什么」，两件事都别省。
+   *
+   * 'none' 是「强制按对话模型处理」，对话模型产出恒为文本，直接显示「文本」比「对话」更贴切；
+   * 其余角色取 GEN_LABELS 的标签（图片 / 视频 / 语音 / 音乐 / 识别）。
+   */
+  function roleLabel(role: GenRole): string {
+    if (role === 'none') return '文本'
+    return GEN_LABELS.find((g) => g.key === role)?.label ?? role
   }
 
   async function saveDraft() {
@@ -381,7 +640,7 @@ export function SettingsView(p: Props) {
     setBusySelf(true)
     try {
       await p.onSave({ ...p.settings, providers: list })
-      setDraft(null)
+      closeProviderModal()
     } finally {
       setBusySelf(false)
     }
@@ -679,12 +938,28 @@ export function SettingsView(p: Props) {
           <p className="sec-tip">
             填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；
             保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。
+            <br />
+            拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。
           </p>
           {providers.length === 0 && <div className="plist-empty">还没有自定义提供商，点击右上角添加</div>}
           {providers.length > 0 && (
             <div className="plist">
               {providers.map((c, i) => (
-                <div key={c.id} className={'prow' + (c.enabled ? '' : ' off')}>
+                <div
+                  key={c.id}
+                  className={
+                    'prow' +
+                    (c.enabled ? '' : ' off') +
+                    (provSort.dragIdx === i ? ' dragging' : '') +
+                    (provSort.overIdx === i && provSort.dragIdx !== null && provSort.dragIdx !== i
+                      ? ' dragover ' + provSort.overPos
+                      : '')
+                  }
+                  {...provSort.rowProps(i)}
+                >
+                  <span className="prow-grip" title="拖动调整顺序" {...provSort.handleProps(i)}>
+                    <GripVertical size={14} />
+                  </span>
                   <Switch checked={c.enabled} onChange={() => toggle(i)} />
                   <div className="prow-main">
                     <div className="prow-name">
@@ -814,7 +1089,7 @@ export function SettingsView(p: Props) {
       </div>
 
       {draft && (
-        <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} wide onClose={() => setDraft(null)}>
+        <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} wide onClose={closeProviderModal}>
           {draft.isNew && (
             <div className="preset-row">
               <span className="preset-lab">快速填充</span>
@@ -884,94 +1159,80 @@ export function SettingsView(p: Props) {
               </button>
             </div>
           </label>
-          <label>
-            模型（每行一个）
-            <textarea
-              rows={4}
-              value={draft.modelsText}
-              placeholder={'deepseek-chat\ndeepseek-reasoner'}
-              onChange={(e) => setDraft({ ...draft, modelsText: e.target.value })}
-            />
-          </label>
-          {parseModels(draft.modelsText).length > 0 && (
-            <div className="model-cfgs">
-              <div className="model-cfgs-tip">
-                每个模型的上下文窗口、最大输出（token）、输入类型、生成角色与思考形态。
-                标为「生图 / 生视频 / 语音」的模型不进对话候选，由对应工具调用；输出恒为文本，无需配置
-              </div>
-              {parseModels(draft.modelsText).map((mid) => {
+          {/* 模型列表：只展示「名称 / 生成 / 操作」，接入参数按需弹窗编辑。
+              原先每行摊开上下文窗口、最大输出、输入、思考、生成五组控件，一屏放不下两个模型，
+              现在列表用来扫全貌，参数收进弹窗。 */}
+          <div className="model-cfgs">
+            <div className="model-cfgs-tip">
+              <b>「图片」与「视觉」的区别</b>：勾「图片」= 这个模型<b>自己</b>能读图/看视频，用户发图它能直接懂；
+              勾「视觉」= 这个模型能当<b>眼睛替别的模型看画面</b>（截图交给它，它把看到的内容写成文字）。
+              控制电脑、识图工具都靠「视觉」标记挑人——<b>没勾视觉的模型，控制电脑时无法看图</b>，所以界面会提示你先去模型设置里勾一个。
+              标为「图片 / 视频 / 语音 / 音乐 / 识别」的模型不进对话候选，由对应工具调用。
+              拖动左侧手柄可调整顺序，这个顺序就是模型选择器里的排列顺序
+            </div>
+            {(() => {
+              const ids = parseModels(draft.modelsText)
+              if (!ids.length) {
+                return <div className="model-empty">还没有模型，点下方「添加」填一个</div>
+              }
+              return ids.map((mid, mi) => {
                 const c = cfgOf(mid)
+                const ins = inputSummary(c)
+                const role = genRoleOf(c)
                 return (
-                  <div className="model-cfg" key={mid}>
-                    <div className="model-cfg-head">
-                      <span className="model-cfg-name">{mid}</span>
-                    </div>
-                    <div className="model-cfg-row">
-                      <label>
-                        上下文窗口
-                        <input
-                          type="number"
-                          min={1}
-                          value={c.context || ''}
-                          onChange={(e) => updateCfg(mid, { context: e.target.valueAsNumber || 0 })}
-                        />
-                      </label>
-                      <label>
-                        最大输出 Token
-                        <input
-                          type="number"
-                          min={1}
-                          value={c.output || ''}
-                          onChange={(e) => updateCfg(mid, { output: e.target.valueAsNumber || 0 })}
-                        />
-                      </label>
-                      <div className="model-cfg-in">
-                        输入
-                        {MODALITY_LABELS.map((m) => (
-                          <button
-                            key={m.key}
-                            type="button"
-                            className={'iochip' + (c.input.includes(m.key) ? ' on' : '')}
-                            onClick={() => toggleModality(mid, m.key)}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="model-cfg-in sep">
-                        思考
-                        {THINK_LABELS.map((t) => (
-                          <button
-                            key={t.key}
-                            type="button"
-                            className={'iochip' + ((c.thinking ?? 'toggle') === t.key ? ' on' : '')}
-                            title={t.tip}
-                            onClick={() => updateCfg(mid, { thinking: t.key })}
-                          >
-                            {t.label}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="model-cfg-in gen">
-                        生成
-                        {GEN_LABELS.map((g) => (
-                          <button
-                            key={g.key}
-                            type="button"
-                            className={'iochip' + ((c.gen ?? 'auto') === g.key ? ' on' : '')}
-                            title={g.tip}
-                            onClick={() => updateCfg(mid, { gen: g.key })}
-                          >
-                            {g.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                  <div
+                    className={
+                      'model-row' +
+                      (modelSort.dragIdx === mi ? ' dragging' : '') +
+                      (modelSort.overIdx === mi && modelSort.dragIdx !== null && modelSort.dragIdx !== mi
+                        ? ' dragover ' + modelSort.overPos
+                        : '')
+                    }
+                    key={mid}
+                    {...modelSort.rowProps(mi)}
+                  >
+                    <span className="model-row-grip" title="拖动调整顺序" {...modelSort.handleProps(mi)}>
+                      <GripVertical size={14} />
+                    </span>
+                    <span className="model-row-name" title={mid}>
+                      {mid}
+                    </span>
+                    {/* 两格都要看得到，别只留一个：
+                        「输入」= 它吃什么（能不能读图/看视频），排查「发图它不懂」看这格；
+                        「生成」= 它干什么用（配音/出图/听写），排查「配音工具说找不到模型」看这格。
+                        输入取模态摘要，生成取角色标签。 */}
+                    <span className="model-row-io" title={`输入：${ins.join(' / ') || '未设置'}`}>
+                      <span className="model-row-io-lab">输入</span>
+                      {ins.length ? (
+                        ins.map((k) => (
+                          <span className="iochip on sm" key={k}>
+                            {MODALITY_LABELS.find((m) => m.key === k)?.label ?? k}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="model-row-none">未设置</span>
+                      )}
+                    </span>
+                    <span className="model-row-io sep" title={`生成：${roleLabel(role)}`}>
+                      <span className="model-row-io-lab">生成</span>
+                      <span className={'iochip sm' + (role === 'none' ? '' : ' on')}>{roleLabel(role)}</span>
+                    </span>
+                    <span className="model-row-acts">
+                      <button className="ghost sm" title="编辑这个模型的接入参数" onClick={() => openModelForm(mid, mi)}>
+                        <Pencil size={13} /> 编辑
+                      </button>
+                      <button className="icon-btn danger" title="删除这个模型" onClick={() => setModelDel(mid)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </span>
                   </div>
                 )
-              })}
-            </div>
-          )}
+              })
+            })()}
+            <button className="ghost model-add" onClick={() => openNewModelForm(parseModels(draft.modelsText).length)}>
+              <Plus size={14} /> 添加
+            </button>
+          </div>
           <div className="form-row">
             <button className="ghost" onClick={fetchModels} disabled={fetching}>
               <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> 自动获取模型
@@ -979,10 +1240,164 @@ export function SettingsView(p: Props) {
             {formMsg && <span className={'form-msg' + (formMsg.bad ? ' bad' : '')}>{formMsg.text}</span>}
           </div>
           <div className="actions">
-            <button className="ghost" onClick={() => setDraft(null)}>取消</button>
+            <button className="ghost" onClick={closeProviderModal}>取消</button>
             <button className="primary" disabled={busySelf} onClick={saveDraft}>
               {busySelf ? '保存并重启内核…' : '保存'}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 模型编辑弹窗：二级弹窗，盖在提供商弹窗之上（.mask 同为 fixed，后渲染的在上）。
+          新增与编辑共用一套表单——用户要的「编辑时弹出里面表单里面要全就行了」就是这里：
+          模型名、上下文窗口、最大输出、输入、思考、生成，一个不少。 */}
+      {modelForm && (
+        <Modal
+          title={modelForm.isNew ? '添加模型' : '编辑模型'}
+          onClose={() => setModelForm(null)}
+          narrow
+        >
+          <div className="mform">
+            <label>
+              模型名
+              <span className="lab-tip">调用时填的 model 字段，如 deepseek-chat</span>
+              <input
+                value={modelForm.id}
+                placeholder="deepseek-chat"
+                autoFocus
+                onChange={(e) => {
+                  const id = e.target.value
+                  // 新增时才按名字自动猜生成角色与输入类型（用户手改过的不覆盖）：
+                  // 名字里带 asr / music / tts 之类的，预勾好省得用户再去翻文档
+                  if (!modelForm.isNew) return setModelForm({ ...modelForm, id })
+                  const ids = draft ? parseModels(draft.modelsText) : []
+                  const dup = ids.some((x, i) => x === id.trim() && i !== modelForm.index)
+                  const patch = presetModelPatch(id.trim())
+                  setModelForm({
+                    ...modelForm,
+                    id,
+                    gen: dup ? modelForm.gen : patch.gen ?? 'auto',
+                    input: dup ? modelForm.input : [...patch.input]
+                  })
+                }}
+              />
+              {(() => {
+                const mid = modelForm.id.trim()
+                if (!mid) return null
+                const ids = draft ? parseModels(draft.modelsText) : []
+                if (!ids.some((x, i) => x === mid && i !== modelForm.index)) return null
+                return <span className="form-msg bad">这个模型名已经有了</span>
+              })()}
+            </label>
+            <div className="mform-row">
+              <label>
+                上下文窗口
+                <input
+                  type="number"
+                  min={1}
+                  value={modelForm.context || ''}
+                  onChange={(e) => setModelForm({ ...modelForm, context: e.target.valueAsNumber || 0 })}
+                />
+              </label>
+              <label>
+                最大输出 Token
+                <input
+                  type="number"
+                  min={1}
+                  value={modelForm.output || ''}
+                  onChange={(e) => setModelForm({ ...modelForm, output: e.target.valueAsNumber || 0 })}
+                />
+              </label>
+            </div>
+            <div className="mform-group">
+              <span className="mform-lab">输入</span>
+              <div className="mform-chips">
+                {MODALITY_LABELS.map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    className={'iochip' + (modelForm.input.includes(m.key) ? ' on' : '')}
+                    title={m.tip}
+                    onClick={() =>
+                      setModelForm({
+                        ...modelForm,
+                        input: modelForm.input.includes(m.key)
+                          ? modelForm.input.filter((x) => x !== m.key)
+                          : [...modelForm.input, m.key]
+                      })
+                    }
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mform-group">
+              <span className="mform-lab">思考</span>
+              <div className="mform-chips">
+                {THINK_LABELS.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    className={'iochip' + ((modelForm.thinking ?? 'toggle') === t.key ? ' on' : '')}
+                    title={t.tip}
+                    onClick={() => setModelForm({ ...modelForm, thinking: t.key })}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mform-group">
+              <span className="mform-lab">生成</span>
+              <div className="mform-chips">
+                {GEN_LABELS.map((g) => (
+                  <button
+                    key={g.key}
+                    type="button"
+                    className={'iochip' + ((modelForm.gen ?? 'auto') === g.key ? ' on' : '')}
+                    title={g.tip}
+                    onClick={() => setModelForm({ ...modelForm, gen: g.key })}
+                  >
+                    {g.label}
+                  </button>
+                ))}
+              </div>
+              {/* 这行是「我配了语音为什么工具还报找不到模型」的答案：角色选对才算真的配好 */}
+              <span className="lab-tip">
+                选「语音」这个模型才会被配音工具调用（如 MiMo 的 mimo-v2.5-tts）；选「自动」只看名字猜。
+                标为图片 / 视频 / 语音 / 音乐 / 识别的模型不进模型选择器，仅由对应工具调用
+              </span>
+            </div>
+            <div className="actions">
+              <button className="ghost" onClick={() => setModelForm(null)}>取消</button>
+              <button
+                className="primary"
+                disabled={!modelForm.id.trim() || !modelForm.context || !modelForm.output}
+                onClick={commitModelForm}
+              >
+                {modelForm.isNew ? '添加' : '确定'}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {modelDel && (
+        <Modal title="删除模型" onClose={() => setModelDel(null)}>
+          <div className="mform">
+            <div className="del-text">
+              从提供商里移除「<b>{modelDel}</b>」？此操作只改草稿，点提供商弹窗的「保存」才正式生效。
+            </div>
+            <div className="actions">
+              <button className="ghost" onClick={() => setModelDel(null)}>取消</button>
+              <button
+                className="primary danger-btn"
+                onClick={() => delModel(modelDel, parseModels(draft?.modelsText ?? '').indexOf(modelDel))}
+              >
+                删除
+              </button>
+            </div>
           </div>
         </Modal>
       )}

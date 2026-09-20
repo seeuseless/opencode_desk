@@ -1,10 +1,10 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
-import type { McpCfg, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
-import { MODEL_DEFAULTS, genRoleOf, isBuiltinModel } from '../../electron/main/types'
+import type { McpCfg, Modality, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
+import { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from '../../electron/main/types'
 
-export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, ThinkingMode } from '../../electron/main/types'
+export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, GenRole, ThinkingMode } from '../../electron/main/types'
 export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount } from '../../electron/main/types'
-export { MODEL_DEFAULTS, genRoleOf } from '../../electron/main/types'
+export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 
@@ -110,23 +110,44 @@ export function modelSupportsVideo(list: ProviderCfg[], key: string): boolean {
 }
 
 /**
- * 有没有可用的「能看图」的对话模型——电脑控制的视觉叠加（screen MCP）靠它代看截图。
+ * 有没有可用的「能当眼睛」的对话模型——电脑控制的视觉叠加（screen MCP）靠它代看截图。
  *
- * 判定与主进程 collectVisionTargets 同口径：用户第三方提供商里显式勾了「图片」输入的可信；
- * 平台内置模型的 input 是硬编码全勾（见 platform.ts），那份不可信，只能按名字认。
+ * 判定与主进程 collectVisionTargets 同口径：
+ *  1. 勾了「视觉」的（本机显式标注，最可信，平台/第三方一视同仁）；
+ *  2. 勾了「图片」的（能读图，通常也能代看）；
+ *  3. 名字像视觉模型的（VISION_MODEL_RE，兜住没勾过的老配置）。
  * 这里的用途只是界面提示，判定宽松一点没关系（多认出几个最多是文案上说「已代看」）。
  */
 export function hasVisionModel(list: ProviderCfg[]): boolean {
-  const NAME_RE = /(vision|omni|gemini|internvl|minicpm|llava|pixtral|gpt-4o|gpt-4-turbo|gpt-5|claude-3|claude-4|glm-4v|glm-4\.5v|glm-v|qwen.*vl|doubao.*(vision|vl)|(^|[-_.\s])vl([-_.\s]|$)|(^|[-_.\s])o[1-9])/i
   return list.some((p) =>
     p.enabled &&
     p.models.some((m) => {
       if (genRoleOf(m) !== 'none') return false // 生成类吃不了 chat，代看不了
-      const trusted = p.id !== PLATFORM_PROVIDER_ID
-      if (trusted && (m.input ?? MODEL_DEFAULTS.input).includes('image')) return true
-      return NAME_RE.test(m.id + ' ' + (m.name || ''))
+      const input = m.input ?? MODEL_DEFAULTS.input
+      if (input.includes('vision') || input.includes('image')) return true
+      return VISION_MODEL_RE.test(m.id + ' ' + (m.name || ''))
     })
   )
+}
+
+/**
+ * 挑一个「会当眼睛」的模型展示名，用于电脑控制时点名是谁在看屏幕。
+ *
+ * 与主进程 collectVisionTargets 的三级优先**同序**，所以这里排第一的就是内核实际会用的那个：
+ * 显式勾「视觉」的最优先，其次勾「图片」，最后名字像的。找不到返回空串。
+ */
+export function visionModelName(list: ProviderCfg[]): string {
+  const hit = (m: { id: string; name?: string; input?: readonly Modality[] }): boolean => {
+    const input = m.input ?? MODEL_DEFAULTS.input
+    return input.includes('vision') || input.includes('image') || VISION_MODEL_RE.test(m.id + ' ' + (m.name || ''))
+  }
+  const ok = (m: ProviderCfg['models'][number]) => genRoleOf(m) === 'none' && hit(m)
+  const all = list.filter((p) => p.enabled).flatMap((p) => p.models)
+  const explicit = all.find((m) => ok(m) && (m.input ?? []).includes('vision'))
+  const flagged = all.find((m) => ok(m) && (m.input ?? []).includes('image'))
+  const guessed = all.find(ok)
+  const pick = explicit ?? flagged ?? guessed
+  return pick ? pick.name || pick.id : ''
 }
 
 /** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
