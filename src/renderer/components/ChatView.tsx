@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -1267,6 +1267,15 @@ export function ChatView(p: Props) {
     if (!text && !atts.length) return
     const files = atts
     setNotice('') // 新的一轮先清掉上次的切换提示，避免旧提示赖在对话末尾
+    // 自动预警：用户用文字要「生图/生视频」，但当前没配生图模型（工具根本不存在，再提示也真出不了图）。
+    // 提前说明，避免模型为了出图去写 Python 装库、用户看着一头雾水。
+    if (text && isGenIntent(text) && !hasGenModel(p.settings)) {
+      const needsModule = files.some((a) => a.mime.startsWith('image/') || a.mime.startsWith('video/'))
+      setNotice(
+        (needsModule ? '这段附图要做成新图/新片，也' : '') +
+          '当前没有配置生图/生视频模型，AI 出不了真图。请在 设置 → 提供商 里加一个生图模型（如 flux / stable-diffusion / dall-e / *-image-*），否则 AI 只能靠代码画图、效果有限。'
+      )
+    }
     // 当前模型不能聊天，或看不懂本轮附件时，自动换成同提供商能胜任的模型（详见 resolveChatModel）
     const promptModel = resolveChatModel(files)
     if (busy && atts.length) {

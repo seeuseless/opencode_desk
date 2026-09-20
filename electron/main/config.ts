@@ -448,9 +448,9 @@ export function writeOpencodeConfig(s: Settings): void {
     instructions.push(routing)
   }
   /**
-   * 附件工具路由约定（常驻指令）：模型看不到图片画面时，光靠工具 description 里的触发条件
-   * 基本不会调工具——实测它会直接回「我看不了图片」。这里把规则写进内核指令，
-   * 重启内核即生效，不依赖渲染层改动（渲染层那次注入仍保留，它额外带上本轮附件的具体路径）。
+   * 工具路由约定（常驻指令）：模型看不到图片画面、或没意识到有生图工具时，光靠工具 description 里的
+   * 触发条件基本不会调工具——实测它会直接回「我看不了图片」、或改用写代码的方式画图。这块把规则写进
+   * 内核指令，重启内核即生效，不依赖渲染层改动（渲染层那次注入仍保留，它额外带上本轮附件的具体路径）。
    */
   if (mcp.vision || mcp.media) {
     const attach = join(opencodeConfigDir(), 'qingniao-attach.md')
@@ -467,7 +467,9 @@ export function writeOpencodeConfig(s: Settings): void {
     if (mcp.media) {
       lines.push(
         '- 要**改图 / 按图出图**（换背景、换风格、去掉某物、做成某风格）→ 调 `generate_image`，把该路径放进 image 参数，文字要求写进 prompt。',
-        '- 要**按视频出片**（续写、换风格、配音乐）→ 调 `create_video`，视频路径放进 videos（配音乐用 audios，参考图用 images）。'
+        '- 要**按视频出片**（续写、换风格、配音乐）→ 调 `create_video`，视频路径放进 videos（配音乐用 audios，参考图用 images）。',
+        '- **没有附图、纯文字要求生图/生视频**（「画一张 / 设计 / 生成 / 出张 *图」「做个 *logo、图标、海报」「做个 *视频」）→ 同样必须调 `generate_image`（只填 prompt、不填 image）/ `create_video`。禁止自己写 Python / 装库的方式来画图。',
+        '- 若本轮**没有** `generate_image` 工具（说明当前没配生图模型），直接如实说明「需先在设置里配置一个生图模型」，不要假装用代码出图、更不要硬画。'
       )
     }
     lines.push('- 分不清意图时按上述顺序判断：先问内容 → describe_image；要求改画面 → generate_image。')

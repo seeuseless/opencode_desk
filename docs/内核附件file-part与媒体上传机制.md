@@ -48,6 +48,12 @@
 - 实现：`oc.ATTACH_CTX_PREFIX` + `oc.injectContext(..., noReply)`（与项目记忆/浏览器上下文同一机制，
   AI 可见、界面不渲染；`ChatView.isCtxOnly` 需同步加前缀，否则会渲染成一条用户消息）。
   内容 = 本轮附件绝对路径清单 + 「看懂内容→describe_image / 改图→generate_image / 出片→create_video」。
+- **纯文字生图/生视频同样要点名工具**：没有附图、用户只是要「画一张 / 设计个 logo / 做个视频」时也有模型
+  不调工具、转而去写 Python 装库画图（实测「生个吴式太极拳 LOGO → AI 在写代码」）。处理分两层——
+  1. 主进程 `writeOpencodeConfig` 的常驻 `qingniao-attach.md`：有 `mcp.media` 时追加「纯文字生成也调
+     generate_image（只填 prompt）/ create_video，禁止写代码画图；若没有该工具就如实说需配生图模型」；
+  2. 渲染层 `send()` 发送前轻量识别生图意图（`oc.isGenIntent`），若当前没配生图模型（`oc.hasGenModel` 为假，
+     即 `generate_image` 根本没挂）就弹提示引导去配一个，避免模型硬写代码。
 - 排障入口：`curl http://127.0.0.1:<port>/mcp` 看 MCP 是否 connected；端口从 39421 起（adapter.ts PORT_START）。
   **内核只在启动时连 MCP**，改了配置必须重启内核才生效。
 

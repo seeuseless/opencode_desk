@@ -42,6 +42,20 @@ export function chatProviders(s: SettingsCfg): ProviderCfg[] {
   return [...platform, ...s.providers]
 }
 
+/** 「生图/生视频」意图的轻量识别（纯文字、没有附图时的生成请求）。命中只用于提示，不影响发送。 */
+const GEN_INTENT_RE =
+  /(生图|文生图|生成.{0,6}(图|图片|logo|图标|海报|封面|头像|壁纸|插画)|画(一|个|张|幅)?\S{0,8}?(图|logo|图标|海报|封面|头像|壁纸|插画)|出张?图|设计.{0,6}(logo|图标|海报|封面|头像)|做个图标|生成海报)/i
+export function isGenIntent(text: string): boolean {
+  return GEN_INTENT_RE.test(text)
+}
+
+/** 是否有可用的生图/生视频模型（决定 generate_image / create_video 工具是否被挂载） */
+const GEN_MODEL_RE =
+  /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl|video|sora|kling|veo|wan)/i
+export function hasGenModel(providers: ProviderCfg[]): boolean {
+  return providers.some((p) => p.models.some((m) => GEN_MODEL_RE.test(m.id)))
+}
+
 /**
  * 所选模型是否支持图片输入（桌面控制 / 内置浏览器截图回传的硬依赖）。
  * key 为 'pid/mid'，'' = 跟随内核默认，无法判定，返回 true 不拦。
