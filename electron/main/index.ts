@@ -1,11 +1,11 @@
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type WebContents } from 'electron'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -153,10 +153,58 @@ ipcMain.handle('media:read', (_e, target: string) => {
   let p = String(target ?? '').trim()
   if (/^file:\/\//i.test(p)) p = fileURLToPath(p)
   p = locateMediaFile(p)
-  const ext = p.split(/[?#]/)[0].toLowerCase().match(/\.[a-z]+$/)?.[0] ?? ''
+  // 扩展名要算上数字：.mp3/.mp4 这类用 [a-z]+ 匹配不上（media-mcp 踩过同一个坑）
+  const ext = p.split(/[?#]/)[0].toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
   const mime = IMG_MIME[ext]
   if (!mime || !existsSync(p)) return ''
   return `data:${mime};base64,${readFileSync(p).toString('base64')}`
+})
+
+// ---------- 聊天附件上传（输入框回形针）：图片转 data URL + 落盘媒体目录，视频回 file:// ----------
+// 落盘是为了让 AI 调 media MCP（图生图/图生视频）时能拿到一个稳定的本地路径引用，不受原文件移动删除影响
+const VIDEO_MIME: Record<string, string> = {
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime'
+}
+function pickName(ext: string): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `up-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}-${Math.random().toString(36).slice(2, 6)}${ext}`
+}
+ipcMain.handle('media:pick', async () => {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWin
+  const opts = {
+    title: '上传图片或视频',
+    properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
+    filters: [
+      {
+        name: '图片与视频',
+        extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg', 'mp4', 'webm', 'mov']
+      }
+    ]
+  }
+  const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+  if (r.canceled) return []
+  const out: { path: string; name: string; mime: string; url: string }[] = []
+  const mediaDir = join(qingniaoHome(), 'media')
+  for (const p of r.filePaths) {
+    // 同上：[a-z]+ 会让 .mp4 这类带数字的扩展名匹配不上，视频就传不了
+    const ext = p.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
+    const imgMime = IMG_MIME[ext]
+    const mime = imgMime ?? VIDEO_MIME[ext]
+    if (!mime || !existsSync(p)) continue
+    if (imgMime) {
+      mkdirSync(mediaDir, { recursive: true })
+      const file = join(mediaDir, pickName(ext))
+      copyFileSync(p, file)
+      out.push({ path: file, name: basename(p), mime, url: `data:${mime};base64,${readFileSync(p).toString('base64')}` })
+    } else {
+      // 视频可能很大，不读内容不复制，内核进程在本机可直接按 file:// 读取
+      out.push({ path: p, name: basename(p), mime, url: pathToFileURL(p).href })
+    }
+  }
+  return out
 })
 
 // ---------- 移动端接入（平台中转） ----------
@@ -373,6 +421,13 @@ function mediaMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'media-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'media-mcp.mjs')
+}
+
+/** 图片理解 MCP（describe_image 识图工具）脚本位置（随安装包分发） */
+function visionMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'vision-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'vision-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -680,6 +735,7 @@ app.whenReady().then(async () => {
   setPanelMcp({ path: panelMcpPath(), port: panelPort })
   setDesktopMcp({ path: desktopMcpPath() })
   setMediaMcp({ path: mediaMcpPath() })
+  setVisionMcp({ path: visionMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace

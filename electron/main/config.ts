@@ -257,11 +257,39 @@ let mediaMcp: { path: string } | undefined
 export function setMediaMcp(v: { path: string }): void {
   mediaMcp = v
 }
+/** 图片理解 MCP（describe_image 识图工具）脚本路径 */
+let visionMcp: { path: string } | undefined
+export function setVisionMcp(v: { path: string }): void {
+  visionMcp = v
+}
 
 /** 纯生图模型的命名特征：这类模型只认 /images/generations，发 chat 必被拒，由生图工具代劳 */
 const IMAGE_MODEL_RE = /(^|[-_.])(image|img|dall[-_.]?e?|flux|stable[-_.]?diffusion|sdxl)/i
 /** 生视频模型同理，只认异步 /videos 任务接口 */
 const VIDEO_MODEL_RE = /(^|[-_.])(video|sora|kling|veo|wan)/i
+/**
+ * 视觉（能看图）模型的命名特征——挑识图目标时用。
+ *
+ * 平台下发的模型清单不带模态字段，内置模型的 input 又是硬编码全勾（见 platform.ts），
+ * 那份 input 不可信，只能按名字认；名字是最可靠的公开信号（厂商自己都这么命名）。
+ * 匹配的是「id + 展示名」：平台内置模型对外 ID 常是 qn-xxx，靠展示名才认得出。
+ */
+const VISION_MODEL_RE =
+  /(vision|omni|gemini|internvl|minicpm|llava|pixtral|gpt-4o|gpt-4-turbo|gpt-5|claude-3|claude-4|glm-4v|glm-4\.5v|glm-v|qwen.*vl|doubao.*(vision|vl)|(^|[-_.\s])vl([-_.\s]|$)|(^|[-_.\s])o[1-9])/i
+
+/**
+ * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
+ * 固定把档位写全（低/中/高 + 开），**显示哪些档位交给渲染层按模型自身能力判定**，配置侧不再区分模型：
+ * 内核遇到请求里没声明过的档位名时不合并任何 options（等于服务端默认），多写不会有害；
+ * 反过来若只按配置写一种，模型能力与配置不符时用户就选不到正确档位。
+ */
+const THINK_VARIANTS: Record<string, unknown> = {
+  low: { reasoningEffort: 'low' },
+  medium: { reasoningEffort: 'medium' },
+  high: { reasoningEffort: 'high' },
+  // toggle 型（只有开/关）的「开」：统一按高档思考发出
+  on: { reasoningEffort: 'high' }
+}
 
 /**
  * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器与桌面控制）。
@@ -280,6 +308,8 @@ export function writeOpencodeConfig(s: Settings): void {
         apiKey: '{env:' + envKey(id) + '}'
       },
       // 每模型接入参数：上下文窗口/最大输出 → limit，输入类型 → modalities.input（输出固定文本）
+      // 思考档位 → variants（内核 model variant，key 为档位名，值为请求选项覆盖）：
+      // reasonEffort 经 @ai-sdk/openai-compatible 变成请求体 reasoning_effort（见 docs/内核variant思考档位机制.md）
       // name 只在有展示名时写（平台模型对外 ID 是 qn-xxx，靠它显示人话）
       models: Object.fromEntries(
         p.models.map((m) => [
@@ -287,7 +317,8 @@ export function writeOpencodeConfig(s: Settings): void {
           {
             ...(m.name ? { name: m.name } : {}),
             limit: { context: m.context, output: m.output },
-            modalities: { input: m.input, output: ['text'] }
+            modalities: { input: m.input, output: ['text'] },
+            variants: THINK_VARIANTS
           }
         ])
       )
@@ -348,6 +379,45 @@ export function writeOpencodeConfig(s: Settings): void {
       }
     }
   }
+  // 识图：对话模型不支持 image 输入时，内核不会把图放进上下文，只剩一行 [Attached image/png: 路径]。
+  // 挂一个视觉模型当「代看」——describe_image 读那个路径问视觉模型，把答案交还给对话模型。
+  if (visionMcp) {
+    const flagged: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
+    const guessed: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
+    for (const p of usableProviders(s)) {
+      if (!p.apiKey.trim() || !p.baseURL.trim()) continue
+      // 平台清单不下发模态字段、内置模型的 input 又是硬编码全勾（见 platform.ts），那份 input 不可信
+      const trustInput = p.id !== PLATFORM_PROVIDER_ID
+      for (const m of p.models) {
+        if (IMAGE_MODEL_RE.test(m.id) || VIDEO_MODEL_RE.test(m.id)) continue // 生成类吃不了 chat
+        const label = m.name || m.id
+        const item = {
+          id: `${p.id}/${m.id}`,
+          label,
+          baseURL: p.baseURL.trim().replace(/\/+$/, ''),
+          apiKey: p.apiKey.trim(),
+          model: m.id
+        }
+        if (trustInput && (m.input ?? []).includes('image')) flagged.push(item)
+        else if (VISION_MODEL_RE.test(m.id + ' ' + label)) guessed.push(item)
+      }
+    }
+    // 用户显式勾了图片输入的排前面（可信），按名字认出来的兜底
+    const visionTargets = [...flagged, ...guessed]
+    if (visionTargets.length) {
+      mcp.vision = {
+        type: 'local',
+        command: ['node', visionMcp.path],
+        environment: {
+          QN_VISION_TARGETS: JSON.stringify(visionTargets),
+          QN_MEDIA_DIR: join(storeDir(), 'media')
+        },
+        // 识图几秒到几十秒（大图更久），默认 5s 超时必被掐
+        timeout: 120000,
+        enabled: true
+      }
+    }
+  }
   for (const m of s.mcps) {
     if (m.type === 'remote') {
       if (!m.url.trim()) continue
@@ -373,6 +443,33 @@ export function writeOpencodeConfig(s: Settings): void {
         '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
     )
     instructions.push(routing)
+  }
+  /**
+   * 附件工具路由约定（常驻指令）：模型看不到图片画面时，光靠工具 description 里的触发条件
+   * 基本不会调工具——实测它会直接回「我看不了图片」。这里把规则写进内核指令，
+   * 重启内核即生效，不依赖渲染层改动（渲染层那次注入仍保留，它额外带上本轮附件的具体路径）。
+   */
+  if (mcp.vision || mcp.media) {
+    const attach = join(opencodeConfigDir(), 'qingniao-attach.md')
+    const lines = [
+      '# 图片 / 视频附件处理约定',
+      '- 用户消息里出现 `[Attached image/png: 路径]` 这类占位文本，说明**你看不到图片画面**（当前模型不支持读图）。',
+      '  此时严禁回答「我看不了图片 / 请你描述一下这张图」，也**严禁反问用户「要不要我识别一下」「需要我处理吗」**——' +
+        '用户把图发出来就是要你处理，**直接调用下面对应的工具**，把占位里的路径**原样**填进参数（不要改成文件名，不要自己编造路径）。'
+    ]
+    if (mcp.vision)
+      lines.push(
+        '- 要**看懂图片内容**（识别画面、读取图里文字、回答关于这张图的问题）→ 调 `describe_image`，images 填该路径。'
+      )
+    if (mcp.media) {
+      lines.push(
+        '- 要**改图 / 按图出图**（换背景、换风格、去掉某物、做成某风格）→ 调 `generate_image`，把该路径放进 image 参数，文字要求写进 prompt。',
+        '- 要**按视频出片**（续写、换风格、配音乐）→ 调 `create_video`，视频路径放进 videos（配音乐用 audios，参考图用 images）。'
+      )
+    }
+    lines.push('- 分不清意图时按上述顺序判断：先问内容 → describe_image；要求改画面 → generate_image。')
+    writeFileSync(attach, lines.join('\n') + '\n')
+    instructions.push(attach)
   }
   const cfg = {
     $schema: 'https://opencode.ai/config.json',

@@ -61,6 +61,9 @@ const api = {
   saveMedia: (source: string, name?: string): Promise<string> => ipcRenderer.invoke('media:save', { source, name }),
   /** 读本地图片为 data URL（聊天内嵌显示本地图用）；非图片或不存在的返回空串 */
   readMedia: (path: string): Promise<string> => ipcRenderer.invoke('media:read', path),
+  /** 弹系统对话框选图片/视频（聊天附件上传）：图片返回 dataURL + 媒体目录落盘路径，视频返回 file:// 路径 */
+  pickMedia: (): Promise<{ path: string; name: string; mime: string; url: string }[]> =>
+    ipcRenderer.invoke('media:pick'),
   /** 移动端接入状态：开关、二维码（{平台域名}/ide/device/{token}）、通道是否在跑（左栏手机面板用） */
   mobileStatus: (): Promise<DeskStatus> => ipcRenderer.invoke('mobile:get'),
   /** 开/关「允许移动端连接此设备」：开则手机扫码后能操作这台电脑 */

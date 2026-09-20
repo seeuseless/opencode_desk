@@ -31,6 +31,9 @@ extraResources:
   # 媒体生成 MCP 脚本（generate_image / create_video / check_video，让对话模型也能生图生视频）
   - from: resources/media-mcp.mjs
     to: media-mcp.mjs
+  # 图片理解 MCP 脚本（describe_image，非视觉模型发图时由视觉模型代看）
+  - from: resources/vision-mcp.mjs
+    to: vision-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"
