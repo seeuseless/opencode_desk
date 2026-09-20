@@ -894,6 +894,15 @@ input, textarea { font: inherit; }
   color: var(--accent);
   font-weight: 600;
 }
+/* 「重新识别档位」：与档位选项用分隔线隔开，避免误点成选档 */
+.menu-panel.tp .tp-reprobe {
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  color: var(--fg2);
+  font-size: 12px;
+}
+.menu-panel.tp .tp-reprobe:hover { color: var(--accent); }
 
 
 /* ================= 按钮 ================= */

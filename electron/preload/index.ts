@@ -33,18 +33,21 @@ const api = {
     apiKey?: string
   ): Promise<{ models?: string[]; error?: string }> => ipcRenderer.invoke('models:fetch', { baseURL, apiKey }),
   /**
-   * 思考形态探测：某模型是「开关型（开/关）」还是「真有低/中/高」。
-   * 内核能力表只有「支不支持思考」，没有「是否分档」，只能各档发一次极小请求比对思考量；
-   * 结果按「提供商/模型」长期缓存，同一模型只探一次。返回 null = 这次没探成（网络/接口不支持），调用方保留原判定。
+   * 思考形态探测：某模型是「开关型（开/关）」还是「真有低/中/高」。**每个模型独立探测、独立缓存**。
+   * 内核能力表只有「支不支持思考」，没有「是否分档」，只能各档发几次极小请求比对思考量（取中位数抗抖动）。
+   * 返回 null = 这次没探成（网络/接口不支持），调用方保留原判定；force=true 忽略缓存重探。
    */
   probeThinking: (
     providerID: string,
-    modelID: string
+    modelID: string,
+    force?: boolean
   ): Promise<{ kind: 'effort' | 'toggle' | 'off'; tokens: { none: number; low: number; high: number } } | null> =>
-    ipcRenderer.invoke('thinking:probe', { providerID, modelID }),
+    ipcRenderer.invoke('thinking:probe', { providerID, modelID, force }),
   /** 只读已探结论（不发请求）：界面打开时一次性预填所有模型的档位形态 */
   cachedThinking: (keys: string[]): Promise<Record<string, 'effort' | 'toggle' | 'off'>> =>
     ipcRenderer.invoke('thinking:cached', keys),
+  /** 清探测缓存（不传 modelKey 则全清），下次切到该模型会重探 */
+  clearThinking: (modelKey?: string): Promise<boolean> => ipcRenderer.invoke('thinking:clear', modelKey),
   /** 读取项目记忆：<项目>/.qingniao/memory/MEMORY.md（长期）+ YYYY-MM-DD.md（当日），目录不存在则建 */
   readMemory: (projectPath: string): Promise<{ long: string; daily: string }> =>
     ipcRenderer.invoke('memory:read', projectPath),

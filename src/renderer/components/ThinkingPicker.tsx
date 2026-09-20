@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Brain, Check, ChevronDown } from 'lucide-react'
+import { Brain, Check, ChevronDown, RefreshCw } from 'lucide-react'
 import type { ThinkingKind } from '../oc'
 
 /**
@@ -19,13 +19,16 @@ export function ThinkingPicker({
   value,
   onChange,
   kind,
-  probed = false
+  probed = false,
+  onReprobe
 }: {
   value: string
   onChange: (v: string) => void
   kind: ThinkingKind
   /** kind 是否来自实测（而非按模型名/能力表推断），用于给用户一个「凭什么这么显示」的说法 */
   probed?: boolean
+  /** 重新实测当前模型的档位形态（结论可能因网关更新而过时） */
+  onReprobe?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const wrap = useRef<HTMLDivElement>(null)
@@ -93,6 +96,23 @@ export function ThinkingPicker({
               <span>{t.label}</span>
             </button>
           ))}
+          {/* 档位形态是实测出来的，网关换了模型能力就可能过时，给个随时重探的入口 */}
+          {onReprobe && (
+            <button
+              type="button"
+              className="menu-item tp-reprobe"
+              title="重新实测该模型是「开关」还是「分档」（会依次以关/低/高各发几次极小请求）"
+              onClick={() => {
+                setOpen(false)
+                onReprobe()
+              }}
+            >
+              <span className="mi-check">
+                <RefreshCw size={12} />
+              </span>
+              <span>重新识别档位</span>
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -352,13 +352,15 @@ export const oc = {
   /** 模型能力表（谁支持思考）：内核内嵌 models.dev 的 capabilities.reasoning，见 fetchReasoningCaps */
   fetchReasoningCaps,
   /**
-   * 思考形态实测探测（开关型 vs 低/中/高）：各档发一次极小请求比对思考量，主进程按模型长期缓存。
-   * 返回 null = 这次没探成（网络/接口不支持），调用方保留原判定，不要据此改档位。
+   * 思考形态实测探测（开关型 vs 低/中/高）：**每个模型独立探测、独立缓存**，各档采几次取中位数。
+   * 返回 null = 这次没探成（网络/接口不支持），调用方保留原判定，不要据此改档位；force 可忽略缓存重探。
    */
-  probeThinking: (providerID: string, modelID: string) =>
-    window.qingniao.probeThinking(providerID, modelID),
+  probeThinking: (providerID: string, modelID: string, force?: boolean) =>
+    window.qingniao.probeThinking(providerID, modelID, force),
   /** 只读已探结论（批量、不发请求）：界面打开时预填全部模型的档位形态，避免切模型时档位闪变 */
   fetchProbedKinds,
+  /** 清探测缓存（不传则全清），下次切到该模型会重探 */
+  clearProbedKinds: (modelKey?: string) => window.qingniao.clearThinking(modelKey),
   /** 同步等待本轮对话完成；期间流式内容走事件推送。
    *  附件（图片/视频）转成内核 file part：图片 data URL 供内核缩图，视频 file:// 由内核本机读取。
    *  图片的 filename 带媒体目录完整路径——模型据此在图生图/图生视频时把路径传给 media MCP 工具。

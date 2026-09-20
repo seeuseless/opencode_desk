@@ -210,8 +210,10 @@ export function ChatView(p: Props) {
   const [probeMap, setProbeMap] = useState<Record<string, 'effort' | 'toggle' | 'off'>>({})
   /** 思考档位按模型记忆（跟随所选模型）：value = thinkMap[当前模型] ?? 默认；切模型读各自的记忆。
    *  **没有「不传思考参数」这种状态**：只有开关的模型默认「开」（on），真有分档的默认「高」（high），
-   *  用户可随时自己切。存档值不属于当前档位集合（如模型从分档变成开关、老存档是 low）时回落到默认档。
-   *  thinkRef 每次渲染同步当前模型的有效档位，供异步重发/续跑读取最新值。 */
+   *  用户可随时自己切。
+   *  形态判定可能随实测/推断修正而变化（同一模型上次记 low、这次判成开关型），此时按**语义**搬一档
+   *  （有档位的就代表"开"，没有的就代表"关"），而不是把用户的选择直接丢掉；
+   *  彻底对不上（存档是"开"、现在变成分档）才回落到默认档。 */
   const [thinkMap, setThinkMap] = useState<Record<string, string>>(() => load('qingniao.thinkMap', {}))
   // 思考档位形态一律按模型自身能力定（内核 capabilities.reasoning，能力表查无实据时按模型名猜），无需用户配置
   const thinkKind = resolveThinkingKind(p.model, caps, probeMap)
@@ -219,11 +221,11 @@ export function ChatView(p: Props) {
     const fallback = defaultThinkingValue(thinkKind)
     if (thinkKind === 'off') return ''
     const stored = thinkMap[p.model]
-    const valid =
-      thinkKind === 'toggle'
-        ? stored === 'on' || stored === 'none'
-        : stored === 'low' || stored === 'medium' || stored === 'high'
-    return valid ? (stored as string) : fallback
+    if (thinkKind === 'toggle') return stored === 'none' ? 'none' : 'on'
+    if (stored === 'low' || stored === 'medium' || stored === 'high') return stored
+    // 上一次记的是开关型的值：搬成语义等价档位（开→高，关→低）
+    if (stored === 'none') return 'low'
+    return fallback
   })()
   const thinkRef = useRef(thinkVal)
   thinkRef.current = thinkVal
@@ -819,16 +821,17 @@ export function ChatView(p: Props) {
   /** 当前模型没探过时补探一次（预填已覆盖大部分；切到新模型时才走到这里） */
   useEffect(() => {
     if (!p.settingsReady || !p.model) return
-    const i = p.model.indexOf('/')
+    const key = p.model // 固定成闭包常量：结果永远写回「本次探测对应的那个模型」，快速切模型也不会串
+    const i = key.indexOf('/')
     if (i <= 0) return
-    const pid = p.model.slice(0, i)
-    const mid = p.model.slice(i + 1)
+    const pid = key.slice(0, i)
+    const mid = key.slice(i + 1)
     let alive = true
     void oc
       .probeThinking(pid, mid)
       .then((r) => {
         if (!alive || !r) return
-        setProbeMap((prev) => (prev[p.model] === r.kind ? prev : { ...prev, [p.model]: r.kind }))
+        setProbeMap((prev) => (prev[key] === r.kind ? prev : { ...prev, [key]: r.kind }))
       })
       .catch(() => {
         /* 探测失败保留原判定，下次切回再试 */
@@ -838,6 +841,27 @@ export function ChatView(p: Props) {
     }
   }, [p.model, p.settingsReady])
 
+  /**
+   * 重新实测当前模型的档位形态：先清掉该模型缓存（结论可能因网关更新而过时），再强制探一次。
+   * 期间把旧结论摘掉，档位暂时回落到推断结果，探完立即换成新结论。
+   */
+  async function reprobeThinking() {
+    const key = p.model
+    const i = key.indexOf('/')
+    if (i <= 0) return
+    await oc.clearProbedKinds(key).catch(() => {})
+    setProbeMap((prev) => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    try {
+      const r = await oc.probeThinking(key.slice(0, i), key.slice(i + 1), true)
+      if (r) setProbeMap((prev) => ({ ...prev, [key]: r.kind }))
+    } catch {
+      /* 探不成保留推断结果 */
+    }
+  }
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
   useEffect(() => {
@@ -1840,7 +1864,13 @@ export function ChatView(p: Props) {
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
             />
-            <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} probed={!!probeMap[p.model]} />
+            <ThinkingPicker
+              value={thinkVal}
+              onChange={setThinkSel}
+              kind={thinkKind}
+              probed={!!probeMap[p.model]}
+              onReprobe={reprobeThinking}
+            />
             {anyBusy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />

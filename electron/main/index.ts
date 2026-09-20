@@ -6,7 +6,7 @@ import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
-import { cachedThinking, probeThinking } from './thinking.ts'
+import { cachedThinking, clearThinkingCache, probeThinking } from './thinking.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -461,14 +461,20 @@ ipcMain.handle('models:fetch', async (_e, req: { baseURL: string; apiKey?: strin
 
 /**
  * 思考形态探测（开关型 vs 低/中/高）：内核能力表只有「支不支持思考」，没有「是否分档」，
- * 只能对同一模型发几次极小请求比对思考量，结果按「提供商/模型」永久缓存（见 thinking.ts）。
+ * 只能对同一模型发几次极小请求比对思考量。**每个模型独立探测、独立缓存**（key 为 `提供商/模型`）。
  */
-ipcMain.handle('thinking:probe', (_e, req: { providerID: string; modelID: string }) =>
-  probeThinking(req.providerID, req.modelID)
+ipcMain.handle('thinking:probe', (_e, req: { providerID: string; modelID: string; force?: boolean }) =>
+  probeThinking(req.providerID, req.modelID, req.force === true)
 )
 
 /** 只读已探结论（不发请求）：界面打开时预填全部模型的档位形态，避免切模型时档位闪变 */
 ipcMain.handle('thinking:cached', (_e, keys: string[]) => cachedThinking(Array.isArray(keys) ? keys : []))
+
+/** 清探测缓存：不传 modelKey 就全清（结论可能因网关更新而过时，留个重探入口） */
+ipcMain.handle('thinking:clear', (_e, modelKey?: string) => {
+  clearThinkingCache(modelKey)
+  return true
+})
 
 // 项目记忆：每个项目目录下的 .qingniao/memory/（MEMORY.md 长期 + YYYY-MM-DD.md 每日），
 // 跟项目走（可 git/同步），不进应用配置。AI 在新对话自动加载，并在工作中自行维护。

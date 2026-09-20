@@ -38,16 +38,29 @@ function cachePath(): string {
   return join(qingniaoHome(), CACHE_FILE)
 }
 
+/** 内存缓存：进程内唯一事实源，避免并发探测各读一份再互相覆盖（后写把先写的结论冲掉） */
+let cacheMem: Record<string, ThinkProbeResult> | null = null
+
 function loadCache(): Record<string, ThinkProbeResult> {
+  if (cacheMem) return cacheMem
   try {
-    if (!existsSync(cachePath())) return {}
-    return JSON.parse(readFileSync(cachePath(), 'utf8')) as Record<string, ThinkProbeResult>
+    cacheMem = existsSync(cachePath())
+      ? (JSON.parse(readFileSync(cachePath(), 'utf8')) as Record<string, ThinkProbeResult>)
+      : {}
   } catch {
-    return {}
+    cacheMem = {}
   }
+  return cacheMem
 }
 
-function writeCache(c: Record<string, ThinkProbeResult>): void {
+/**
+ * 写缓存：**先合并进内存再整体落盘**。
+ * 预填/切模型会同时触发多个模型的探测，若各自拿旧的整份快照去写，就会相互覆盖——
+ * 表现为「这个模型探好了，切走再切回来又变回旧的」，所以必须走内存统一合并。
+ */
+function remember(key: string, result: ThinkProbeResult): void {
+  const c = loadCache()
+  c[key] = result
   try {
     mkdirSync(qingniaoHome(), { recursive: true })
     writeFileSync(cachePath(), JSON.stringify(c, null, 2))
@@ -101,33 +114,87 @@ export function cachedThinking(keys: string[]): Record<string, ThinkProbeKind> {
   return out
 }
 
+/** 某档位的思考量要多采几次——网关的思考量随机性很大，单次采样会误判 */
+const SAMPLES_PER_EFFORT = 3
+
+/** 中位数：抗单次抖动，比平均值稳 */
+function median(xs: number[]): number {
+  const a = [...xs].sort((x, y) => x - y)
+  const m = a.length >> 1
+  return a.length % 2 ? a[m] : Math.round((a[m - 1] + a[m]) / 2)
+}
+
 /**
- * 探测某模型的思考形态。已探过直接返回缓存；三轮请求任一失败则返回 null（表示「这次没能判定」，
- * 调用方继续用旧的推断结果，绝不让一次网络抖动把能思考的模型判成不支持）。
+ * 判定形态。**核心取舍：拿不准时判 effort（分档）而不是 toggle**。
+ *
+ * 实测教训：deepseek-flash 同一档连打三次，low = 134/192/166、high = 177/228/185——
+ * 两个区间**大幅重叠**，单次采样经常出现「高档比低档还少」（实测抽到过 low=214 / high=137），
+ * 于是被判成开关型，用户切走再切回来档位就从「低中高」变成了「开关」。
+ *
+ * 所以只要**两档都确实在思考**，且 high 的中位数不低于 low 的 0.8 倍（没出现"高档反而明显更少"这种
+ * 说明根本不接受分档的证据），就判 effort：分档多给几个选项无害（档位默认停在高，用户只是多点两下），
+ * 误判成开关却会让用户真的失去低/中/高。
  */
-export async function probeThinking(providerID: string, modelID: string): Promise<ThinkProbeResult | null> {
-  const cache = loadCache()
+function decideKind(none: number, low: number, high: number): ThinkProbeKind {
+  if (low <= 0 && high <= 0) return 'off'
+  // high 明显低于 low（不足八成）：这个网关不认分档，只当开关使
+  if (high < low * 0.8) return 'toggle'
+  return 'effort'
+}
+
+/**
+ * 探测某模型的思考形态。**每个模型各探各的、各存各的**（key 为 `提供商ID/模型ID`）——
+ * 档位形态是「模型 + 网关」的属性，绝不能几个模型共用一份结论。
+ *
+ * - 已探过且非强制 → 直接返回缓存（不花 token）；
+ * - `force` → 忽略缓存重探（网关若更新过能力，结论会过时，留个重探口子）；
+ * - 关键档位采不满样本 → 返回 null（表示「这次没能判定」），调用方保留原判定，
+ *   绝不让一次网络抖动把能思考的模型判成不支持。
+ */
+export async function probeThinking(
+  providerID: string,
+  modelID: string,
+  force = false
+): Promise<ThinkProbeResult | null> {
   const key = `${providerID}/${modelID}`
-  if (cache[key]) return cache[key]
+  const cache = loadCache()
+  if (!force && cache[key]) return cache[key]
   const p = loadSettings().providers.find((x) => x.id === providerID)
   if (!p || !p.baseURL.trim() || !p.apiKey?.trim()) return null
 
-  const [none, low, high] = [
-    await thinkOnce(p.baseURL, p.apiKey, modelID, 'none'),
-    await thinkOnce(p.baseURL, p.apiKey, modelID, 'low'),
-    await thinkOnce(p.baseURL, p.apiKey, modelID, 'high')
-  ]
-  // low/high 必须都实测成功，否则没资格下结论
+  /** 同一档连打 SAMPLES_PER_EFFORT 次取中位数；只要有一次成功就算采到（思考量本身就会飘） */
+  const sample = async (effort: string): Promise<number | null> => {
+    const got: number[] = []
+    for (let i = 0; i < SAMPLES_PER_EFFORT; i++) {
+      const n = await thinkOnce(p.baseURL, p.apiKey, modelID, effort)
+      if (n !== null) got.push(n)
+    }
+    return got.length ? median(got) : null
+  }
+
+  const none = await sample('none')
+  const low = await sample('low')
+  const high = await sample('high')
+  // low/high 必须都采到，否则没资格下结论
   if (low === null || high === null) return null
 
-  let kind: ThinkProbeKind
-  if (low <= 0 && high <= 0) kind = 'off'
-  // 真分档要「明显」，取 1.5 倍且差值不小于 40：档位本身有随机波动，阈值太低会把开关误判成分档
-  else if (low > 0 && high >= low * 1.5 && high - low >= 40) kind = 'effort'
-  else kind = 'toggle'
-
-  const result: ThinkProbeResult = { kind, tokens: { none: none ?? -1, low, high } }
-  cache[key] = result
-  writeCache(cache)
+  const result: ThinkProbeResult = {
+    kind: decideKind(none ?? 0, low, high),
+    tokens: { none: none ?? -1, low, high }
+  }
+  remember(key, result)
   return result
+}
+
+/** 清掉某模型（不传则全部）的探测缓存，下次切到它就会重探 */
+export function clearThinkingCache(modelKey?: string): void {
+  const c = loadCache()
+  if (modelKey) delete c[modelKey]
+  else for (const k of Object.keys(c)) delete c[k]
+  try {
+    mkdirSync(qingniaoHome(), { recursive: true })
+    writeFileSync(cachePath(), JSON.stringify(c, null, 2))
+  } catch {
+    /* 忽略 */
+  }
 }
