@@ -873,6 +873,8 @@ export function SettingsView(p: Props) {
                           </button>
                         ))}
                       </div>
+                      {/* 思考档位不在此配置：由内核模型能力表（models.dev 的 reasoning）自动判定，
+                          见 docs/内核variant思考档位机制.md */}
                     </div>
                   </div>
                 )
