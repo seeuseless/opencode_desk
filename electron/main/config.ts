@@ -288,7 +288,10 @@ const THINK_VARIANTS: Record<string, unknown> = {
   medium: { reasoningEffort: 'medium' },
   high: { reasoningEffort: 'high' },
   // toggle 型（只有开/关）的「开」：统一按高档思考发出
-  on: { reasoningEffort: 'high' }
+  on: { reasoningEffort: 'high' },
+  // 「关」：显式关闭思考。OpenAI 兼容端点的通用值是 reasoning_effort=none
+  //（实测 agnes-3.0-flash 传 none 后不再产出 reasoning_content，与 chat_template_kwargs.enable_thinking=false 等效）
+  none: { reasoningEffort: 'none' }
 }
 
 /**
