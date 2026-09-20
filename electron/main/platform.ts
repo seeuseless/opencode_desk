@@ -3,8 +3,8 @@ import { hostname } from 'node:os'
 import { adapter } from './adapter.ts'
 import { clearPlatform, loadSettings, platformBaseUrl, platformLoginUrl, setPlatform } from './config.ts'
 import { relay } from './relay.ts'
-import type { ModelCfg, PlatformAccount, PlatformStatus, UsageLog, UsagePage, UsageRecord, UsageSummary } from './types.ts'
-import { MODEL_DEFAULTS, MODALITIES, isBuiltinModel } from './types.ts'
+import type { ModelCfg, Modality, PlatformAccount, PlatformStatus, UsageLog, UsagePage, UsageRecord, UsageSummary } from './types.ts'
+import { MODEL_DEFAULTS, VISION_MODEL_RE, isBuiltinModel } from './types.ts'
 
 /**
  * 平台（青鸟服务端）客户端。
@@ -159,20 +159,34 @@ class Platform {
       const data = (await res.json().catch(() => null)) as ModelsResponse | null
       const models: ModelCfg[] = (Array.isArray(data?.data) ? data!.data! : [])
         .filter((m) => !!m && typeof m.id === 'string' && m.id !== '')
-        .map((m) => ({
-          id: String(m.id),
-          name: typeof m.name === 'string' && m.name.trim() ? m.name.trim() : undefined,
-          context: MODEL_DEFAULTS.context,
-          output: MODEL_DEFAULTS.output,
-          input: [...MODALITIES],
-          // 计价信息一起落盘：选择器要打「限免/折扣」标签并把倍率写在最右边，不必再单独请求一次
-          free: m.free === true,
-          discount: typeof m.discount === 'number' ? m.discount : null,
-          ratio: typeof m.ratio === 'number' ? m.ratio : undefined,
-          effRatio: typeof m.effective_ratio === 'number' ? m.effective_ratio : undefined,
-          // 内置标记一并落盘：「内置模型」分组只收它。老平台不下发该字段时按「内置」算，别把模型全藏了
-          builtin: isBuiltinModel({ builtin: m.builtin })
-        }))
+        .map((m) => {
+          const id = String(m.id)
+          const name = typeof m.name === 'string' && m.name.trim() ? m.name.trim() : undefined
+          /**
+           * 输入模态：只按名字给一个保守的初始值，**不再无脑全勾**。
+           *
+           * 原来写死 [...MODALITIES]（文本+图片+视频全勾），后果是：所有内置模型在配置里
+           * 都"支持读图"，用户界面看到的勾选是假的，而挑代看目标时又只能反过来靠名字猜——
+           * 两边口径不一致。现在改成：名字像视觉模型 → 勾「图片」并同时勾「视觉」
+           * （能读图通常也能代看，给它一个合理起点）；其余只勾「文本」。
+           * 平台不下发模态，所以这只是起点，用户可以在设置里逐模型改，改了就以勾选为准。
+           */
+          const looksVision = VISION_MODEL_RE.test(id + ' ' + (name ?? ''))
+          return {
+            id,
+            name,
+            context: MODEL_DEFAULTS.context,
+            output: MODEL_DEFAULTS.output,
+            input: looksVision ? (['text', 'image', 'vision'] as Modality[]) : (['text'] as Modality[]),
+            // 计价信息一起落盘：选择器要打「限免/折扣」标签并把倍率写在最右边，不必再单独请求一次
+            free: m.free === true,
+            discount: typeof m.discount === 'number' ? m.discount : null,
+            ratio: typeof m.ratio === 'number' ? m.ratio : undefined,
+            effRatio: typeof m.effective_ratio === 'number' ? m.effective_ratio : undefined,
+            // 内置标记一并落盘：「内置模型」分组只收它。老平台不下发该字段时按「内置」算，别把模型全藏了
+            builtin: isBuiltinModel({ builtin: m.builtin })
+          }
+        })
 
       setPlatform({ models, syncedAt: Date.now() })
       this.lastError = ''

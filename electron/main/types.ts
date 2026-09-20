@@ -1,9 +1,21 @@
 /** 主进程与渲染层共享的设置类型（无 node 依赖，可在两侧 import） */
 
-/** 模型输入类型（内核 modalities.input 的可选值，输出固定为文本） */
-export type Modality = 'text' | 'image' | 'video'
+/**
+ * 模型输入类型（内核 modalities.input 的可选值，输出固定为文本）。
+ *
+ * 注意 `vision` 与 `image` 是**两件事**，别混：
+ *  - `image`：模型自己能把图片读进上下文（用户发张图它能直接看懂）。这是内核认的模态。
+ *  - `vision`：这个模型能当"眼睛"替别人看画面 —— 截图、图片交给它，它把看到的内容写成文字。
+ *    用于识图 MCP（describe_image）与电脑控制的视觉叠加（screen MCP）挑代看目标。
+ *    它不是内核模态，只是本机配置里的能力标记，不会写进内核的 modalities.input。
+ */
+export type Modality = 'text' | 'image' | 'video' | 'vision'
 
+/** 写进内核 modalities.input 的真实模态（vision 是本机能力标记，内核不认，必须滤掉） */
 export const MODALITIES: Modality[] = ['text', 'image', 'video']
+
+/** 设置界面「输入」里可勾的全部选项（比内核模态多一个 vision） */
+export const INPUT_OPTIONS: Modality[] = ['text', 'image', 'video', 'vision']
 
 /**
  * 新模型的默认接入参数：上下文窗口 100 万、最大输出 128K、**输入只勾文本**。
@@ -25,13 +37,14 @@ export type ThinkingMode = 'off' | 'toggle' | 'low' | 'medium' | 'high'
 /**
  * 模型的生成角色（设置里逐模型显式选）。
  *
- * 生图/生视频/语音模型不走普通 chat 接口（只认 /images/generations、异步 /videos、/audio/speech），
- * 当对话模型用必被拒，主进程据此把它们挂进生成工具的目标清单、并从识图清单里排除。
+ * 生图/生视频/语音合成/音乐/语音识别模型都不走普通 chat 接口（只认 /images/generations、
+ * 异步 /videos、/audio/speech、异步 /audio/music、SSE /audio/asr/sse），
+ * 当对话模型用必被拒，主进程据此把它们挂进各自工具的目标清单、并从识图清单里排除。
  *  - 'auto'（含未设置）：按模型名判，等价于旧行为；
- *  - 'image' | 'video' | 'tts'：强制认作生图 / 生视频 / 语音合成模型（seedream、即梦这类名字认不出的靠它）；
+ *  - 'image' | 'video' | 'tts' | 'music' | 'asr'：强制认作生图 / 生视频 / 语音合成 / 音乐生成 / 语音识别；
  *  - 'none'：强制按对话模型处理，名字像生图也不拿去出图。
  */
-export type GenKind = 'auto' | 'image' | 'video' | 'tts' | 'none'
+export type GenKind = 'auto' | 'image' | 'video' | 'tts' | 'music' | 'asr' | 'none'
 /** 判定结果：'none' = 普通对话模型 */
 export type GenRole = Exclude<GenKind, 'auto'>
 
@@ -44,10 +57,50 @@ export const VIDEO_MODEL_RE = /(^|[-_.])(video|sora|kling|veo|wan)/i
  * 'speech' 单列在备选里而非合并进前缀类：asr（识别）也常带 speech，会把听写模型错挂成合成目标。
  */
 export const TTS_MODEL_RE = /(^|[-_.])(tts|text[-_.]?to[-_.]?speech|voice[-_.]?clone|cosyvoice|sambert|speech[-_.]?synth)/i
+/**
+ * 语音识别模型：asr / 听写 / 转写那类命名。
+ *
+ * 必须在 TTS 之前判定——`stepaudio-3-asr-max` 这类名字同时命中不了 TTS 却容易与合成混淆，
+ * 而反向的坑更常见：若把 asr 挂在 tts 后面判，先撞上 TTS_MODEL_RE 的宽泛分支就会把
+ * 听写模型错当成配音目标（tts-mcp 拿它合成必然失败）。
+ */
+export const ASR_MODEL_RE = /(^|[-_.])(asr|transcri(be|ption)|speech[-_.]?to[-_.]?text|whisper|paraformer|sensevoice)/i
+/**
+ * 音乐生成模型：music / 作曲 / 歌曲那类命名。
+ * 注意 `mimo-v2.5` 里的 'mi' 不匹配（要求分隔符或串首起头），不会误伤正常对话模型。
+ */
+export const MUSIC_MODEL_RE = /(^|[-_.])(music|song|melody|suno|udio|stepaudio-3-music)/i
 
-/** 这个模型到底算生图、生视频、语音合成还是对话：用户在配置里显式选过的为准，'auto'/未设置按名字判 */
+/**
+ * 名字像视觉模型的命名特征（判断模型能不能读图 / 代看画面）。
+ *
+ * 厂商自己都这么命名，是最可靠的公开信号；匹配的是「id + 展示名」——
+ * 平台内置模型对外 ID 常是 qn-xxx，靠展示名才认得出。
+ * 放在这里（而非 config.ts）是为了 platform.ts 也能用：平台清单不带模态字段，
+ * 新同步到的模型需要靠它给个合理的初始「视觉」标记，而不该无脑全勾。
+ */
+export const VISION_MODEL_RE =
+  /(vision|omni|gemini|internvl|minicpm|llava|pixtral|gpt-4o|gpt-4-turbo|gpt-5|claude-3|claude-4|glm-4v|glm-4\.5v|glm-v|qwen.*vl|doubao.*(vision|vl)|(^|[-_.\s])vl([-_.\s]|$)|(^|[-_.\s])o[1-9])/i
+
+/**
+ * 这个模型算生图、生视频、语音合成、音乐、语音识别还是对话：
+ * 用户在配置里显式选过的为准，'auto'/未设置按名字判。
+ *
+ * 判定顺序有讲究：**asr 必须在 tts 之前**（听写模型常带 speech 字样），
+ * music 也要在 tts 之前（`stepaudio-3-music` 不含 tts 但同类命名容易交叉）。
+ */
 export function genRoleOf(m: { id: string; gen?: GenKind }): GenRole {
-  if (m.gen === 'image' || m.gen === 'video' || m.gen === 'tts' || m.gen === 'none') return m.gen
+  if (
+    m.gen === 'image' ||
+    m.gen === 'video' ||
+    m.gen === 'tts' ||
+    m.gen === 'music' ||
+    m.gen === 'asr' ||
+    m.gen === 'none'
+  )
+    return m.gen
+  if (ASR_MODEL_RE.test(m.id)) return 'asr'
+  if (MUSIC_MODEL_RE.test(m.id)) return 'music'
   if (TTS_MODEL_RE.test(m.id)) return 'tts'
   if (IMAGE_MODEL_RE.test(m.id)) return 'image'
   if (VIDEO_MODEL_RE.test(m.id)) return 'video'
