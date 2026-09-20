@@ -40,6 +40,12 @@ extraResources:
   # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
   - from: resources/tts-mcp.mjs
     to: tts-mcp.mjs
+  # 音乐生成 MCP 脚本（generate_music / check_music，异步提交 + 轮询）
+  - from: resources/music-mcp.mjs
+    to: music-mcp.mjs
+  # 语音识别 MCP 脚本（transcribe_audio，音频转文字）
+  - from: resources/asr-mcp.mjs
+    to: asr-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"

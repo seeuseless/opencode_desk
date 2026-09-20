@@ -41,11 +41,13 @@ const TOOLS = [
         model: { type: 'string', description: '可选：指定语音模型（见返回报错里的可用清单），不传用默认第一个' },
         voice: {
           type: 'string',
-          description: '可选：音色名（如 冰糖 / 茉莉 / Mia 这类，以提供商文档为准），不传用该模型默认音色'
+          description:
+            '可选：音色名（如 MiMo 的 冰糖 / 茉莉，阶跃的 wenrounansheng / cixingnansheng / elegantgentle-female 等，以提供商文档为准），不传用该模型默认音色（阶跃会兜一个官方音色）'
         },
         style: {
           type: 'string',
-          description: '可选：语气/情绪/语速等风格指令，如「兴奋的运动解说，语速偏快」；支持自然语言指令的模型才有效'
+          description:
+            '可选：语气/情绪/语速等风格指令，如「兴奋的运动解说，语速偏快」；支持自然语言指令的模型才有效（阶跃的 stepaudio-3-tts 走 instruction 字段，上限 500 字）'
         },
         format: { type: 'string', description: '可选：输出格式 mp3 / wav / flac / opus / aac / pcm，默认 mp3' },
         speed: { type: 'number', description: '可选：语速倍率，一般 0.5~2，默认 1' }
@@ -153,6 +155,49 @@ function speechAttempts(t, body, chatMessages, voice, fmt) {
   return out
 }
 
+/**
+ * StepFun 家的语音合成：端点同为 /audio/speech，但请求体与 OpenAI 有几处硬性差异，
+ * 撞不出兼容形态就得单独摆一套（实测照 OpenAI 那套发会被拒）。
+ *
+ *  - `voice` **必填**，不给默认音色会直接 400，所以这里兜一个官方音色；
+ *  - `stepaudio-3-tts` / `stepaudio-2.5-tts` **不接受 voice_label**（传了报错），
+ *    情绪与风格只能走 `instruction`（自然语言，500 字内）或正文里的 `()`；
+ *  - `speed` 0.5~2、`volume` 0.1~2、`sample_rate` 支持 8000/16000/22050/24000/48000；
+ *  - 默认返回音频二进制流；`return_url=true` 才回 JSON 带 data.url。
+ */
+function stepfunAttempts(t, body, voice, fmt, style, speed) {
+  const base = t.baseURL.replace(/\/+$/, '')
+  // 官方音色里最通用的一个：不传 voice 必 400，宁可给个默认也别让用户先踩一次
+  const v = voice || 'wenrounansheng'
+  const json = {
+    model: t.model,
+    input: body,
+    voice: v,
+    ...(FMTS.includes(fmt) ? { response_format: fmt } : {}),
+    ...(typeof speed === 'number' ? { speed } : {}),
+    // 全局情绪/人设指令（仅 stepaudio-2.5-tts / stepaudio-3-tts 生效，3 代上限 500 字）
+    ...(style ? { instruction: style } : {})
+  }
+  return [
+    { name: 'stepfun/speech', url: base + '/audio/speech', json },
+    // 有些部署把音频塞进 OpenAI 风格 JSON（b64），留一条兜底
+    { name: 'stepfun/speech+url', url: base + '/audio/speech', json: { ...json, return_url: true } }
+  ]
+}
+
+/** 这家是不是 StepFun（按 baseURL 域名判，不靠模型名——用户可能用中转站） */
+function isStepfun(t) {
+  return /(^|\.)stepfun\.(com|ai)$/i.test(safeHost(t.baseURL))
+}
+
+function safeHost(u) {
+  try {
+    return new URL(u).hostname
+  } catch {
+    return ''
+  }
+}
+
 /** 长 base64（音频体）：不含空格与常见标点，所以不会把 assistant 的正文文本当成音频 */
 const B64_RE = /^[A-Za-z0-9+/]{200,}={0,2}$/
 
@@ -249,13 +294,15 @@ async function generateSpeech(args) {
   const fmt = String(args.format ?? '').trim().toLowerCase()
   const voice = String(args.voice ?? '').trim()
   const style = String(args.style ?? '').trim()
+  // 必须在函数作用域里先取出来：stepfunAttempts 与下面的请求体都要用
+  const speed = typeof args.speed === 'number' ? args.speed : undefined
   let attempts = speechAttempts(
     t,
     {
       model: t.model,
       input: body,
       response_format: FMTS.includes(fmt) ? fmt : undefined,
-      speed: typeof args.speed === 'number' ? args.speed : undefined,
+      speed,
       // OpenAI 的 gpt-4o-mini-tts 用 instructions 收风格指令
       instructions: style || undefined,
       voice: voice || undefined
@@ -268,6 +315,8 @@ async function generateSpeech(args) {
     voice,
     FMTS.includes(fmt) ? fmt : 'mp3'
   )
+  // StepFun 的请求体硬要求 voice、且拒收 voice_label，通用形态撞不出来，整套换自己的
+  if (isStepfun(t)) attempts = [...stepfunAttempts(t, body, voice, fmt, style, speed), ...attempts]
   const hit = speechPicks.get(t.id)
   if (hit) attempts = [attempts.find((a) => a.name === hit), ...attempts.filter((a) => a.name !== hit)].filter(Boolean)
 
@@ -279,7 +328,7 @@ async function generateSpeech(args) {
       continue
     }
     speechPicks.set(t.id, att.name)
-    const parts = [`语音已生成（模型 ${t.id}）：`]
+    const parts = [`语音已生成（配音由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}）：`]
     if (r.file) parts.push(`本地文件：${r.file}`)
     else if (r.buf) {
       const file = saveBuf(r.buf, extOf(fmt, ''))

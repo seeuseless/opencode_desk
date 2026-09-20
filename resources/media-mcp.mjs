@@ -372,7 +372,9 @@ async function generateImage(args) {
       continue
     }
     imgShapePicks.set(t.id, att.name)
-    const parts = [`生图成功（模型 ${t.id}）：`]
+    // 回执要说清「这张图是谁家出的」：用户往往在 A 家聊天、B 家出图，
+    // 只报模型名他还要自己回想是哪个提供商；t.provider 由主进程注入（见 config.ts 的 pick）。
+    const parts = [`生图成功（生图由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}）：`]
     if (r.url) parts.push(`图片 URL：${r.url}`)
     if (file) parts.push(`本地文件：${file}`)
     else parts.push(r.url ? '（外链下载失败，只有 URL 可用，注意它可能过期）' : '（本地文件写入失败，只拿到了 base64）')
@@ -515,7 +517,8 @@ async function createVideo(args) {
   if (!videoId) return '创建视频任务返回异常：响应里没有 video_id。原始返回：' + r.text.slice(0, 300)
   const warn = dropped.length ? `\n注意：以下素材没能用上（已按其余素材生成）：${dropped.join('；')}` : ''
   return (
-    `视频任务已创建（模型 ${t.id}，mode=${body.mode}）：video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，` +
+    `视频任务已创建（生视频由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，mode=${body.mode}）：` +
+    `video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，` +
     `然后先调 check_video（video_id=${videoId}）轮询，每次返回"还在生成中"就播报名进度并立即再查，直到完成或失败。` +
     warn
   )
@@ -567,7 +570,7 @@ async function checkVideo(args) {
       // 直链可能压根没有（各家约定不同），也可能已经过期；两种情况都退到 content 端点把成品拉回来
       const local = (file ? await saveRemote(file, 'mp4') : null) || (await saveVideoContent(t, videoId))
       const parts = [
-        `视频已完成（video_id=${videoId}）：`,
+        `视频已完成（生视频由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，video_id=${videoId}）：`,
         file ? `视频 URL：${file}` : '视频 URL：（响应里没有直链，成品已按任务查询端点下载）'
       ]
       if (local) parts.push(`本地文件：${local}`)

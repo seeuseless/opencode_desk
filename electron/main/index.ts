@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -483,6 +483,18 @@ function ttsMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'tts-mcp.mjs') : join(app.getAppPath(), 'resources', 'tts-mcp.mjs')
 }
 
+/** 音乐生成 MCP（generate_music / check_music 工具）脚本位置（随安装包分发） */
+function musicMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'music-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'music-mcp.mjs')
+}
+
+/** 语音识别 MCP（transcribe_audio 听写工具）脚本位置（随安装包分发） */
+function asrMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'asr-mcp.mjs') : join(app.getAppPath(), 'resources', 'asr-mcp.mjs')
+}
+
 ipcMain.handle('settings:get', () => loadSettings())
 
 /** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
@@ -791,6 +803,8 @@ app.whenReady().then(async () => {
   setVisionMcp({ path: visionMcpPath() })
   setScreenMcp({ path: screenMcpPath() })
   setTtsMcp({ path: ttsMcpPath() })
+  setMusicMcp({ path: musicMcpPath() })
+  setAsrMcp({ path: asrMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
