@@ -187,9 +187,7 @@ input, textarea { font: inherit; }
   background: var(--side-bg); padding: 0 4px 0 12px;
   -webkit-app-region: drag; user-select: none;
 }
-.tb-brand { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; letter-spacing: 0.3px; margin-right: 4px; color: var(--side-fg); }
-.tb-logo { color: var(--side-logo); }
-.tb-en { font-weight: 600; font-size: 13px; letter-spacing: 0.3px; color: var(--side-fg); }
+.tb-logo { width: 20px; height: 20px; object-fit: contain; margin-right: 4px; }
 .tb-drag { flex: 1; height: 100%; }
 .tb-btn { -webkit-app-region: no-drag; width: 40px; height: 100%; border-radius: 0; }
 /* 标题栏内的窗口/功能按钮用面板配色（覆盖 .icon-btn 的通用色） */

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Maximize2, Minimize2, Minus, PanelRight, X } from 'lucide-react'
+import logo from '../assets/logo.png'
 
 /** 自绘标题栏：替代原生 header，颜色跟随主题；整条可拖拽（中间槽位给浏览器工具栏，留白处仍可拖） */
 export function Titlebar({
@@ -22,9 +23,7 @@ export function Titlebar({
 
   return (
     <header className="titlebar">
-      <span className="tb-brand">
-        <span className="tb-en">QingNiao</span>
-      </span>
+      <img className="tb-logo" src={logo} alt="" draggable={false} />
       <span className="tb-browser-slot" />
       <button className="icon-btn tb-btn" title="内置浏览器" onClick={onToggleBrowser}>
         <PanelRight size={15} />
