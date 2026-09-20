@@ -34,6 +34,9 @@ extraResources:
   # 图片理解 MCP 脚本（describe_image，非视觉模型发图时由视觉模型代看）
   - from: resources/vision-mcp.mjs
     to: vision-mcp.mjs
+  # 电脑控制视觉叠加 MCP 脚本（代理 computer-use-mcp，把截图读成文字给收不了图的模型）
+  - from: resources/screen-mcp.mjs
+    to: screen-mcp.mjs
   # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
   - from: resources/tts-mcp.mjs
     to: tts-mcp.mjs

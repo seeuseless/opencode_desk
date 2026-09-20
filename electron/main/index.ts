@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -471,6 +471,13 @@ function visionMcpPath(): string {
     : join(app.getAppPath(), 'resources', 'vision-mcp.mjs')
 }
 
+/** 电脑控制视觉叠加 MCP（给收不了图的模型把截图读成文字）脚本位置（随安装包分发） */
+function screenMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'screen-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'screen-mcp.mjs')
+}
+
 /** 语音合成 MCP（generate_speech 配音工具）脚本位置（随安装包分发） */
 function ttsMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'tts-mcp.mjs') : join(app.getAppPath(), 'resources', 'tts-mcp.mjs')
@@ -782,6 +789,7 @@ app.whenReady().then(async () => {
   setDesktopMcp({ path: desktopMcpPath() })
   setMediaMcp({ path: mediaMcpPath() })
   setVisionMcp({ path: visionMcpPath() })
+  setScreenMcp({ path: screenMcpPath() })
   setTtsMcp({ path: ttsMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()

@@ -269,6 +269,11 @@ let visionMcp: { path: string } | undefined
 export function setVisionMcp(v: { path: string }): void {
   visionMcp = v
 }
+/** 电脑控制视觉叠加 MCP（给收不了图的对话模型把截图读成文字）脚本路径 */
+let screenMcp: { path: string } | undefined
+export function setScreenMcp(v: { path: string }): void {
+  screenMcp = v
+}
 /** 语音合成 MCP（generate_speech 配音工具）脚本路径 */
 let ttsMcp: { path: string } | undefined
 export function setTtsMcp(v: { path: string }): void {
@@ -300,6 +305,38 @@ const THINK_VARIANTS: Record<string, unknown> = {
   // 「关」：显式关闭思考。OpenAI 兼容端点的通用值是 reasoning_effort=none
   //（实测 agnes-3.0-flash 传 none 后不再产出 reasoning_content，与 chat_template_kwargs.enable_thinking=false 等效）
   none: { reasoningEffort: 'none' }
+}
+
+/**
+ * 识图目标清单：能被派去「代看」的视觉模型。
+ *
+ * 平台清单不下发模态字段、内置模型的 input 又是硬编码全勾（见 platform.ts），那份 input 不可信，
+ * 只能按名字认；用户第三方提供商里显式勾了「图片」输入的排在最前（可信）。
+ * vision MCP 与电脑控制的视觉叠加（screen MCP）共用这一份。
+ */
+function collectVisionTargets(
+  s: Settings
+): { id: string; label: string; baseURL: string; apiKey: string; model: string }[] {
+  const flagged: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
+  const guessed: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
+  for (const p of usableProviders(s)) {
+    if (!p.apiKey.trim() || !p.baseURL.trim()) continue
+    const trustInput = p.id !== PLATFORM_PROVIDER_ID
+    for (const m of p.models) {
+      if (genRoleOf(m) !== 'none') continue // 生成类吃不了 chat
+      const label = m.name || m.id
+      const item = {
+        id: `${p.id}/${m.id}`,
+        label,
+        baseURL: p.baseURL.trim().replace(/\/+$/, ''),
+        apiKey: p.apiKey.trim(),
+        model: m.id
+      }
+      if (trustInput && (m.input ?? []).includes('image')) flagged.push(item)
+      else if (VISION_MODEL_RE.test(m.id + ' ' + label)) guessed.push(item)
+    }
+  }
+  return [...flagged, ...guessed]
 }
 
 /**
@@ -345,12 +382,6 @@ export function writeOpencodeConfig(s: Settings): void {
       command: ['node', panelMcp.path, String(panelMcp.port)],
       enabled: true
     }
-  }
-  // 截屏 + 键鼠模拟控制本机（nut.js 实现，跨平台；模型需支持图片输入）
-  mcp['computer-use'] = {
-    type: 'local',
-    command: ['npx', '-y', 'computer-use-mcp'],
-    enabled: true
   }
   // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
   if (desktopMcp) {
@@ -406,41 +437,43 @@ export function writeOpencodeConfig(s: Settings): void {
   }
   // 识图：对话模型不支持 image 输入时，内核不会把图放进上下文，只剩一行 [Attached image/png: 路径]。
   // 挂一个视觉模型当「代看」——describe_image 读那个路径问视觉模型，把答案交还给对话模型。
-  if (visionMcp) {
-    const flagged: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
-    const guessed: { id: string; label: string; baseURL: string; apiKey: string; model: string }[] = []
-    for (const p of usableProviders(s)) {
-      if (!p.apiKey.trim() || !p.baseURL.trim()) continue
-      // 平台清单不下发模态字段、内置模型的 input 又是硬编码全勾（见 platform.ts），那份 input 不可信
-      const trustInput = p.id !== PLATFORM_PROVIDER_ID
-      for (const m of p.models) {
-        if (genRoleOf(m) !== 'none') continue // 生成类吃不了 chat
-        const label = m.name || m.id
-        const item = {
-          id: `${p.id}/${m.id}`,
-          label,
-          baseURL: p.baseURL.trim().replace(/\/+$/, ''),
-          apiKey: p.apiKey.trim(),
-          model: m.id
-        }
-        if (trustInput && (m.input ?? []).includes('image')) flagged.push(item)
-        else if (VISION_MODEL_RE.test(m.id + ' ' + label)) guessed.push(item)
-      }
+  // 同一份清单也喂给电脑控制的视觉叠加（见下方 screen MCP）。
+  const visionTargets = collectVisionTargets(s)
+  if (visionMcp && visionTargets.length) {
+    mcp.vision = {
+      type: 'local',
+      command: ['node', visionMcp.path],
+      environment: {
+        QN_VISION_TARGETS: JSON.stringify(visionTargets),
+        QN_MEDIA_DIR: join(storeDir(), 'media')
+      },
+      // 识图几秒到几十秒（大图更久），默认 5s 超时必被掐
+      timeout: 120000,
+      enabled: true
     }
-    // 用户显式勾了图片输入的排前面（可信），按名字认出来的兜底
-    const visionTargets = [...flagged, ...guessed]
-    if (visionTargets.length) {
-      mcp.vision = {
-        type: 'local',
-        command: ['node', visionMcp.path],
-        environment: {
-          QN_VISION_TARGETS: JSON.stringify(visionTargets),
-          QN_MEDIA_DIR: join(storeDir(), 'media')
-        },
-        // 识图几秒到几十秒（大图更久），默认 5s 超时必被掐
-        timeout: 120000,
-        enabled: true
-      }
+  }
+  // 电脑控制的视觉叠加：把 computer-use-mcp 包一层。截图原样透传，另外附一段视觉模型写的
+  // 画面文字描述——收不了图的模型（deepseek 等）被内核丢掉 image 后，靠这段文字照样看得见屏幕。
+  // 「文本 + 图片 + 视频」之外再叠一层视觉，桌面控制不再闭眼点鼠标。
+  if (screenMcp) {
+    mcp['computer-use'] = {
+      type: 'local',
+      command: ['node', screenMcp.path],
+      environment: {
+        QN_VISION_TARGETS: JSON.stringify(visionTargets),
+        QN_SCREEN_UPSTREAM_CMD: 'npx',
+        QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(['-y', 'computer-use-mcp'])
+      },
+      // 截图 + 转文字（识图本身可到几十秒），默认 5s 超时必被掐
+      timeout: 180000,
+      enabled: true
+    }
+  } else {
+    // 兜底（screen 脚本缺失）：退回直接挂原始的 computer-use-mcp
+    mcp['computer-use'] = {
+      type: 'local',
+      command: ['npx', '-y', 'computer-use-mcp'],
+      enabled: true
     }
   }
   for (const m of s.mcps) {
@@ -470,8 +503,14 @@ export function writeOpencodeConfig(s: Settings): void {
       '- **严禁改用写代码的方式操作桌面**：不要 `bash` 跑 PowerShell 的 SendKeys / `Add-Type` UIAutomation / user32 `keybd_event`，' +
       '也不要装 pyautogui、AutoIt、RobotJS 之类去模拟点击输入。这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。' +
       '`bash` 在这类任务里只允许用来「启动一个进程」，其余一律 `computer`。\n' +
-      '- `computer` 返回的是屏幕截图：若截图回不来（当前模型不支持图片输入）或工具报错，如实说明并让用户换支持图片输入的模型，' +
-      '**不要退化成写脚本硬猜**。\n' +
+      '- `computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
+      (visionTargets.length
+        ? '**若你只看到 `image_width` / `image_height` 这类尺寸文字、看不到画面，说明系统已经把截图交给视觉模型代看**——' +
+          '紧随其后的「【电脑画面（由 xxx 识别）】」段落就是画面内容，以它为准来决定点哪里。' +
+          '**这种情况下绝不要说「我看不到屏幕」、更不要改成写脚本硬猜**。\n' +
+          '- 上面那段「电脑画面」是别人转述的画面：坐标要按截图尺寸自己估算，点完后**必须再截屏确认**，若发现和描述不符就以最新截图为准。\n'
+        : '若你收不到画面（只看到尺寸文字、没有「【电脑画面】」段落），说明当前没有配置视觉模型：' +
+          '如实说明并让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，**不要退化成写脚本硬猜**。\n') +
       '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
       '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
       '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +

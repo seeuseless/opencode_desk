@@ -109,6 +109,26 @@ export function modelSupportsVideo(list: ProviderCfg[], key: string): boolean {
   return (m.input ?? MODEL_DEFAULTS.input).includes('video')
 }
 
+/**
+ * 有没有可用的「能看图」的对话模型——电脑控制的视觉叠加（screen MCP）靠它代看截图。
+ *
+ * 判定与主进程 collectVisionTargets 同口径：用户第三方提供商里显式勾了「图片」输入的可信；
+ * 平台内置模型的 input 是硬编码全勾（见 platform.ts），那份不可信，只能按名字认。
+ * 这里的用途只是界面提示，判定宽松一点没关系（多认出几个最多是文案上说「已代看」）。
+ */
+export function hasVisionModel(list: ProviderCfg[]): boolean {
+  const NAME_RE = /(vision|omni|gemini|internvl|minicpm|llava|pixtral|gpt-4o|gpt-4-turbo|gpt-5|claude-3|claude-4|glm-4v|glm-4\.5v|glm-v|qwen.*vl|doubao.*(vision|vl)|(^|[-_.\s])vl([-_.\s]|$)|(^|[-_.\s])o[1-9])/i
+  return list.some((p) =>
+    p.enabled &&
+    p.models.some((m) => {
+      if (genRoleOf(m) !== 'none') return false // 生成类吃不了 chat，代看不了
+      const trusted = p.id !== PLATFORM_PROVIDER_ID
+      if (trusted && (m.input ?? MODEL_DEFAULTS.input).includes('image')) return true
+      return NAME_RE.test(m.id + ' ' + (m.name || ''))
+    })
+  )
+}
+
 /** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
  *  档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，不再自动探测。 */
 export type ThinkingKind = 'off' | 'toggle' | 'effort'
