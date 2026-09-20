@@ -51,8 +51,10 @@ export default function App() {
   const [browserSignal, setBrowserSignal] = useState(0)
   /** 自增计数：浏览器打开时标题栏最大化按钮接管面板放大/还原 */
   const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
-  /** 浏览器面板开合/放大状态镜像（ChatView 上报），驱动标题栏按钮行为与图标 */
-  const [browserUi, setBrowserUi] = useState({ open: false, max: false })
+  /** 自增计数：全屏浏览时标题栏「AI 对话」按钮收起/展开右下角浮动对话卡 */
+  const [floatSignal, setFloatSignal] = useState(0)
+  /** 浏览器面板开合/放大/浮动对话卡状态镜像（ChatView 上报），驱动标题栏按钮行为与图标 */
+  const [browserUi, setBrowserUi] = useState({ open: false, max: false, float: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -161,6 +163,8 @@ export default function App() {
   // 不预设任何默认项目：新用户左栏为空，由「+」或空态引导自己添加
   useEffect(() => {
     ;(async () => {
+      // 会话列表的「已展开条数」已改为每次启动从 5 重新开始，旧存档留着只会误导，清掉
+      localStorage.removeItem('qingniao.sessShown')
       const info = await window.qingniao.info()
       workspaceRef.current = info.workspace
       const ps = load<Project[]>('qingniao.projects', []).filter((x) => x.id !== 'workbench')
@@ -454,7 +458,9 @@ export default function App() {
         onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
         browserOpen={browserUi.open}
         browserMax={browserUi.max}
+        floatOpen={browserUi.float}
         onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
+        onToggleFloat={() => setFloatSignal((v) => v + 1)}
       />
       <div className="app">
         <Sidebar
@@ -509,6 +515,7 @@ export default function App() {
             focusSignal={focusTick}
             browserToggleSignal={browserSignal}
             browserMaxSignal={browserMaxSignal}
+            floatToggleSignal={floatSignal}
             onBrowserUi={setBrowserUi}
             onOpenSettings={() => openSettingsAt('providers')}
             onPickDir={addProject}

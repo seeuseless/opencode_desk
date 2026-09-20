@@ -4,10 +4,10 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Monitor, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -43,8 +43,10 @@ interface Props {
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
   browserMaxSignal: number
+  /** 全屏浏览时标题栏「AI 对话」开关的触发计数（App 转发，收起/展开右下角浮动对话卡） */
+  floatToggleSignal: number
   /** 上报浏览器面板开合与放大状态（驱动标题栏按钮行为与图标） */
-  onBrowserUi: (s: { open: boolean; max: boolean }) => void
+  onBrowserUi: (s: { open: boolean; max: boolean; float: boolean }) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -435,8 +437,14 @@ export function ChatView(p: Props) {
     setFloatOpen(true)
   }
 
-  /** 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关） */
+  /**
+   * 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关）。
+   *
+   * 全屏浏览中一律不动尺寸——全屏时这一颗按钮不再用来关面板，而是交给标题栏的
+   * 「AI 对话」开关（见 toggleFloatFromHeader）与「缩小」按钮；用户想退出全屏就点还原。
+   */
   function toggleBrowserFromHeader() {
+    if (browserMax) return
     if (browserOpen || manualBrowser) {
       closeBrowserPanel()
       return
@@ -451,6 +459,14 @@ export function ChatView(p: Props) {
     const next = !browserMax
     setBrowserMax(next)
     if (next) setFloatOpen(true)
+  }
+
+  /**
+   * 全屏时标题栏「AI 对话」开关：收起/展开右下角浮动聊天卡。
+   * 打游戏等不想看到对话的场景直接收起，气泡留在右下角随时唤回。
+   */
+  function toggleFloatFromHeader() {
+    setFloatOpen((v) => !v)
   }
 
   /** 拖动浮动聊天卡（顶部拖拽条）：pointer capture 防止划过 webview 丢事件，松手记住位置 */
@@ -565,11 +581,24 @@ export function ChatView(p: Props) {
       (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
     )
   /**
-   * 桌面控制真的被调用过、但当前对话模型收不了图（截图回传发不出去）才提示。
-   * 桌面控制是内置常驻能力，设置页长期挂这条太吵，所以放到动作发生的这一轮。
+   * 桌面控制真的被调用过、但当前对话模型收不了图 —— 这种情况下截图由视觉模型代看（screen MCP
+   * 在 computer 的返回里附一段画面文字），所以不再报「发不出去」，只在界面明确告知正在代看。
+   * 判定用「配置里没有任何视觉模型」：一个都没有才真的没眼睛。
    */
   const cuBlind =
     !modelSupportsImage(p.settings, p.model) &&
+    hasVisionModel(p.settings) === false &&
+    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
+      (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
+    )
+  /** 当前对话模型看不到画面，但配了视觉模型 → 截图正由视觉模型代看（界面要给个明确交代） */
+  const cuVisionAssist = !modelSupportsImage(p.settings, p.model) && hasVisionModel(p.settings)
+  /**
+   * 桌面控制进行中、或本轮调用过 computer 工具 → 顶部横幅的显示窗口。
+   * 进行中要显示（用户得知道键鼠在自己动），本轮用过也要留一会儿（刚操作完的收尾说明）。
+   */
+  const desktopBanner =
+    desktopCtl ||
     !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
       (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
     )
@@ -1070,11 +1099,17 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserMaxSignal])
 
+  // 全屏时标题栏「AI 对话」按钮：收起/展开右下角浮动聊天卡
+  useEffect(() => {
+    if (p.floatToggleSignal > 0) toggleFloatFromHeader()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.floatToggleSignal])
+
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
-    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax })
+    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax, float: floatOpen })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserOpen, manualBrowser, browserMax])
+  }, [browserOpen, manualBrowser, browserMax, floatOpen])
 
   // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
   useEffect(() => {
@@ -1446,6 +1481,10 @@ export function ChatView(p: Props) {
             BROWSER_CTX_PREFIX +
               '用户正在内置浏览器里看下面这个页面，本轮对话默认针对该页面（网页浏览场景，不是本地项目开发）：\n' +
               `- 当前页面：${panelUrl}\n` +
+              '用户说「换个网址 / 换 URL / 换个页面」时，指的是**在这个浏览器里导航到新地址**' +
+              '（用 panel_navigate 打开，或让用户自己在地址栏输入），不是重开面板、也不是调整浏览器窗口大小。\n' +
+              '浏览器面板的尺寸（右栏 / 全屏 / 浮动对话卡）由用户自己控制：**不要主动关闭、缩小或放大面板**，' +
+              '也不要建议用户这么做，除非用户明确要求。\n' +
               '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）：' +
               '看页面内容就再调一次 panel_snapshot（文本元素清单），**不要用 computer 截屏来看网页**——截屏又慢又要求模型支持图片输入，而面板页面本来就能读到结构。\n' +
               '不要读写项目文件或执行终端命令，除非用户明确要求；回答优先基于当前页面的实际内容。'
@@ -1685,7 +1724,24 @@ export function ChatView(p: Props) {
             <div className="amsg">
               <div className="msgnotice">
                 <Info size={13} />{' '}
-                <span>桌面控制要看屏幕截图，当前对话模型不支持图片输入，这一步发不出去。请在对话下方换用支持图片输入的模型再让它继续。</span>
+                <span>桌面控制要看屏幕截图，但当前模型不支持图片输入、设置里也没有可用的视觉模型，AI 这轮看不到屏幕。请在 设置 → 模型 给带视觉能力的模型勾选「图片」输入后再让它操作电脑。</span>
+              </div>
+            </div>
+          )}
+          {/* 桌面控制醒目提示：AI 正在操作这台电脑，键鼠会自己动，用户要能一眼知道发生了什么 */}
+          {desktopBanner && (
+            <div className="amsg">
+              <div className={'cu-banner' + (desktopCtl ? ' live' : '')}>
+                {desktopCtl ? <LoaderCircle size={14} className="spin" /> : <Monitor size={14} />}
+                <div className="cu-text">
+                  <strong>{desktopCtl ? 'AI 正在控制你的电脑' : '桌面控制已启用'}</strong>
+                  <span>
+                    {desktopCtl
+                      ? '鼠标和键盘由 AI 操作中，请不要碰键鼠，以免打断它。'
+                      : '刚才的操作使用过鼠标和键盘。'}
+                    {cuVisionAssist && ' 当前模型看不了画面，截图已交给视觉模型代看。'}
+                  </span>
+                </div>
               </div>
             </div>
           )}

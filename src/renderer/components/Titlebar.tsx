@@ -1,18 +1,24 @@
 import { useEffect, useState } from 'react'
-import { Maximize2, Minimize2, Minus, PanelRight, X } from 'lucide-react'
+import { Maximize2, MessageCircle, MessageCircleOff, Minimize2, Minus, PanelRight, X } from 'lucide-react'
 import logo from '../assets/logo.png'
 
 /** 自绘标题栏：替代原生 header，颜色跟随主题；整条可拖拽（中间槽位给浏览器工具栏，留白处仍可拖） */
 export function Titlebar({
   onToggleBrowser,
   onBrowserMax,
+  onToggleFloat,
   browserOpen,
-  browserMax
+  browserMax,
+  floatOpen
 }: {
   onToggleBrowser: () => void
   onBrowserMax: () => void
+  /** 全屏浏览时收起/展开右下角浮动对话卡（打游戏等不需要对话的场景） */
+  onToggleFloat: () => void
   browserOpen: boolean
   browserMax: boolean
+  /** 浮动对话卡是否展开：决定这颗按钮的图标（对话开 / 对话关） */
+  floatOpen: boolean
 }) {
   const [maxed, setMaxed] = useState(false)
 
@@ -28,6 +34,16 @@ export function Titlebar({
       <button className="icon-btn tb-btn" title="内置浏览器" onClick={onToggleBrowser}>
         <PanelRight size={15} />
       </button>
+      {/* 全屏浏览时才有：收起/展开右下角对话卡（打游戏等不想看到对话时收起，气泡仍在右下角） */}
+      {browserMax && (
+        <button
+          className={'icon-btn tb-btn' + (floatOpen ? ' tb-on' : '')}
+          title={floatOpen ? '隐藏 AI 对话（气泡留在右下角）' : '显示 AI 对话'}
+          onClick={onToggleFloat}
+        >
+          {floatOpen ? <MessageCircle size={15} /> : <MessageCircleOff size={15} />}
+        </button>
+      )}
       <button className="icon-btn tb-btn" title="最小化" onClick={() => window.qingniao.winMin()}>
         <Minus size={15} />
       </button>
