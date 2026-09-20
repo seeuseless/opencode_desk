@@ -6,7 +6,7 @@ import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
-import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope } from '../oc'
+import type { McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, chatProviders, modelSupportsImage } from '../oc'
 import type { SettingsTab } from '../App'
 
@@ -24,6 +24,15 @@ const MODALITY_LABELS: { key: Modality; label: string }[] = [
   { key: 'text', label: '文本' },
   { key: 'image', label: '图片' },
   { key: 'video', label: '视频' }
+]
+
+/** 每个模型的思考形态选项（输入框思考选择器据此给档位，缺省=关/开） */
+const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
+  { key: 'toggle', label: '关/开', tip: '默认：思考默认开启，你可在「关/开」之间切' },
+  { key: 'low', label: '低', tip: '固定低档思考' },
+  { key: 'medium', label: '中', tip: '固定中档思考' },
+  { key: 'high', label: '高', tip: '固定高档思考' },
+  { key: 'off', label: '不支持', tip: '禁用思考' }
 ]
 
 interface Props {
@@ -125,7 +134,7 @@ function parseModels(text: string): string[] {
 
 /** 未单独编辑过的模型用默认接入参数（每次新拷贝，避免共享数组引用） */
 function defaultModelCfg(): Omit<ModelCfg, 'id'> {
-  return { context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input] }
+  return { context: MODEL_DEFAULTS.context, output: MODEL_DEFAULTS.output, input: [...MODEL_DEFAULTS.input], thinking: 'toggle' }
 }
 
 /** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
@@ -832,7 +841,7 @@ export function SettingsView(p: Props) {
           </label>
           {parseModels(draft.modelsText).length > 0 && (
             <div className="model-cfgs">
-              <div className="model-cfgs-tip">每个模型的上下文窗口、最大输出（token）与输入类型；输出固定为文本</div>
+              <div className="model-cfgs-tip">每个模型的上下文窗口、最大输出（token）、输入类型与思考形态；输出固定为文本</div>
               {parseModels(draft.modelsText).map((mid) => {
                 const c = cfgOf(mid)
                 return (
@@ -873,8 +882,20 @@ export function SettingsView(p: Props) {
                           </button>
                         ))}
                       </div>
-                      {/* 思考档位不在此配置：由内核模型能力表（models.dev 的 reasoning）自动判定，
-                          见 docs/内核variant思考档位机制.md */}
+                      <div className="model-cfg-in">
+                        思考
+                        {THINK_LABELS.map((t) => (
+                          <button
+                            key={t.key}
+                            type="button"
+                            className={'iochip' + ((c.thinking ?? 'toggle') === t.key ? ' on' : '')}
+                            title={t.tip}
+                            onClick={() => updateCfg(mid, { thinking: t.key })}
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 )

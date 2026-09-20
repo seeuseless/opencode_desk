@@ -1,35 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { Brain, Check, ChevronDown, RefreshCw } from 'lucide-react'
+import { Brain, Check, ChevronDown } from 'lucide-react'
 import type { ThinkingKind } from '../oc'
 
 /**
- * 思考档位（内核 model variant）。档位集合按模型能力自动判定，**没有「不传思考参数」这种状态**——
- * 支持思考的模型一律给出明确档位，默认就把思考打开：
- * - `toggle`（只有开关）：选项就「关 / 开」，默认**开**；
- * - `effort`（真有分档）：选项就「低 / 中 / 高」，默认**高**；
- * - `off`：不支持，不可用。
+ * 思考档位（内核 model variant）。档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，
+ * **没有「不传思考参数」这种状态**——支持思考的模型一律给出明确档位，默认就把思考打开：
+ * - 配置选了「关/开」（默认）→ 选项就「关 / 开」，默认**开**；
+ * - 配置选了固定档（低/中/高）→ 选项就「低 / 中 / 高」，默认**该档**；
+ * - 配置选了「不支持」→ 禁用，仅显示「不支持」。
  * 用户随时可自己切，切过的按模型记住（localStorage）。
- *
- * 集合怎么定（kind）：
- * 1. **优先实测**（`probed`）：同一模型各档发一次极小请求比对思考量得出的结论，最准。很多模型
- *    （如 agnes-3.0-flash）名义上有低中高，实测各档思考量完全相同，其实是开关型，只该给「关/开」；
- * 2. 实测拿不到时用内核能力表 + 模型名推断。
  */
-export function ThinkingPicker({
-  value,
-  onChange,
-  kind,
-  probed = false,
-  onReprobe
-}: {
-  value: string
-  onChange: (v: string) => void
-  kind: ThinkingKind
-  /** kind 是否来自实测（而非按模型名/能力表推断），用于给用户一个「凭什么这么显示」的说法 */
-  probed?: boolean
-  /** 重新实测当前模型的档位形态（结论可能因网关更新而过时） */
-  onReprobe?: () => void
-}) {
+export function ThinkingPicker({ value, onChange, kind }: { value: string; onChange: (v: string) => void; kind: ThinkingKind }) {
   const [open, setOpen] = useState(false)
   const wrap = useRef<HTMLDivElement>(null)
 
@@ -42,8 +23,8 @@ export function ThinkingPicker({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  // 档位集合按模型能力定；**只有开关的模型默认「开」，真有分档的默认「高」**——
-  // 用户可随时自己切「关」或切别的档。存档值是别的能力下的档位名（如老模型存过 low）时，回落到默认档
+  // 档位集合按模型在配置里选的思考形态定；「关/开」默认「开」，固定档默认「该档」（由 value 传入）——
+  // 用户可随时自己切。存档值不属于当前集合（如老模型存过 low、现在成开关型）时，回落到默认档
   const defaultKey = kind === 'effort' ? 'high' : 'on'
   const options: { key: string; label: string }[] =
     kind === 'toggle'
@@ -70,8 +51,8 @@ export function ThinkingPicker({
         className="menu-trigger"
         title={
           disabled
-            ? '该模型判定为不支持思考，故思考档位不可用'
-            : `思考档位：${probed ? '档位已按实测结果给出——同一模型分别以关/低/高发过极小请求，比对过思考量' : '档位按模型能力与模型名推断（尚未实测）'}。该模型只有开关时给「关/开」（默认开）；真有分档时给「低/中/高」（默认高）`
+            ? '该模型在配置里设为「不支持思考」，故思考档位不可用'
+            : `思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）`
         }
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
@@ -96,23 +77,6 @@ export function ThinkingPicker({
               <span>{t.label}</span>
             </button>
           ))}
-          {/* 档位形态是实测出来的，网关换了模型能力就可能过时，给个随时重探的入口 */}
-          {onReprobe && (
-            <button
-              type="button"
-              className="menu-item tp-reprobe"
-              title="重新实测该模型是「开关」还是「分档」（会依次以关/低/高各发几次极小请求）"
-              onClick={() => {
-                setOpen(false)
-                onReprobe()
-              }}
-            >
-              <span className="mi-check">
-                <RefreshCw size={12} />
-              </span>
-              <span>重新识别档位</span>
-            </button>
-          )}
         </div>
       )}
     </div>

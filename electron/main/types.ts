@@ -15,6 +15,13 @@ export const MODALITIES: Modality[] = ['text', 'image', 'video']
  */
 export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: ['text'] as Modality[] }
 
+/** 单个模型的思考形态（用户在配置里为该模型自己选，替代旧的自动探测）。
+ *  - 'off'：不支持思考，输入框思考选择器禁用；
+ *  - 'toggle'：只有「关闭 / 开启」，思考默认开启；
+ *  - 'low' | 'medium' | 'high'：固定档位，选择器给「低 / 中 / 高」，默认就是这一档。
+ *  缺省（undefined）按 'toggle' 处理：思考默认开启，用户在「关 / 开」之间切。 */
+export type ThinkingMode = 'off' | 'toggle' | 'low' | 'medium' | 'high'
+
 /** 单个模型的接入参数，写入内核 opencode.json 的 limit / modalities */
 export interface ModelCfg {
   /** 模型 ID（provider.models 的键，如 deepseek-chat） */
@@ -27,6 +34,8 @@ export interface ModelCfg {
   output: number
   /** 输入类型 */
   input: Modality[]
+  /** 思考形态（见 ThinkingMode）；undefined = 默认「关闭/开启」 */
+  thinking?: ThinkingMode
   /**
    * 以下四个只有「平台内置模型」有（登录时随模型清单下发），第三方 provider 的模型恒为 undefined。
    * 它们只影响展示：选择器里在模型名后打「限免 / 折扣」标签，最右侧写明倍率。

@@ -1,8 +1,8 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
-import type { McpCfg, ProviderCfg, Settings } from '../../electron/main/types'
+import type { McpCfg, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
 import { MODEL_DEFAULTS, isBuiltinModel } from '../../electron/main/types'
 
-export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus } from '../../electron/main/types'
+export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, ThinkingMode } from '../../electron/main/types'
 export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount } from '../../electron/main/types'
 export { MODEL_DEFAULTS } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
@@ -66,137 +66,26 @@ export function modelSupportsVideo(list: ProviderCfg[], key: string): boolean {
 }
 
 /** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
- *  一律按模型自身能力自动判定，不再由用户配置（见 resolveThinkingKind） */
+ *  档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，不再自动探测。 */
 export type ThinkingKind = 'off' | 'toggle' | 'effort'
 
-/** 纯开关型思考模型的命名特征：只有「思考开/思考关」，没有强度档位 */
-const THINKING_TOGGLE_RE = /(^|[-_/.])(r1|reasoner|qwq|thinking|think)(-|$|[-_/.])|o1-(mini|preview)/i
-/** 非对话模型（嵌入/语音/重排/审核/生图/生视频）：谈不上思考，一律不支持。
- *  短词（wan/veo/sora 等）必须卡边界，否则会误伤名字里恰好含这些字母的对话模型 */
-const NON_CHAT_RE =
-  /(embed|embedding|rerank|re-rank|moderation|whisper|tts|speech|asr|dall|flux|sdxl|stable-diffusion|image|video|(^|[-_/.])(sora|kling|veo|wan))/i
-
 /**
- * 按模型 ID 猜思考能力（内核能力表查不到时的兜底，也用于内核未就绪时先给个像样的结果）。
- * 猜宽的代价远小于猜严：档位默认停在「默认」（不传任何思考参数），模型不支持也不会出错；
- * 反过来把能思考的判成不支持，用户就彻底用不上。
+ * 思考形态（配置里的 `ModelCfg.thinking`）→ 输入框思考选择器的档位集合。
+ * 'off' → 不支持（禁用）；'toggle'/缺省 → 关/开；固定档 → 低/中/高。
  */
-export function inferThinking(modelId: string): ThinkingKind {
-  const id = String(modelId ?? '').toLowerCase()
-  if (!id) return 'effort'
-  if (NON_CHAT_RE.test(id)) return 'off'
-  if (THINKING_TOGGLE_RE.test(id)) return 'toggle'
-  return 'effort'
-}
-
-/** 内核 GET /provider 的原始形状：只取用得到的几个字段 */
-interface KernelModel {
-  id?: string
-  providerID?: string
-  name?: string
-  release_date?: string
-  interleaved?: unknown
-  capabilities?: { reasoning?: boolean }
+export function thinkingKindOf(mode: ThinkingMode | undefined): ThinkingKind {
+  if (mode === 'off') return 'off'
+  if (mode === 'low' || mode === 'medium' || mode === 'high') return 'effort'
+  return 'toggle'
 }
 
 /**
- * 模型思考能力判定结果：true = 支持，false = **能力表明确标注不支持**，
- * unknown = capabilities 是内核的兜底占位（models.dev 未收录该模型），不可信。
- *
- * 为什么必须区分 false 与 unknown：自定义提供商里 models.dev 没收的模型，内核会补一条占位记录
- * （capabilities 全 false、name 等于 id、release_date 为空、interleaved 为 false）。把它当「不支持」
- * 会把能思考的模型判死——实测 agnes-3.0-flash 就是这样被判成不可用的（实际认 reasoning_effort）。
- * 占位记录里挑不出任何真实信息，只能回落到按名猜。
+ * 某模型思考档位的**默认取值**：支持思考的模型默认就把思考打开（固定档 → 该档；关/开 → 开），
+ * 不支持思考的一律不传（空串）。`mode` 是配置里为该模型选的思考形态，缺省按「关/开」的「开」处理。
  */
-export type ReasoningCap = true | false | 'unknown'
-
-/** 是否为「models.dev 未收录」的兜底占位记录：任一条真实特征成立就说明它不是占位 */
-function isPlaceholderModel(m: KernelModel): boolean {
-  const id = m.id ?? ''
-  if (m.release_date) return false // 收录过的自带发布日期
-  if (m.name && m.name !== id) return false // 收录过的自带展示名（占位记录的 name 就是 id 本身）
-  if (m.interleaved && typeof m.interleaved === 'object') return false // 收录过的带交错字段（思考流怎么组织）
-  return true
-}
-
-/**
- * 拉内核模型能力表：`{ '提供商ID/模型ID': 思考能力 }`（unknown = 查无实据）。
- * 内核按 models.dev 补全每个模型的 capabilities.reasoning，比按名字猜准得多；
- * 拿不到（内核未就绪/端点变更）返回空表，调用方回落到 inferThinking。
- */
-export async function fetchReasoningCaps(): Promise<Record<string, ReasoningCap>> {
-  try {
-    const j = (await call<{ all?: { id?: string; models?: Record<string, KernelModel> }[] }>('/provider')) as {
-      all?: { id?: string; models?: Record<string, KernelModel> }[]
-    }
-    const out: Record<string, ReasoningCap> = {}
-    for (const p of j.all ?? []) {
-      const pid = p.id ?? ''
-      for (const m of Object.values(p.models ?? {})) {
-        const mid = m.id ?? ''
-        const cap: ReasoningCap = isPlaceholderModel(m) ? 'unknown' : m?.capabilities?.reasoning === true
-        const keys = [`${pid}/${mid}`]
-        // 内核返回的 id 常带前缀（如 qwen/qwen3.5-…），用户存的可能是后半段，两种键都存一份
-        if (mid.includes('/')) keys.push(`${pid}/${mid.slice(mid.lastIndexOf('/') + 1)}`)
-        for (const k of keys) {
-          // 真 false 优先（明确标注不支持的证据强于按名猜）；unknown 不覆盖已有判定
-          if (out[k] === false) continue
-          out[k] = cap
-        }
-      }
-    }
-    return out
-  } catch {
-    return {}
-  }
-}
-
-/**
- * 决定某模型的思考档位形态，按证据强度逐级回落：
- *
- * 1. **实测探测结果**（`probeMap`，主进程发几次极小请求比对思考量得出，最可靠）——
- *    内核能力表只有「支不支持思考」，「到底分不分档」全库没有这个字段（models.dev 的
- *    `reasoning_options` 连内置 provider 都缺），只能实测。agnes-3.0-flash 就是被它纠正的：
- *    高低两档思考量相同，实际是开关型，UI 只该给「关 / 开」。
- * 2. **内核能力表**（models.dev 的 `capabilities.reasoning`）：明确 true/false 可信，占位记录（unknown）不可信。
- * 3. **按模型名猜**（`inferThinking`）：查无实据时的兜底。
- */
-export function resolveThinkingKind(
-  modelKey: string,
-  caps: Record<string, ReasoningCap>,
-  probeMap: Record<string, 'effort' | 'toggle' | 'off'> = {}
-): ThinkingKind {
-  const probed = probeMap[modelKey]
-  if (probed) return probed
-  const mid = modelKey.slice(modelKey.indexOf('/') + 1)
-  const known = caps[modelKey]
-  if (known === true) return inferThinking(mid) === 'toggle' ? 'toggle' : 'effort'
-  // false：能力表明确标注不支持（真实收录的模型）；unknown / 查不到：占位或不明，按名猜
-  return known === false ? 'off' : inferThinking(mid)
-}
-
-/**
- * 某模型是否有可用的实测结论（决定选择器该给「开关」还是「低中高」）。
- * 探测是异步的（首次要花几秒发几个请求），拿到结果前后档位集合会变；
- * 用它来区分「实测结论」与「暂时按模型名猜的形态」，UI 提示才不会撒谎。
- */
-export function hasProbe(probeMap: Record<string, ThinkingKind> | undefined, modelKey: string): boolean {
-  return !!probeMap?.[modelKey]
-}
-
-/**
- * 只读已缓存的探测结论（批量，**不发任何请求**）：界面打开时一次性预填全部模型的档位形态，
- * 切模型就不会先闪一下「低/中/高」再变成「关/开」。没探过的模型不在结果里，等切到它再探。
- */
-export function fetchProbedKinds(keys: string[]): Promise<Record<string, Exclude<ThinkingKind, 'off'> | 'off'>> {
-  return window.qingniao.cachedThinking(keys)
-}
-/**
- * 某模型思考档位的**默认取值**：支持思考的模型默认就把思考打开（effort → high，toggle → on），
- * 不支持思考的一律不传。用户可在选择器里显式切回「默认」（交由服务端决定）。
- */
-export function defaultThinkingValue(kind: ThinkingKind): string {
-  return kind === 'effort' ? 'high' : kind === 'toggle' ? 'on' : ''
+export function defaultThinkingValue(mode: ThinkingMode | undefined): string {
+  if (mode === 'low' || mode === 'medium' || mode === 'high') return mode
+  return mode === 'off' ? '' : 'on'
 }
 
 async function call<T>(path: string, opts?: { method?: string; body?: unknown }): Promise<T> {
@@ -349,18 +238,6 @@ export const oc = {
   createSession: (directory?: string, title?: string) =>
     call<Session>(`/session${dirQ(directory)}`, { method: 'POST', body: { title } }),
   messages: (id: string, directory?: string) => call<MessageView[]>(`/session/${id}/message${dirQ(directory)}`),
-  /** 模型能力表（谁支持思考）：内核内嵌 models.dev 的 capabilities.reasoning，见 fetchReasoningCaps */
-  fetchReasoningCaps,
-  /**
-   * 思考形态实测探测（开关型 vs 低/中/高）：**每个模型独立探测、独立缓存**，各档采几次取中位数。
-   * 返回 null = 这次没探成（网络/接口不支持），调用方保留原判定，不要据此改档位；force 可忽略缓存重探。
-   */
-  probeThinking: (providerID: string, modelID: string, force?: boolean) =>
-    window.qingniao.probeThinking(providerID, modelID, force),
-  /** 只读已探结论（批量、不发请求）：界面打开时预填全部模型的档位形态，避免切模型时档位闪变 */
-  fetchProbedKinds,
-  /** 清探测缓存（不传则全清），下次切到该模型会重探 */
-  clearProbedKinds: (modelKey?: string) => window.qingniao.clearThinking(modelKey),
   /** 同步等待本轮对话完成；期间流式内容走事件推送。
    *  附件（图片/视频）转成内核 file part：图片 data URL 供内核缩图，视频 file:// 由内核本机读取。
    *  图片的 filename 带媒体目录完整路径——模型据此在图生图/图生视频时把路径传给 media MCP 工具。
