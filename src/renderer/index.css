@@ -193,6 +193,8 @@ input, textarea { font: inherit; }
 /* 标题栏内的窗口/功能按钮用面板配色（覆盖 .icon-btn 的通用色） */
 .titlebar .icon-btn { color: var(--side-fg2); }
 .titlebar .icon-btn:hover { background: var(--side-hover); color: var(--side-fg); }
+/* 标题栏开关处于开启态（如全屏浏览时的 AI 对话按钮）：图标点亮为主题色 */
+.titlebar .icon-btn.tb-on { color: var(--accent); }
 .tb-close:hover { background: #e0245e; color: #fff; }
 
 /* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
@@ -325,6 +327,25 @@ input, textarea { font: inherit; }
 }
 .msgerr svg { flex-shrink: 0; margin-top: 3px; }
 .msgerr span { flex: 1; min-width: 0; }
+
+/* 桌面控制提示横幅：AI 正在操作本机，键鼠会自己动——用醒目底色，别让用户以为是卡了/中了病毒 */
+.cu-banner {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 9px 12px; margin: 8px 0; border-radius: 10px;
+  background: color-mix(in srgb, #e08c1a 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, #e08c1a 50%, transparent);
+  color: var(--fg);
+}
+.cu-banner svg { flex-shrink: 0; margin-top: 2px; color: #e08c1a; }
+/* 进行中：改用主题强调色，与「AI 正在动」的实时态呼应 */
+.cu-banner.live {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+.cu-banner.live svg { color: var(--accent); }
+.cu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.cu-text strong { font-size: 13px; font-weight: 600; }
+.cu-text span { font-size: 12.5px; color: var(--fg2); line-height: 1.6; }
 
 /* 对话流内的中性提示（自动换模型等说明）：与失败反馈同结构，弱化色 + 灰边，不抢注意力 */
 .msgnotice {
@@ -1085,7 +1106,6 @@ input, textarea { font: inherit; }
   font-size: 12.5px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.model-cfg-out { flex-shrink: 0; font-size: 11.5px; color: var(--fg2); }
 .model-cfg-row { display: flex; align-items: center; gap: 14px; row-gap: 8px; flex-wrap: wrap; }
 .model-cfg-row label { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12px; color: var(--fg2); }
 .model-cfg-row input {
@@ -1095,6 +1115,10 @@ input, textarea { font: inherit; }
 }
 .model-cfg-row input:focus { box-shadow: 0 0 0 2px var(--accent); }
 .model-cfg-in { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg2); }
+/* 思考与生成是「这一行」里最靠后的两组：思考前加竖线做视觉分隔，
+   生成再靠右边推一点，让「生成」自成一块（左侧数字/输入/思考、右侧生成） */
+.model-cfg-in.sep { padding-left: 14px; border-left: 1px solid var(--line); }
+.model-cfg-in.gen { margin-left: auto; }
 .iochip {
   border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);
   border-radius: 999px; padding: 2.5px 10px; font-size: 11.5px;
