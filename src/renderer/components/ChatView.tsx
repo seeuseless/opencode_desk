@@ -7,7 +7,9 @@ import {
   Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, resolveThinkingKind, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, resolveThinkingKind, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type ReasoningCap, type Session } from '../oc'
+/** 实测思考形态结果（与主进程 thinking.ts 的 ThinkProbeKind 对应） */
+type ProbeKind = 'effort' | 'toggle' | 'off'
 import { load, save } from '../store'
 import type { Modality, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -199,25 +201,29 @@ export function ChatView(p: Props) {
   const [input, setInput] = useState('')
   /** 待发送附件（回形针选的图片/视频）：随下一条消息一起发；处理中禁止上传与发送附件 */
   const [atts, setAtts] = useState<Attachment[]>([])
-  /** 内核模型能力表：`提供商/模型` → 是否支持思考（models.dev 数据，内核就绪后拉一次）。
+  /** 内核模型能力表：`提供商/模型` → 思考能力（true/false/unknown，见 ReasoningCap）。
    *  思考选择器据此决定档位形态，用户不必逐个模型去查它支不支持思考。 */
-  const [caps, setCaps] = useState<Record<string, boolean>>({})
+  const [caps, setCaps] = useState<Record<string, ReasoningCap>>({})
+  /** 思考形态实测结果：`提供商/模型` → effort(真有低中高) / toggle(只有开关) / off(不支持)。
+   *  内核能力表没有「是否分档」这个字段（models.dev 全库缺 reasoning_options），只能后台打一枪
+   *  （各档发一次极小请求比对思考量，主进程按模型长期缓存），比按模型名猜准得多。 */
+  const [probeMap, setProbeMap] = useState<Record<string, 'effort' | 'toggle' | 'off'>>({})
   /** 思考档位按模型记忆（跟随所选模型）：value = thinkMap[当前模型] ?? 默认；切模型读各自的记忆。
-   *  档位名按模型「思考方式」校验：effort=低/中/高，toggle=on，off=不传（无效存档回落默认）。
+   *  **没有「不传思考参数」这种状态**：只有开关的模型默认「开」（on），真有分档的默认「高」（high），
+   *  用户可随时自己切。存档值不属于当前档位集合（如模型从分档变成开关、老存档是 low）时回落到默认档。
    *  thinkRef 每次渲染同步当前模型的有效档位，供异步重发/续跑读取最新值。 */
   const [thinkMap, setThinkMap] = useState<Record<string, string>>(() => load('qingniao.thinkMap', {}))
-  // 思考档位形态一律按模型自身能力定（内核 capabilities.reasoning，查不到再按模型名猜），无需用户配置
-  const thinkKind = resolveThinkingKind(p.model, caps)
+  // 思考档位形态一律按模型自身能力定（内核 capabilities.reasoning，能力表查无实据时按模型名猜），无需用户配置
+  const thinkKind = resolveThinkingKind(p.model, caps, probeMap)
   const thinkVal = (() => {
-    const stored = thinkMap[p.model] ?? ''
-    if (!stored) return ''
+    const fallback = defaultThinkingValue(thinkKind)
+    if (thinkKind === 'off') return ''
+    const stored = thinkMap[p.model]
     const valid =
       thinkKind === 'toggle'
-        ? stored === 'on'
-        : thinkKind === 'off'
-          ? false
-          : stored === 'low' || stored === 'medium' || stored === 'high'
-    return valid ? stored : ''
+        ? stored === 'on' || stored === 'none'
+        : stored === 'low' || stored === 'medium' || stored === 'high'
+    return valid ? (stored as string) : fallback
   })()
   const thinkRef = useRef(thinkVal)
   thinkRef.current = thinkVal
@@ -767,7 +773,7 @@ export function ChatView(p: Props) {
     let alive = true
     let tries = 0
     const load = async () => {
-      const got = await oc.fetchReasoningCaps().catch(() => ({}) as Record<string, boolean>)
+      const got = await oc.fetchReasoningCaps().catch(() => ({}) as Record<string, ReasoningCap>)
       if (!alive) return
       if (Object.keys(got).length) {
         setCaps(got)
@@ -780,6 +786,57 @@ export function ChatView(p: Props) {
       alive = false
     }
   }, [p.settingsReady])
+
+  /**
+   * 思考形态实测：内核能力表只答得了「支不支持思考」，「是开关还是真有低中高」全库没有这个字段
+   * （models.dev 的 reasoning_options 连内置 provider 都缺），只能各档发一次极小请求比对思考量。
+   *
+   * 两段跑：设置就绪后先**一次性预填所有已缓存的结论**（命中缓存不花 token，瞬间完成，
+   * 这样切模型不会先闪一下「低/中/高」再变「关/开」）；没探过的模型再单独现探一次。
+   */
+  const probedOnce = useRef(false)
+  useEffect(() => {
+    if (!p.settingsReady || probedOnce.current) return
+    probedOnce.current = true
+    // 直接用配置里的模型清单：探测本身要 provider + model 两段，与内核能力表是否需要无关
+    const keys = p.settings.flatMap((pr) => pr.models.map((m) => `${pr.id}/${m.id}`))
+    if (!keys.length) return
+    let alive = true
+    void oc
+      .fetchProbedKinds(keys)
+      .then((map) => {
+        if (!alive || !Object.keys(map).length) return
+        setProbeMap((prev) => ({ ...map, ...prev }))
+      })
+      .catch(() => {
+        /* 预填失败不影响后续单模型探测 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [p.settingsReady, p.settings])
+
+  /** 当前模型没探过时补探一次（预填已覆盖大部分；切到新模型时才走到这里） */
+  useEffect(() => {
+    if (!p.settingsReady || !p.model) return
+    const i = p.model.indexOf('/')
+    if (i <= 0) return
+    const pid = p.model.slice(0, i)
+    const mid = p.model.slice(i + 1)
+    let alive = true
+    void oc
+      .probeThinking(pid, mid)
+      .then((r) => {
+        if (!alive || !r) return
+        setProbeMap((prev) => (prev[p.model] === r.kind ? prev : { ...prev, [p.model]: r.kind }))
+      })
+      .catch(() => {
+        /* 探测失败保留原判定，下次切回再试 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [p.model, p.settingsReady])
 
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
@@ -1783,7 +1840,7 @@ export function ChatView(p: Props) {
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
             />
-            <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />
+            <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} probed={!!probeMap[p.model]} />
             {anyBusy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
