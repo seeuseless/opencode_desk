@@ -1040,14 +1040,14 @@ export function SettingsView(p: Props) {
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="mcp-list">
-          {/* 桌面控制：与下面用户自加的 MCP 一样带开关，但它是内置项、不可删除（关闭即停用） */}
-          <div className={'prow builtin' + (p.settings.desktopControl ? '' : ' off')}>
+          {/* 桌面控制：与下面用户自加的 MCP 一样带开关，但它是内置项、不可删除（关闭即停用）。
+              不做常灰提示，开关关掉只是行内开关的断开，不整行变灰 */}
+          <div className="prow builtin">
             <Switch checked={!!p.settings.desktopControl} onChange={() => void toggleDesktopControl()} />
             <span className="prow-ico"><Monitor size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
                 桌面控制
-                <span className="chip kind-local">内置 · 默认关闭</span>
               </div>
               <div className="prow-url">
                 AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入），仅用于用户点名要操作桌面的时候
@@ -1056,7 +1056,7 @@ export function SettingsView(p: Props) {
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
           {p.settings.mcps.map((m, i) => (
-            <div key={m.name} className={'prow' + (m.enabled ? '' : ' off')}>
+            <div key={m.name} className="prow">
               <Switch checked={m.enabled} onChange={() => toggleMcp(i)} />
               <span className="prow-ico">
                 {m.type === 'remote' ? <Link2 size={15} /> : <Terminal size={15} />}

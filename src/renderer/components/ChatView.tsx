@@ -75,12 +75,10 @@ function hostOf(u: string): string {
   }
 }
 
-/** 任务被中断后的自动重试：间隔 10 秒，最多 10 次；耗尽后交给界面上的手动重试按钮 */
-const RETRY_INTERVAL_MS = 10000
-const RETRY_MAX = 10
+/** 任务中断后的提示条：不自动重发消息，交还用户点「重试」手动续跑 */
 /** 「任务已完成」通报条的停留时长：秒级可扫一眼即可，久留会顶掉聊天区顶部空间 */
 const TURN_DONE_MS = 3000
-/** 通报条退场动画时长（与 CSS .topstat.out 对齐）：动画走完才卸载节点，避免硬切 */
+/** 通报条退场动画时长（与 CSS .notify.out 对齐）：动画走完才卸载节点，避免硬切 */
 const TURN_DONE_OUT_MS = 220
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
@@ -240,7 +238,13 @@ interface TodoItem {
 }
 
 /** 上游错误 → 一句人话（错误条展示，不 dump 原始 JSON） */
+/**
+ * 把内核/端点抛的错误消息翻译成一眼能看懂的中文。
+ * 已知模式 → 对应提示；**未知/空消息 → 返回空串**（调用方据此不显示错误条——
+ * 宁可没提示，也不该用「未知错误」这种毫无信息量的占位糊弄人）。
+ */
 function humanizeError(raw: string): string {
+  if (!raw) return ''
   if (/insufficient[_ ]credit|quota|balance|arrears|exceeded your current/i.test(raw)) return '账户额度不足或已欠费，请检查该提供商的余额。'
   if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return 'API Key 无效或未通过认证，请到设置里检查该提供商的密钥。'
   if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return '请求过于频繁，已被限流，请稍候片刻再试。'
@@ -682,16 +686,28 @@ export function ChatView(p: Props) {
    * 所以这里等 msgs 里真的出现一条助手消息再结算，避免结算出空内容。
    */
   const wasBusy = useRef(false)
+  /** 上一帧「在处理中」时对应的会话（配合 wasBusy 判"真实跑完"）：
+   * 切会话时 wasBusy 会残留旧会话的 true，若不记归属，会把「旧会话在跑、切到已完成的新会话」
+   * 误判成「新会话本轮结束」而误弹完成条。必须校验这轮忙的是**当前会话**才结算。 */
+  const busySid = useRef('')
+  /** 已结算过「任务已完成」的（会话 + 最后助手消息）——同一轮只弹一次，防止 effect 因
+   * idle/落盘不同帧重跑时重复 setTurnDone（重复会重置 at、把 3 秒死线重算，看起来像弹了两遍）。 */
+  const doneSeen = useRef<{ sid: string; id: string }>({ sid: '', id: '' })
   const lastAidId = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id ?? ''
   useEffect(() => {
     const now = busy
     const ended = wasBusy.current && !now
+    if (busy) busySid.current = p.sessionId
     wasBusy.current = now
-    if (!ended || !p.sessionId) return
+    // 忙的必须就是当前会话（切会话后 wasBusy 的残留不算）；否则旧会话的中断/完成会被错算到新会话上
+    if (!ended || busySid.current !== p.sessionId || !p.sessionId) return
     const last = [...msgs].reverse().find((m) => m.info.role === 'assistant')
     // 用户主动停止（MessageAbortedError）：不算完成，交给重试条与用户自己决定
     const aborted = (last?.info as unknown as { error?: { name?: string } })?.error?.name === 'MessageAbortedError'
     if (!last || aborted) return
+    // 同会话同一轮只弹一次：内容到位、effect 重跑也不会重复结算
+    if (doneSeen.current.sid === p.sessionId && doneSeen.current.id === last.info.id) return
+    doneSeen.current = { sid: p.sessionId, id: last.info.id }
     const i = p.model.indexOf('/')
     const prov = i > 0 ? p.settings.find((x) => x.id === p.model.slice(0, i)) : undefined
     const mm = i > 0 ? prov?.models.find((x) => x.id === p.model.slice(i + 1)) : undefined
@@ -800,41 +816,18 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后自动续跑：
-   * 间隔 10 秒，最多 10 次；次数耗尽后不再自动重试，改由对话末尾的手动重试按钮交给用户。
-   * 上一轮没有产出就重发原文，有产出就发「继续」让模型从断点接着做。
+   * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后登记一个「中断」状态：
+   * 顶部通知条显示「任务已中断」，**不自动重发消息**——续跑由用户点「重试」按钮触发。
+   * 自动重试会替用户重复发一条消息（或追加「继续」），既可能打乱对话、又未必是用户想要的，
+   * 所以中断后只提示、交还用户决定。
    */
-  function scheduleRetry(sid: string, msgs?: MessageView[]) {
+  function scheduleRetry(sid: string) {
     if (!sid || navigator.onLine === false) return
-    // 手机发起的回合：本端不是发起者，自动续跑等于替用户重复发一条消息
+    // 手机发起的回合：本端不是发起者，续跑只会重复发
     if (foreignSids.current.has(sid)) return
-    if (retries.current.get(sid)?.timer != null) return
-    const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
-    const start = (list: MessageView[]) => {
-      const text = continuationText(list)
-      if (!text) {
-        retries.current.delete(sid)
-        syncRetryView()
-        return
-      }
-      if ((retries.current.get(sid)?.count ?? 0) >= RETRY_MAX) return
-      retries.current.set(sid, {
-        count: (retries.current.get(sid)?.count ?? 0) + 1,
-        timer: window.setTimeout(() => {
-          retries.current.delete(sid)
-          syncRetryView()
-          markBusy(sid, false)
-          setError('')
-          void runPrompt(text, sid, dir)
-        }, RETRY_INTERVAL_MS)
-      })
-      syncRetryView()
-    }
-    if (msgs) return start(msgs)
-    oc.messages(sid, dir).then(start).catch(() => {
-      retries.current.delete(sid)
-      syncRetryView()
-    })
+    if (retries.current.has(sid)) return
+    retries.current.set(sid, { count: 1, timer: undefined })
+    syncRetryView()
   }
 
   /** 重试次数耗尽后的手动重试：读回会话历史后直接续跑上一轮 */
@@ -936,39 +929,8 @@ export function ChatView(p: Props) {
     // 组内一个可对话模型都没有的提供商直接不显示，免得点进去是空列
     .filter((g) => g.models.length > 0)
 
-  /** 自动换模型链路里已试过的模型（按会话记账）：新发送重置，避免 A↔B 来回弹跳 */
-  const fallbackTried = useRef<Record<string, string[]>>({})
-  /**
-   * 「拒绝对话」报错的自救：生图模型当对话用、模型 ID 写错等，端点直接拒绝——
-   * 与其把错误丢回给用户，不如静默换同提供商里能对话的模型重发「继续」。
-   * 经 ref 暴露给挂载期闭包的事件处理器，保证读到的是当次渲染的设置与模型。
-   */
-  const chatFallbackRef = useRef<(sid: string, errMsg: string) => boolean>(() => false)
-  chatFallbackRef.current = (sid, errMsg) => {
-    if (!/images\/generations|videos\/|是\s*(?:image|video)\s*模型|(?:image|video) (?:generation )?model|model[_ ]not[_ ]found|does not exist|unknown model|unsupported model/i.test(errMsg)) return false
-    const key = p.model
-    const i = key.indexOf('/')
-    if (i <= 0) return false
-    const pid = key.slice(0, i)
-    const prov = p.settings.find((x) => x.enabled && x.id === pid)
-    if (!prov) return false
-    const tried = (fallbackTried.current[sid] ??= [])
-    const cands = prov.models.filter(
-      (m) =>
-        m.id !== key.slice(i + 1) &&
-        // 生成角色非「对话」的（显式选过的，或名字带 image/video/flux 等）不收对话，别再撞一次拒绝
-        genRoleOf(m) === 'none' &&
-        !tried.includes(m.id)
-    )
-    // 桌面控制/内置浏览器常驻，所以能接图的优先；只剩纯文本模型时也照样自救，别因换不到人就放弃
-    const cand = cands.find((m) => (m.input ?? MODEL_DEFAULTS.input).includes('image')) ?? cands[0]
-    if (!cand) return false
-    tried.push(cand.id)
-    p.onModelChange(`${pid}/${cand.id}`)
-    cancelRetry(sid)
-    void runPrompt(RETRY_CONTINUE, sid, busyDir.current[sid] ?? p.project?.path, { providerID: pid, modelID: cand.id })
-    return true
-  }
+  // 文字聊天模型禁止自动切换（用户约定）：一旦选中，对话就用当前模型，端点拒绝时报错给用户手动处理，
+  // 绝不在后台静默换成同提供的其他模型再自动重发「继续」。
 
   /**
    * 正在后台刷新计价的分组 id。
@@ -1129,7 +1091,7 @@ export function ChatView(p: Props) {
           .then((list) => {
             // 回合结束但还残留半截工具调用（写入空转、断流截断）= 中断，自动续跑
             const last = list[list.length - 1]
-            if (last && (last.info.role === 'user' || isAbortedAssistant(last))) scheduleRetry(idleSid, list)
+            if (last && (last.info.role === 'user' || isAbortedAssistant(last))) scheduleRetry(idleSid)
             if (!isCurrent) return
             setTodos([])
             setMsgs(hydrate(list, shown.current, texts.current))
@@ -1146,7 +1108,7 @@ export function ChatView(p: Props) {
               const last = [...list].reverse().find((m) => m.info.role === 'assistant' && (m.parts.some((x) => x.type === 'text' && x.text)))
               if (last) markBusy(s, false)
               // 重连前任务被中断（断流截断/残留半截工具调用）→ 自动续跑
-              if (isAbortedAssistant(list[list.length - 1])) scheduleRetry(s, list)
+              if (isAbortedAssistant(list[list.length - 1])) scheduleRetry(s)
             })
             .catch(() => {})
           if (s === sidRef.current) {
@@ -1190,20 +1152,17 @@ export function ChatView(p: Props) {
         const owned = !!busySetRef.current[sid]
         if (owned) markBusy(sid, false)
         const isCurrent = sid === sidRef.current
-        // 端点拒绝对话（生图模型/模型 ID 不存在）：先静默换同组可对话的模型续跑，换不动才把错误露给用户。
-        // 仅限当前会话——后台会话用的可能不是 p.model，拿这次的模型组去换会换错。
-        if (owned && isCurrent && chatFallbackRef.current(sid, pr.error?.message ?? '')) return
         oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
           .then((list) => {
             const last = list[list.length - 1]
             // session.error 到达 = 任务已失败；只要本轮仍在处理中就自动续跑（continuationText 无内容时会自行取消）
-            if (owned) scheduleRetry(sid, list)
+            if (owned) scheduleRetry(sid)
             if (!isCurrent) return
             setMsgs(hydrate(list, shown.current, texts.current))
-            setError(humanizeError(pr.error?.message ?? '未知错误'))
+            setError(humanizeError(pr.error?.message ?? ''))
             p.onRefreshSessions()
           })
-          .catch(() => { if (isCurrent) setError(humanizeError(pr.error?.message ?? '未知错误')) })
+          .catch(() => { if (isCurrent) setError(humanizeError(pr.error?.message ?? '')) })
       }
     })
     return off
@@ -1590,8 +1549,6 @@ export function ChatView(p: Props) {
     }
     // 用户自己发新消息 = 不用自动重试来续跑了
     if (p.sessionId) cancelRetry(p.sessionId)
-    // 新对话轮重新计数，允许再次自动换模型；否则上一轮试过的模型会永久挡路
-    if (p.sessionId) delete fallbackTried.current[p.sessionId]
     if (busy) {
       // 终端长跑卡住本轮：发送新消息 = 用户主动接管（中止当前轮后立即执行，不进队列）
       if (terminalBlocked && sidRef.current) {
@@ -1611,6 +1568,7 @@ export function ChatView(p: Props) {
     setError('')
     // 新一轮开始：上一轮的「任务已完成」提示功成身退，不然它会一直挂在那儿骗人
     setTurnDone(null)
+    doneSeen.current = { sid: '', id: '' }
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
@@ -1834,7 +1792,7 @@ export function ChatView(p: Props) {
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
   // 「任务已完成」是收尾通报，不是待办事项：亮 3 秒自己退场，别一直占着聊天窗口上方。
-  // 两段时间线：0~3000ms 亮着 → 3000ms 切成退场动画（topstat-out，仍占位，只做淡出）
+  // 两段时间线：0~3000ms 亮着 → 3000ms 切成退场动画（notify-out，仍占位，只做淡出）
   // → 3220ms 真正卸载节点、槽位高度收回。
   // 只对 turnDone 生效——中断重试条要一直挂着，用户得能点「取消重试」。
   const turnDoneAt = turnDone?.at ?? 0
@@ -1873,24 +1831,6 @@ export function ChatView(p: Props) {
             </button>
           </div>
         </>
-      )}
-      {/* 任务完成通报：嵌在消息流上方、输入框以上，撑高自己的一条，不走绝对定位浮层。
-          放这里是因为它是「聊天窗口上方」的收尾状态，用户视线从最后一条回复抬头就能看到；
-          3 秒后自动退场（定时器见上方 effect），高度收回、消息流不跳动。
-          重试条仍然走下面的浮层：它要压住消息流顶端，不能挤走用户的阅读位置。 */}
-      {!retryState && turnDone && (
-        <div className="doneline">
-          <div className={'topstat done ' + (turnDoneOut ? 'out' : 'in')}>
-            <Check size={13} />
-            <span>
-              任务已完成 · 由 {turnDone.model} 服务
-              {turnDone.media && <em>（{turnDone.media}）</em>}
-            </span>
-            <button className="icon-btn" title="关闭" onClick={() => setTurnDone(null)}>
-              <X size={13} />
-            </button>
-          </div>
-        </div>
       )}
       <div
         className="msgs"
@@ -2041,39 +1981,8 @@ export function ChatView(p: Props) {
         </div>
       )}
 
-      {/* 中断重试条：浮在消息流顶部居中。
-          刻意不放在消息流里——流式输出时它会跟着内容一起滚走，用户根本看不到；
-          浮在顶部固定位置，一眼就能扫到"正在重试第几次"。
-          （「任务已完成」不在这里，走上面的 .doneline 嵌条：它 3 秒就退场，不必压住阅读位置。） */}
-      {retryState && (
-        <div className="topstat-wrap">
-          {retryState.pending && (
-            <div className="topstat retry in">
-              <LoaderCircle size={13} className="spin" />
-              <span>
-                任务已中断 · 重试 {retryState.count}/{RETRY_MAX}
-                <em>{RETRY_INTERVAL_MS / 1000} 秒后自动重试</em>
-              </span>
-              <button className="icon-btn" title="取消自动重试" onClick={() => cancelRetry(p.sessionId)}>
-                <X size={13} />
-              </button>
-            </div>
-          )}
-          {!retryState.pending && (
-            <div className="topstat retry fail in">
-              <AlertCircle size={13} />
-              <span>
-                已自动重试 {RETRY_MAX}/{RETRY_MAX} 次仍未完成
-                <em>可点右侧按钮让 AI 接着处理</em>
-              </span>
-              <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
-                <RotateCw size={13} /> 重试
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* 所有通知（任务完成 / 中断重试）统一在消息区上方的 .topnotify 里展示，
+          见顶部 .topnotify 块的实现；这里只负责任务队列。 */}
       {curQueue.length > 0 && (
         <div className="qbar">
           <div className="col">
@@ -2124,6 +2033,36 @@ export function ChatView(p: Props) {
         </Modal>
       )}
 
+      {/* 通知区：所有状态通知贴在聊天输入窗（.cwrap）上方、水平居中。
+          「聊天对话框上方」指的是输入框上头这条，不是界面/消息区最顶部。
+          用流内嵌而非绝对定位浮层——浮层会横向盖住下方、可能压到任务队列；
+          这里在任务队列之后、输入框之前，消息流滚动不影响它（.msgs 是独立滚动区）。 */}
+      <div className="topnotify">
+        {retryState && (
+          <div className="notify retry">
+            <AlertCircle size={13} />
+            <span>任务已中断</span>
+            <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
+              <RotateCw size={13} /> 重试
+            </button>
+            <button className="icon-btn" title="关闭" onClick={() => cancelRetry(p.sessionId)}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+        {!retryState && turnDone && (
+          <div className={'notify done ' + (turnDoneOut ? 'out' : 'in')}>
+            <Check size={13} />
+            <span>
+              任务已完成 · 由 {turnDone.model} 服务
+              {turnDone.media && <em>（{turnDone.media}）</em>}
+            </span>
+            <button className="icon-btn" title="关闭" onClick={() => setTurnDone(null)}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+      </div>
       <div className="cwrap">
         <div className="cbox col">
           <textarea

@@ -412,27 +412,20 @@ input, textarea { font: inherit; }
 :root[data-theme='light'] .md pre,
 :root[data-theme='light'] .md code { background: var(--ai); }
 .amsg.busyline { display: flex; align-items: center; gap: 7px; color: var(--fg2); font-size: 13px; }
-/* 任务完成通报条：消息流之上、输入框以上的一条实心槽位（参与布局，不是浮层）。
-   放这儿是因为它是「聊天窗口上方」的收尾状态——用户从最后一条回复抬头即见；
-   3 秒后由定时器收起，槽位随内容消失、高度自然收回，消息流不跳动。 */
-.doneline {
+/* 通知区：所有状态通知贴在聊天输入窗（.cwrap）上方、水平居中。
+   「聊天对话框上方」指输入框上头这条，不是界面/消息区最顶部——
+   消息区是独立滚动区，这条在它外层 flex 里、于输入框之前，天然固定在底部、不随消息滚动。
+   流内嵌（flex 列、justify-center）而非绝对定位浮层：浮层会横向盖住下方、可能压到任务队列；
+   这条在任务队列之后、输入框之前，消息流与队列都在它上方，互不遮挡。 */
+.topnotify {
   flex: none;
-  display: flex; justify-content: center;
-  padding: 8px 24px 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 6px 24px 8px;
   background: var(--content);
 }
-/* 这行文案不省略号截断：它是一次性通报，宁可占两行说完（「由谁服务 + 成果来源」） */
-.doneline .topstat span { white-space: normal; text-align: center; }
-/* 中断重试状态条容器：不参与消息流布局（消息流照常从顶部滚），
-   浮在它上面，一眼扫得到"正在重试第几次" */
-.topstat-wrap {
-  position: absolute; top: 10px; left: 0; right: 0;
-  display: flex; flex-direction: column; align-items: center; gap: 6px;
-  pointer-events: none; z-index: 20;
-}
-.topstat {
-  pointer-events: auto;
-  display: flex; align-items: center; gap: 7px;
+/* 通用通知胶囊：任务完成（绿）/ 任务中断（红）两态共用一套骨架 */
+.notify {
+  display: flex; align-items: center; justify-content: center; gap: 7px;
   max-width: min(560px, calc(100% - 32px));
   padding: 5px 6px 5px 11px;
   border-radius: 999px;
@@ -440,26 +433,32 @@ input, textarea { font: inherit; }
   box-shadow: 0 3px 14px rgba(0, 0, 0, .10);
   color: var(--fg2); font-size: 12.5px;
 }
-.topstat span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topstat em { color: var(--fg2); opacity: .8; font-style: normal; margin-left: 5px; }
-/* 任务完成：绿意点缀（浅色主题下用低饱和的绿，不刺眼） */
-.topstat.done { color: var(--fg); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
-.topstat.done > svg { color: var(--ok); flex: none; }
-/* 重试中（灰，带转圈）/ 次数耗尽（红） */
-.topstat.retry > svg { color: var(--fg2); flex: none; }
-.topstat.retry.fail { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
-.topstat.retry.fail > svg { color: var(--err); flex: none; }
-.topstat .icon-btn { flex: none; width: 20px; height: 20px; }
-/* 通报条生命周期动画：进场从上滑入，退场向上淡出（退场在动画结束后才由 JS 卸载节点） */
-.topstat.in { animation: topstat-in .18s ease-out; }
-.topstat.out { animation: topstat-out .22s ease-in forwards; }
-@keyframes topstat-in {
+.notify > svg { flex: none; }
+.notify span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notify em { color: var(--fg2); opacity: .8; font-style: normal; margin-left: 5px; }
+.notify .icon-btn { flex: none; width: 20px; height: 20px; }
+/* 任务已完成：绿意点缀（浅色主题下用低饱和的绿，不刺眼） */
+.notify.done { color: var(--fg); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.notify.done > svg { color: var(--ok); }
+.notify.done span { white-space: normal; text-align: center; }
+/* 任务已中断：红边 + 红字 + 手动重试——中断是要用户留意的异常，用预警色点出 */
+.notify.retry { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
+.notify.retry > svg { color: var(--err); }
+/* 生命周期动画：任务完成从上滑入、向上淡出（退场在动画结束后才由 JS 卸载）；中断从下方输入区滑入 */
+.notify.in { animation: notify-in .18s ease-out; }
+.notify.out { animation: notify-out .22s ease-in forwards; }
+.notify.retry { animation: retry-in .18s ease-out; }
+@keyframes notify-in {
   from { opacity: 0; transform: translateY(-6px); }
   to { opacity: 1; transform: none; }
 }
-@keyframes topstat-out {
+@keyframes notify-out {
   from { opacity: 1; transform: none; }
   to { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes retry-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
 }
 .retrybtn {
   display: inline-flex; align-items: center; gap: 5px;
@@ -1130,8 +1129,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .prow.dragover,
 .model-row.dragover { background: color-mix(in srgb, var(--accent) 7%, var(--bg2)); }
 /* 内置能力没有开关、也不给编辑删除，整行置灰并去掉 hover 反馈，看起来就知道不可点 */
-.prow.builtin { opacity: 0.55; cursor: default; }
-.prow.builtin:hover { background: var(--bg2); }
+.prow.builtin { cursor: default; }
 .prow-main { flex: 1; min-width: 0; }
 .prow-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .prow-url { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
@@ -1165,16 +1163,18 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
    不给 max-height 加额外限制，沿用 .modal 的 84vh —— 抵掉 72px 上边距后仍不会溢出屏幕。 */
 .mask.top { align-items: flex-start; padding-top: 72px; background: rgba(0, 0, 0, 0.32); }
 .modal {
-  width: 540px; max-height: 84vh; overflow-y: auto;
+  width: 540px; max-height: 84vh; overflow: hidden;
   background: var(--bg2); border: none; border-radius: 16px;
+  /* 由 box-shadow 提供边框光晕，同时作为圆角裁切边界（overflow:hidden 让四角真正显示圆角，
+     不再被滚动容器自带的直角背景填掉右上/右下） */
   box-shadow: 0 18px 60px var(--shadow);
 }
 .modal.wide { width: 720px; }
 /* 窄档：字段少的补充表单（模型编辑/添加）。540 太宽会留一大片空白，看着散 */
 .modal.narrow { width: 460px; }
-.mhead { display: flex; align-items: center; padding: 16px 18px 12px; }
+.mhead { display: flex; align-items: center; padding: 16px 18px 12px; flex-shrink: 0; }
 .mhead h3 { flex: 1; font-size: 16px; }
-.mbody { padding: 0 18px 18px; }
+.mbody { padding: 0 18px 18px; overflow-y: auto; max-height: calc(84vh - 50px); }
 .mbody label { display: block; font-size: 13px; color: var(--fg2); margin-bottom: 12px; }
 /* 控件圆角 10px：跟 .modal 的 16px 外圆角、.model-row 的 12px 面要素递进，
    整体是「外圆内方」的柔和观感；早先的 8px 在 720px 宽的弹窗里显得方正 */
@@ -1367,7 +1367,6 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
   background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
 }
 .chip.kind-remote { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
-.chip.kind-local { background: color-mix(in srgb, var(--run) 15%, transparent); color: var(--run); }
 .plist-empty.hint { padding: 12px 0 2px; font-size: 12.5px; }
 
 /* ================= 技能（Skills）列表 ================= */
