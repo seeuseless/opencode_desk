@@ -64,7 +64,9 @@ export default function App() {
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
     // 桌面控制默认关；access 'default' = 写操作要确认（均与主进程 DEFAULT_SETTINGS 一致）
     desktopControl: false,
-    access: 'default'
+    access: 'default',
+    // 「永久允许调用其他模型」清单：默认空，AI 每次要调别的模型都会先问
+    modelAuth: []
   })
   const [settingsReady, setSettingsReady] = useState(false)
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))

@@ -123,7 +123,11 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     // 桌面控制默认关：只有显式存过 true 才开（老配置没有这个键 → 关，符合「不内置、让用户自己开」）
     desktopControl: raw?.desktopControl === true,
     // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
-    access: normalizeAccess(raw?.access)
+    access: normalizeAccess(raw?.access),
+    // 「永久允许调用」清单：只收非空字符串（手改存档塞进数字/对象时一并滤掉，否则授权判定会静默失配）
+    modelAuth: Array.isArray(raw?.modelAuth)
+      ? [...new Set(raw.modelAuth.filter((x): x is string => typeof x === 'string' && !!x.trim()).map((x) => x.trim()))]
+      : []
   }
 }
 
@@ -331,6 +335,17 @@ let panelMcp: { path: string; port: number } | undefined
 export function setPanelMcp(v: { path: string; port: number }): void {
   panelMcp = v
 }
+
+/**
+ * 「调用其他模型」授权闸门的端点端口 —— 复用面板那个本地控制端点（同一个 127.0.0.1 服务，
+ * 另外挂了 `/qn/authorize` 与 `/qn/model-used` 两条路由），不额外起服务。
+ *
+ * 只有会调用**别的模型**的 MCP 需要它：识图 / 桌面视觉代看 / 生图 / 生视频 / 配音 / 音乐 / 听写。
+ * 面板、UIA、desktop-helper 这些不调模型的不用注入（注了也无害，但没必要）。
+ */
+function gateEnv(): Record<string, string> {
+  return panelMcp ? { QN_GATE_PORT: String(panelMcp.port) } : {}
+}
 /** 桌面辅助 MCP（app_running 查进程）脚本路径，桌面控制开启时注册 */
 let desktopMcp: { path: string } | undefined
 export function setDesktopMcp(v: { path: string }): void {
@@ -354,6 +369,15 @@ export function setVisionMcp(v: { path: string }): void {
 let screenMcp: { path: string; upstreamBin?: string } | undefined
 export function setScreenMcp(v: { path: string; upstreamBin?: string }): void {
   screenMcp = v
+}
+/**
+ * UIA 桌面 MCP（读 Windows 无障碍树，按元素名点击/输入）脚本路径。
+ * 桌面控制的**首选**通道：原生控件应用（资源管理器、记事本、Office 等）的元素本来就有名字，
+ * 走它纯文本、几十毫秒、不要求模型能看图；自绘界面（微信 4.0 等）无障碍树为空，才退到键盘/截图。
+ */
+let uiaMcp: { path: string } | undefined
+export function setUiaMcp(v: { path: string }): void {
+  uiaMcp = v
 }
 /** 语音合成 MCP（generate_speech 配音工具）脚本路径 */
 let ttsMcp: { path: string } | undefined
@@ -485,6 +509,19 @@ export function writeOpencodeConfig(s: Settings): void {
     // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
     mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
   }
+  // UIA 桌面 MCP：桌面控制的**首选**通道。读 Windows 无障碍树拿元素名/ref，模型按名字点击输入，
+  // 纯文本、几十毫秒、不需要模型支持图片输入——补上「原生控件应用必须靠截图+视觉」这个缺口。
+  // 与 desktop-helper / computer-use 共用「桌面控制」这一个开关（同一件事的三个通道，只挂一半会残缺）。
+  if (desktopOn && uiaMcp) {
+    mcp.uia = {
+      type: 'local',
+      command: ['node', uiaMcp.path],
+      // 单次读树本身几十毫秒（内层 PowerShell 宿主常驻、已预热），给 20s 是留给首次
+      // spawn + Add-Type 编译 C# 的冷启动——那次可能要 1~2 秒，之后每次都是常驻响应。
+      timeout: 20000,
+      enabled: true
+    }
+  }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
   // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
   //
@@ -533,7 +570,7 @@ export function writeOpencodeConfig(s: Settings): void {
       mcp.tts = {
         type: 'local',
         command: ['node', ttsMcp.path],
-        environment: { QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
+        environment: { QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media'), ...gateEnv() },
         timeout: 180000,
         enabled: true
       }
@@ -560,7 +597,7 @@ export function writeOpencodeConfig(s: Settings): void {
       mcp.asr = {
         type: 'local',
         command: ['node', asrMcp.path],
-        environment: { QN_ASR_TARGETS: JSON.stringify(asrTargets) },
+        environment: { QN_ASR_TARGETS: JSON.stringify(asrTargets), ...gateEnv() },
         // 一小时音频约 2.8 元，长会议转写要几分钟，默认 5s 超时必被掐
         timeout: 600000,
         enabled: true
@@ -577,7 +614,8 @@ export function writeOpencodeConfig(s: Settings): void {
       command: ['node', visionMcp.path],
       environment: {
         QN_VISION_TARGETS: JSON.stringify(visionTargets),
-        QN_MEDIA_DIR: join(storeDir(), 'media')
+        QN_MEDIA_DIR: join(storeDir(), 'media'),
+        ...gateEnv()
       },
       // 识图几秒到几十秒（大图更久），默认 5s 超时必被掐
       timeout: 120000,
@@ -607,7 +645,8 @@ export function writeOpencodeConfig(s: Settings): void {
       environment: {
         QN_VISION_TARGETS: JSON.stringify(visionTargets),
         QN_SCREEN_UPSTREAM_CMD: upstreamLocal ? process.execPath : 'npx',
-        QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(upstreamLocal ? [upstreamBin] : ['-y', 'computer-use-mcp'])
+        QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(upstreamLocal ? [upstreamBin] : ['-y', 'computer-use-mcp']),
+        ...gateEnv()
       },
       // 桌面控制的每一步都必须在几十秒内出结果——拖着不回比做错更糟：界面会一直卡在
       // 「AI 正在控制你的电脑」，且对话输入一直被锁着。
@@ -640,38 +679,64 @@ export function writeOpencodeConfig(s: Settings): void {
     '# 工具路由约定\n' +
       '- 「打开网页 / 打开链接 / 上网 / 操作浏览器」一律用青鸟窗口右侧的内置浏览器（`panel_*` 工具）：' +
       '它与用户看同一个浏览器、登录态共享，靠元素 ref 定位点击/输入，不需要截屏。**本回复里给出的 URL 要打开时同样走 panel_*。**\n' +
-      '- **网页内容一律用 `panel_snapshot` 读（文本元素清单 + 标题），严禁为了「看看打开没有 / 页面长什么样」去 `computer` 截屏**：' +
+      '- **网页内容一律用 `panel_snapshot` 读（文本元素清单 + 标题），严禁为了「看看打开没有 / 页面长什么样」去桌面截屏**：' +
       '截屏要移动鼠标、等画面、还要求当前模型支持图片输入，比 snapshot 慢一个数量级，而且面板页面本来就能直接读到结构。\n' +
       // 两套操作面的互斥边界：模型最容易在这里串台——用 computer 去碰网页、或拿 panel 去开桌面应用。
       // 内置浏览器是应用内的一块面板（只能操作网页），computer 操作的是用户真实的整个桌面，两者互不替代。
       '- **两套操作面互斥，本轮只用其中一套，不要混用**：\n' +
-      '  · 任务在**操作本机桌面 / 桌面应用**（打开微信、点任务栏、操作外部浏览器窗口）→ 只用 `computer`，' +
+      '  · 任务在**操作本机桌面 / 桌面应用**（打开微信、点任务栏、操作外部浏览器窗口）→ 只用 `uia_*` / 桌面键鼠，' +
       '**不要**去调 `panel_*`：内置浏览器是应用内的一块网页面板，它不能操作桌面应用，只会白跑一趟。\n' +
-      '  · 任务在**浏览网页 / 面板浏览器**（含内置浏览器全屏）→ 只用 `panel_*`，**不要**去调 `computer`：' +
+      '  · 任务在**浏览网页 / 面板浏览器**（含内置浏览器全屏）→ 只用 `panel_*`，**不要**去调桌面键鼠/截图：' +
       '网页有 DOM 结构可读（snapshot 又快又准），截屏既慢又要模型能看图，纯属多此一举。\n' +
       (desktopOn
-        ? '- 只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时，才用 computer 工具（截屏 + 键鼠）去操作桌面浏览器。\n' +
-          '- **操作本机桌面应用一律用 `computer` 工具**（它在内置清单里，永远可用）：`{"action":"get_screenshot"}` 看画面 → ' +
-          '`left_click` / `type` / `key` 动手 → 再截屏确认。典型任务如「打开微信给文件助手发条消息」：' +
-          '截屏找到窗口 → 点搜索框 → `type` 搜「文件传输助手」→ 点开 → 点输入框 → `type` 正文 → `key` Return。\n' +
-          '- **严禁改用写代码的方式操作桌面**：不要 `bash` 跑 PowerShell 的 SendKeys / `Add-Type` UIAutomation / user32 `keybd_event`，' +
-          '也不要装 pyautogui、AutoIt、RobotJS 之类去模拟点击输入。这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。' +
-          '`bash` 在这类任务里只允许用来「启动一个进程」，其余一律 `computer`。\n' +
-          '- `computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
+        ? // 桌面控制写成**三档优先级**：模型默认只想到「截屏看图」那一档，而那一档最慢、
+          // 还要求模型支持图片输入。原生控件应用走无障碍树是几十毫秒的纯文本路径，必须先试。
+          '- **操作本机桌面应用：按下面三档优先级，从上往下用，不要跳档**：\n' +
+          '  ① **`uia_*` 无障碍树（首选）**：`uia_windows` 找窗口 → `uia_tree` 读元素清单 → ' +
+          '`uia_click` / `uia_set_text` / `uia_focus` 操作。原生控件应用（资源管理器、记事本、系统设置、Office、多数传统桌面软件）' +
+          '走这一档：纯文本、几十毫秒、**不需要模型支持图片输入**。**操作后重新 `uia_tree` 看变化就够了，严禁为了「确认点没点中」去截屏**。\n' +
+          '  ② **键盘快捷键（自绘界面走这一档）**：有些应用把整个界面画在一块画布上（微信 4.0 的 MMUIRenderSubWindow 就是），' +
+          '无障碍树是空的——`uia_tree` 会明确告诉你「没有任何可操作元素」。**看到空树就立刻转本档，不要再试第二遍 `uia_windows` / `uia_tree`**。\n' +
+          '     做法：`uia_window_focus "<窗口名>"` 提到前台，再发快捷键。**必须先看它回的「前台窗口」是不是目标**：' +
+          '不是目标就**不要盲发按键**（键会打进别的窗口，越点越乱），先 ' +
+          '`{"action":"left_click","coordinate":[x,y]}` 点一下那个窗口的可见区域把它点成前台，然后再发键。\n' +
+          '     **调用形状（只有 action / coordinate / text 三个字段，按键串一律放 `text`，没有 `key` 这个字段）**：\n' +
+          '     `{"action":"key","text":"ctrl+f"}` 打开搜索 ｜ `{"action":"key","text":"return"}` 回车 ｜ ' +
+          '`{"action":"type","text":"文件传输助手"}` 输入文字 ｜ `{"action":"left_click","coordinate":[640,360]}` 点坐标。\n' +
+          '     **多写一个字段（如 `key`/`keys`/`hotkey`）整次调用会被拒**，别自己发明字段名。\n' +
+          '     例：「打开微信给文件传输助手发条消息」= `uia_window_focus "微信"` → `{"action":"key","text":"esc"}` ' +
+          '→ `{"action":"key","text":"ctrl+f"}`（中文用剪贴板 `ctrl+v` 更稳）→ `{"action":"key","text":"return"}` → ' +
+          '剪贴板换成正文 → `{"action":"key","text":"ctrl+v"}` → `{"action":"key","text":"return"}`。' +
+          '**整条链路是确定性的，一条截屏都不需要。**\n' +
+          '  ③ **截图 + 视觉（最后兜底，且同一轮最多一次）**：只有前两档都不适用（游戏、纯 canvas 界面）才用 `{"action":"get_screenshot"}`；' +
+          '**严禁用截图去确认某一步成没成**——每步截一张就是用户看到的「反复截图死循环」。' +
+          '只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时才用它去操作桌面浏览器。\n' +
+          '- **工具名要写全名**（内核注册时会拼上服务名前缀，清单里的名字就是全名）：' +
+          '桌面键鼠/截屏 = `computer-use_computer`，查应用是否在运行 = `desktop-helper_app_running`，' +
+          '无障碍树 = `uia_windows` / `uia_tree` / `uia_click` / `uia_set_text` / `uia_focus` / `uia_window_focus`，' +
+          '内置浏览器 = `panel_navigate` / `panel_snapshot` / `panel_click` / `panel_type`。' +
+          '**写裸名（`computer`、`app_running`、`uia_tree` 少前缀等）会报「工具不存在」**，只能照清单里的全名调。\n' +
+          '- **严禁改用写代码的方式操作桌面**：系统已经内置了 `uia_*`（无障碍树）和 `computer-use_computer`（键鼠）两套工具，直接用它们。' +
+          '不要 `bash` 跑 PowerShell / Python 现写 UI Automation、SendKeys、user32 `keybd_event`，也不要装 pyautogui、AutoIt、RobotJS —— ' +
+          '现写的脚本看不见画面、不会等界面就绪，只会把东西打进错误的地方。`bash` 在这类任务里只允许用来「启动一个进程」。\n' +
+          '- `computer-use_computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
           (visionTargets.length
             ? '**若你只看到 `image_width` / `image_height` 这类尺寸文字、看不到画面，说明系统已经把截图交给视觉模型代看**——' +
               '紧随其后的「【电脑画面（由 xxx 识别）】」段落就是画面内容，以它为准来决定点哪里。' +
               '**这种情况下绝不要说「我看不到屏幕」、更不要改成写脚本硬猜**。\n' +
-              '- 上面那段「电脑画面」是别人转述的画面：坐标要按截图尺寸自己估算，点完后**必须再截屏确认**，若发现和描述不符就以最新截图为准。\n'
+              '- 上面那段「电脑画面」是**别人转述**的画面，只当开局参考：坐标按截图尺寸自己估算。' +
+              '**不要为了「验证一下 / 想看看」再截第二张**——转述本身就有误差，连截只会把任务钉在原地空转、还每次多花一次视觉模型调用；' +
+              '按计划把动作发完，结果明显不对就如实告诉用户并停下。\n'
             : '若你收不到画面（只看到尺寸文字、没有「【电脑画面】」段落），说明当前没有配置视觉模型：' +
               '如实说明并让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，**不要退化成写脚本硬猜**。\n') +
-          '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
-          '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
-          '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
-          '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
-        : // 桌面控制没开：本轮**没有** computer / app_running 工具，不能让模型去找它们。
+          '- 「打开某应用」动手前必须先调 `desktop-helper_app_running` 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
+          '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为 `uia_windows` 看它的窗口在不在（自绘应用如微信直接 `uia_window_focus "微信"` 提到前台），' +
+          '找不到再试 Alt+Tab 或系统托盘，**不要靠截屏找图标**；\n' +
+          '  未在运行 → 才走启动流程，启动后用 `uia_windows` 确认窗口出现。\n' +
+          '- 「打开某应用」直接就是任务：第一步调 `desktop-helper_app_running`，不要先截屏猜、更不要直接 Win+R。'
+        : // 桌面控制没开：本轮**没有** computer-use_computer / app_running 工具，不能让模型去找它们。
           // 明确告知「用户可以在哪打开」，比让模型反复试一个不存在的工具好。
-          '- 本轮**没有** `computer` / `app_running` 等桌面控制工具（用户未启用）：' +
+          '- 本轮**没有** `computer-use_computer` / `desktop-helper_app_running` / `uia_*` 等桌面控制工具（用户未启用）：' +
           '遇到「打开某个应用 / 在桌面上操作 / 帮我点一下」这类要求，直接如实说明' +
           '「桌面控制未启用，可在 设置 → 浏览器与扩展 里打开」，**不要试图用 `bash` 跑 PowerShell / pyautogui ' +
           '模拟键鼠来绕过**——这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。')

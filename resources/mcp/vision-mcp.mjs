@@ -13,6 +13,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -179,8 +180,15 @@ async function describeImage(args) {
   // 依次重试：挑错模型（名字像视觉、实际不支持）时第一个会报 4xx，换下一个往往就成了
   const errs = []
   for (const t of targets.slice(0, 4)) {
+    // 调别的模型前先问用户（一次 / 本次会话 / 永久）。被拒就到此为止——绝不换一个模型绕过去
+    const who = { role: 'vision', id: t.id, label: t.label, provider: t.provider }
+    const grant = await authorize(who)
+    if (!grant.allowed) return deniedText(who, grant)
     const r = await askOnce(t, question, urls)
-    if (r.ok) return `识图成功（模型 ${t.id}）：\n${r.answer}`
+    if (r.ok) {
+      await markUsed(who)
+      return `识图成功（模型 ${t.id}）：\n${r.answer}`
+    }
     errs.push(`${t.id} → ${r.error}`)
   }
   return (

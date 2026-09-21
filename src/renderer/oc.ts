@@ -150,10 +150,25 @@ export function visionModelName(list: ProviderCfg[]): string {
   return pick ? pick.name || pick.id : ''
 }
 
+/**
+ * 「调用其他模型的用途」→ 中文。用户在授权卡上看到的该是「看图」而不是 `vision`：
+ * 他一眼就明白「AI 要找个能看图的模型帮我读截图」。
+ *
+ * 放这里而不是各自组件里：授权弹窗（ChatView）与撤销列表（SettingsView）都要用，
+ * 两处各写一份迟早会漏改一个角色名。
+ */
+export const MODEL_ROLE_LABEL: Record<string, string> = {
+  vision: '看图（视觉代看）',
+  image: '生成图片',
+  video: '生成视频',
+  tts: '语音合成',
+  music: '生成音乐',
+  asr: '语音识别'
+}
+
 /** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
  *  档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，不再自动探测。 */
 export type ThinkingKind = 'off' | 'toggle' | 'effort'
-
 /**
  * 思考形态（配置里的 `ModelCfg.thinking`）→ 输入框思考选择器的档位集合。
  * 'off' → 不支持（禁用）；'toggle'/缺省 → 关/开；固定档 → 低/中/高。

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -335,6 +336,10 @@ async function generateImage(args) {
   if (!prompt) return 'prompt 不能为空：请传入画面描述'
   const t = pickTarget(IMAGE_TARGETS, args.model)
   if (!t) return '找不到生图模型「' + args.model + '」。可用：' + IMAGE_TARGETS.map((x) => x.id).join('、')
+  // 出图要调用**另一个模型**（往往还是另一家、另一份计费），先问过用户
+  const who = { role: 'image', id: t.id, label: t.label || t.id, provider: t.provider }
+  const grant = await authorize(who)
+  if (!grant.allowed) return deniedText(who, grant)
 
   const refs = normalizeWithReport(args.image)
   // 素材全丢了还照样出图的话，模型以为改图成功，用户拿到的却是另一回事——必须拦下来
@@ -376,6 +381,7 @@ async function generateImage(args) {
       continue
     }
     imgShapePicks.set(t.id, att.name)
+    await markUsed(who)
     // 回执要说清「这张图是谁家出的」：用户往往在 A 家聊天、B 家出图，
     // 只报模型名他还要自己回想是哪个提供商；t.provider 由主进程注入（见 config.ts 的 pick）。
     const parts = [`生图成功（生图由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}）：`]
@@ -485,6 +491,13 @@ async function createVideo(args) {
   const t = pickTarget(VIDEO_TARGETS, args.model)
   if (!t) return '找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、')
 
+  // 出片同样是调另一个模型、另一份计费，先问过用户。
+  // 注意**只在创建时问**：check_video 只是轮询同一个任务的进度（同一模型、同一次消费），
+  // 再问一遍会让用户为同一件事反复点确认。
+  const who = { role: 'video', id: t.id, label: t.label || t.id, provider: t.provider }
+  const grant = await authorize(who)
+  if (!grant.allowed) return deniedText(who, grant)
+
   const body = { model: t.model, prompt, size: '720P', seconds: '5', mode: 'text' }
   if (args.seconds) body.seconds = String(args.seconds)
   if (args.size) body.size = String(args.size)
@@ -520,6 +533,7 @@ async function createVideo(args) {
   const videoId = r.j?.video_id ?? r.j?.id ?? r.j?.data?.video_id ?? r.j?.data?.id ?? r.j?.task_id
   if (!videoId) return '创建视频任务返回异常：响应里没有 video_id。原始返回：' + r.text.slice(0, 300)
   const warn = dropped.length ? `\n注意：以下素材没能用上（已按其余素材生成）：${dropped.join('；')}` : ''
+  await markUsed(who)
   return (
     `视频任务已创建（生视频由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，mode=${body.mode}）：` +
     `video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，` +

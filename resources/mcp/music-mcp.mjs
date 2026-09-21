@@ -13,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import { join, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -213,9 +214,17 @@ async function generateMusic(args) {
 
   const errs = []
   for (const t of order) {
+    // 生成音乐同样是另一次模型调用（另一家、另一份计费），先问过用户；拒绝即停手。
+    // 只在**提交**时问：check_music 只是查同一个任务进度，不该重复打扰。
+    const who = { role: 'music', id: t.id, label: t.label || t.id, provider: t.provider }
+    const grant = await authorize(who)
+    if (!grant.allowed) return deniedText(who, grant)
     body.model_id = t.model
     const r = await submitMusic(t, body, task)
-    if (r.ok) return r.text
+    if (r.ok) {
+      await markUsed(who)
+      return r.text
+    }
     errs.push(`〔${t.provider || t.id} / ${t.label || t.id}〕${r.error}`)
     if (order.length === 1) break
   }

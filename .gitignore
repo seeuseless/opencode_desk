@@ -18,6 +18,10 @@ dist
 /.workbuddy
 /.gitcheck.txt
 
+# 本地调试脚本与输出（不入库）
+/qn_*
+*.log
+
 # ZCode 工具目录
 .zcode/
 

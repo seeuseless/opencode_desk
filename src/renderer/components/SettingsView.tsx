@@ -7,7 +7,7 @@ import { AccountPanel } from './AccountPanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
-import { MODEL_DEFAULTS, genRoleOf } from '../oc'
+import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
 import type { SettingsTab } from '../App'
 
 /**
@@ -406,6 +406,12 @@ export function SettingsView(p: Props) {
   const [skDel, setSkDel] = useState<SkillItem | null>(null)
   /** 技能落盘后要重启内核（技能是启动时加载的），期间按钮转「保存并重启内核…」 */
   const [skBusy, setSkBusy] = useState(false)
+  /**
+   * 「永久允许调用其他模型」清单（形如 `vision|agnes/glm-5.2`）。
+   * 用户在授权卡上点了「永久允许」就落进这里，之后 AI 调这个模型不再问；
+   * 这一列表就是**唯一的撤销入口**——没有它，「永久允许」等于单向门，只能手改 settings.json。
+   */
+  const [authGrants, setAuthGrants] = useState<string[]>([])
   /** 右侧正文滚动容器：外部跳页后置顶，避免停在上一页的半截位置 */
   const body = useRef<HTMLDivElement>(null)
 
@@ -786,6 +792,20 @@ export function SettingsView(p: Props) {
     if (tab === 'skills') void refreshSkills()
   }, [tab, refreshSkills])
 
+  // 进「模型」页时拉一次永久授权清单（授权可能在别处刚发生过，不能拿挂载时那份旧快照）
+  const refreshAuthGrants = useCallback(async () => {
+    setAuthGrants(await window.qingniao.modelAuthList())
+  }, [])
+
+  useEffect(() => {
+    if (tab === 'providers') void refreshAuthGrants()
+  }, [tab, refreshAuthGrants])
+
+  /** 撤销一条永久授权（会话级授权一并失效）；key 省略＝清空全部 */
+  async function revokeGrant(key?: string) {
+    setAuthGrants(await window.qingniao.revokeModelAuth(key))
+  }
+
   function newSkill(scope: SkillScope) {
     setFormMsg(null)
     setSkDraft({ isNew: true, scope, originalName: '', name: '', description: '', body: '' })
@@ -969,6 +989,7 @@ export function SettingsView(p: Props) {
         )}
 
         {tab === 'providers' && (
+        <>
         <section>
           <h3>
             模型提供商
@@ -1021,6 +1042,46 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
+        <section>
+          <h3>
+            其他模型调用授权
+            <span className="spacer" />
+            {authGrants.length > 0 && (
+              <button className="ghost danger-text" onClick={() => void revokeGrant()}>
+                全部撤销
+              </button>
+            )}
+          </h3>
+          <p className="sec-tip">
+            除当前对话模型外，AI 在识图、生成图片/视频/音乐、配音、语音识别时会调用别的模型。
+            每次调用前都会弹一张授权卡，你选「永久允许」的目标会记在这里——想恢复成每次询问就撤销它。
+            <br />
+            撤销会同时清掉本次运行内的会话级授权：留着它会让「撤销了却还在调」看起来像没生效。
+          </p>
+          {authGrants.length === 0 && (
+            <div className="plist-empty">还没有永久允许的目标，AI 每次调用其他模型都会先问你</div>
+          )}
+          {authGrants.length > 0 && (
+            <div className="plist">
+              {authGrants.map((k) => {
+                const [role, id] = k.split('|')
+                return (
+                  <div key={k} className="prow">
+                    <Cpu size={15} />
+                    <div className="prow-main">
+                      <div className="prow-name">{MODEL_ROLE_LABEL[role] ?? role ?? '调用模型'}</div>
+                      <div className="prow-url">{id || k}</div>
+                    </div>
+                    <button className="icon-btn danger" title="撤销这条永久授权" onClick={() => void revokeGrant(k)}>
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+        </>
         )}
 
         {tab === 'mcp' && (

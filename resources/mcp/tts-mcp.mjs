@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -332,8 +333,17 @@ async function generateSpeech(args) {
   // 多目标时挨个试到通为止（见 targetOrder 注释）：一家不可用不该拖死整次合成
   const failed = []
   for (const t of targets) {
+    // 配音是在调另一个模型（另一家、另一份计费），先问过用户。
+    // 放在循环里是刻意的：多目标回退时换了模型就是换了消费对象，该分别问。
+    // 用户拒绝 → 立刻停手（不能拿「换下一家」当成绕过拒绝的办法）。
+    const who = { role: 'tts', id: t.id, label: t.label || t.id, provider: t.provider }
+    const grant = await authorize(who)
+    if (!grant.allowed) return deniedText(who, grant)
     const r = await synthWith(t, body, fmt, voice, style, speed)
-    if (r.ok) return r.text
+    if (r.ok) {
+      await markUsed(who)
+      return r.text
+    }
     failed.push({ t, errs: r.errs })
     // 目标只有一个时不用再往下试（也没得试），保留完整报错
     if (targets.length === 1) break

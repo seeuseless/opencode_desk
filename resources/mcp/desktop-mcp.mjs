@@ -11,7 +11,8 @@ const TOOLS = [
     description:
       '查询某些应用是否已在运行（读系统进程表，结果确定，不要靠截屏猜）。' +
       'keywords 传进程名关键词（英文/拼音，小写即可），一个应用可给多个候选，如 微信=["wechat","weixin"]、QQ=["qqnt","tencent qq"]、Chrome=["chrome"]。' +
-      '已在运行 → 绝对不要再通过 Win+R / 双击图标启动新实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab；' +
+      '已在运行 → 绝对不要再通过 Win+R / 双击图标启动新实例：先 uia_windows 找到它的窗口，用 uia_window_focus 把它提到前台；' +
+      '若该窗口无障碍树为空（自绘 UI，uia_tree 会明确告知），再改用桌面控制的纯键盘动作（不要截图确认）；' +
       '未在运行 → 正常走启动流程。',
     inputSchema: {
       type: 'object',
@@ -59,7 +60,8 @@ function appRunning(keywords) {
   if (!hits.length) return `未在运行：没有找到匹配 ${keys.join(' / ')} 的进程，可以走启动流程。`
   const uniq = [...new Map(hits.map((p) => [p.name.toLowerCase(), p])).values()]
   return (
-    '已在运行（不要再启动新实例！请截屏找任务栏图标点击唤起）：\n' +
+    '已在运行（不要再启动新实例！用 uia_windows 找到它的窗口，再 uia_window_focus 提到前台；' +
+    '若 uia_tree 告知该窗口无障碍树为空，则改走纯键盘流程（uia_window_focus → ctrl+f / ctrl+v / return，不需要截图）：\n' +
     uniq.map((p) => `- ${p.name} (PID ${p.pid})`).join('\n')
   )
 }

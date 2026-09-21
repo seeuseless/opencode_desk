@@ -13,6 +13,7 @@
 import { createInterface } from 'node:readline'
 import { existsSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -268,8 +269,15 @@ async function transcribe(args) {
   // 多目标时挨个试到通为止：一家不可用不该拖死整次识别
   const failed = []
   for (const t of targets) {
+    // 听写同样要调另一个模型（音频要上传给别家），先问过用户；拒绝即停手，不换下一家绕。
+    const who = { role: 'asr', id: t.id, label: t.label || t.id, provider: t.provider }
+    const grant = await authorize(who)
+    if (!grant.allowed) return deniedText(who, grant)
     const r = await transcribeWith(t, got.b64, fmt, args)
-    if (r.text !== undefined) return r.text
+    if (r.text !== undefined) {
+      await markUsed(who)
+      return r.text
+    }
     failed.push({ t, errs: r.errs, dead: r.dead })
     // 用户点名要的那个也失败时不用找别人了（本来就只有它）
     if (targets.length === 1) break

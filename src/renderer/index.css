@@ -345,6 +345,18 @@ input, textarea { font: inherit; }
 .cu-text strong { font-size: 13px; font-weight: 600; }
 .cu-text span { font-size: 12.5px; color: var(--fg2); line-height: 1.6; }
 
+/* 本轮额外调用过的模型汇总（识图 / 生图 / 配音…）：挂在 AI 回复末尾，
+   用虚线分隔 + 弱化色小字，既让人对得上账，又不至于抢正文的注意力。
+   详情（provider 全称）走 title 悬浮，不在这行里堆字。 */
+.cu-models {
+  display: flex; align-items: center; gap: 6px;
+  margin: 9px 0 2px; padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  color: var(--fg2); font-size: 12.5px; line-height: 1.6;
+}
+.cu-models svg { flex-shrink: 0; color: var(--accent); }
+.cu-models span { min-width: 0; word-break: break-word; }
+
 /* 对话流内的中性提示（自动换模型等说明）：与失败反馈同结构，弱化色 + 灰边，不抢注意力 */
 .msgnotice {
   display: flex; align-items: flex-start; gap: 8px;
@@ -717,12 +729,22 @@ input, textarea { font: inherit; }
   background: var(--field-bg);
   border: 1px solid var(--field-line);
   border-radius: 18px; padding: 12px 14px 10px 16px;
+  /* 输入区本身作为“容器查询”容器：聊天列很窄时（右栏浏览器开着、或窗口太小）
+     按输入区实际宽度自动隐藏次要控件（思考/默认权限），而不是死等窗口宽度 */
+  container-type: inline-size;
 }
 .ctext {
   background: transparent; color: var(--fg); border: none; outline: none;
   resize: none; width: 100%; line-height: 1.5; padding: 2px 0 8px;
 }
-.crow { display: flex; align-items: center; gap: 10px; }
+.crow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* 输入区变窄时逐级隐藏次要控件，保证发送/模型等核心操作始终留得下：
+   <540px  隐藏「默认权限」
+   <460px  连同「思考」一起隐藏
+   （用容器查询绑定到 .cbox 实际宽度，窗口小/右栏开都会触发，不用 JS） */
+@container (max-width: 540px) { .crow > .menu-wrap.ap { display: none; } }
+@container (max-width: 460px) { .crow > .menu-wrap.tp { display: none; } }
 
 /* 输入框左端的当前项目名：路径放 tooltip，名称过长省略；无背景色，纯文字 */
 .crow-proj {
@@ -1205,6 +1227,8 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
    供权限弹窗的命令行等「裸文本」场景使用（不是表单控件，带不了 input 前缀）。 */
 .mono { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; }
 .perm-note { font-size: 12.5px; line-height: 1.7; color: var(--fg2); }
+/* 授权卡里的模型技术标识（provider · provider/model）：人看的名字在上，技术串弱化缩在后面 */
+.perm-sub { color: var(--fg2); font-size: 12px; }
 .perm-acts { display: flex; justify-content: flex-end; gap: 10px; }
 /* 拒绝按钮：跟「仅这一次」并排，用色区分破坏性语义，但不用红底（拒绝是正常出口，不是危险操作） */
 .danger-text { color: var(--err); }
@@ -1436,7 +1460,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .bp-url:focus { color: var(--side-fg); }
 /* 地址栏星标：收藏当前页，已收藏时填充主题色 */
 .bp-star.starred { color: var(--accent); }
-/* 地址栏右侧的「AI 对话」电源开关：紧跟网址，亮=显示中，暗=已被彻底隐藏（再点一下找回） */
+/* 地址栏右侧的「AI 对话」开关：chat 图标，亮=显示中，暗=已被彻底隐藏（再点一下找回气泡） */
 .bp-chat-switch.off { color: var(--fg2); }
 /* 全屏时的收藏夹条：页面标题胶囊横向排布，点击直达，hover 出现取消收藏；超宽横向滚动且不显滚动条 */
 .bp-marks {

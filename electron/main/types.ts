@@ -271,6 +271,14 @@ export interface Settings {
    * 而且「信任 AI 到什么程度」是用户的一条整体偏好，不该随切换项目而变。
    */
   access: AccessLevel
+  /**
+   * 「永久允许调用」清单：用户在授权卡上选了「永久允许」的目标，形如 `vision|agnes/glm-5.2`。
+   *
+   * 注意它**不是**权限档位的一部分、也**不受** access 影响：访问档位管的是「能不能改文件/执行命令」，
+   * 这一项管的是「AI 能不能悄悄多调一个别的模型」——两件事、两套开关，完全控制档下照样会问。
+   * 与本次应用运行内的会话级授权分开存：会话级只在内存里，重启即失效。
+   */
+  modelAuth: string[]
 }
 
 export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:9002'
@@ -282,7 +290,52 @@ export const DEFAULT_SETTINGS: Settings = {
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
   desktopControl: false,
-  access: 'default'
+  access: 'default',
+  modelAuth: []
+}
+
+/**
+ * 「AI 调用其他模型」授权闸门的数据形状（主进程 gate.ts 与渲染层共用，所以放这里）。
+ *
+ * 类型放 types.ts 而不是 gate.ts，是因为渲染层**不能** import 主进程模块——
+ * 一旦 import 就会把 gate.ts → config.ts 整条链拉进渲染层的 TS 工程里（连带 `.ts` 后缀的
+ * import 也会报 TS5097）。渲染层只认这一份共享类型。
+ */
+
+/** 会被问到授权的角色（工具/模型用途，渲染层负责翻译成人话） */
+export type ModelRole = 'vision' | 'image' | 'video' | 'tts' | 'music' | 'asr'
+
+/** 用户在授权卡上的四种答复 */
+export type ModelAuthScope = 'once' | 'session' | 'always' | 'reject'
+
+/** MCP 传上来的原始请求（字段都可能缺失，一律容错） */
+export interface ModelAuthReq {
+  role?: string
+  id?: string
+  label?: string
+  provider?: string
+}
+
+/** 推给界面的一张待答授权卡 */
+export interface ModelAuthAsk {
+  reqId: string
+  role: string
+  /** 目标标识 `provider/model` */
+  id: string
+  /** 给人看的模型名（缺省回落 id） */
+  label: string
+  /** 提供商展示名 */
+  provider: string
+  at: number
+}
+
+/** 一条「某个额外模型真的被调用了」的记录（界面按回合汇总） */
+export interface ModelUsed {
+  role: string
+  id: string
+  label: string
+  provider: string
+  at: number
 }
 
 /** 平台状态（渲染层左下角登录入口用） */

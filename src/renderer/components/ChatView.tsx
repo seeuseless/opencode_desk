@@ -3,13 +3,13 @@ import { createPortal } from 'react-dom'
 import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
-  AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Monitor, Music, Paperclip, Pencil, Power, RotateCw, Search, Send, Sparkles,
+  AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, DESKTOP_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, DESKTOP_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
-import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
+import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { ProjectPicker, AccessPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
@@ -98,6 +98,25 @@ function isAbortedAssistant(m: MessageView): boolean {
   const err = (m.info as unknown as { error?: { name?: string } }).error
   if (err) return err.name !== 'MessageAbortedError'
   return m.parts.some((x) => x.type === 'tool' && (x.state?.status === 'running' || x.state?.status === 'pending'))
+}
+
+/**
+ * 空壳助手消息：内核建了这一条，却**什么都没产出**（没有正文/思维链/工具，也没有 error，
+ * 更没有 time.completed）。
+ *
+ * 实测形态：模型请求中途断掉（上游连接被切、响应没回来），内核留下一条空消息就收工。
+ * 它既没有 error 字段（→ 错误条不显示），也没有残留 running 工具（→ isAbortedAssistant 判 false），
+ * 界面于是**完全静默**：AI 那边「突然就结束了」，用户既看不到原因、也没有任何重试入口，
+ * 只能自己手动发一句「继续」。这里把它并进「中断」判定，走同一套提示 + 重试。
+ *
+ * 只在**会话已经空闲**时判定才安全：正在跑的那一轮，助手消息本来就是先建空壳再填内容。
+ */
+function isEmptyTurn(m: MessageView): boolean {
+  if (m.info.role !== 'assistant') return false
+  const info = m.info as unknown as { error?: { name?: string }; time?: { completed?: number } }
+  if (info.error) return false
+  if (info.time?.completed) return false
+  return !m.parts.some((x) => x.type !== 'step-start' && x.type !== 'step-finish')
 }
 
 /** 内核工具名 → 是否会改文件（决定要不要拉差量展示 +N/-M） */
@@ -306,6 +325,21 @@ export function ChatView(p: Props) {
    * 会出现「拿 question 的 id 去答 permission」这种错配。
    */
   const [perms, setPerms] = useState<PermissionAsk[]>([])
+  /**
+   * 「AI 要调用**其他**模型」的授权卡（识图 / 桌面代看 / 生图 / 生视频 / 配音 / 音乐 / 听写）。
+   *
+   * 与 perms、asks 三足鼎立、**互斥显示**：这类卡片背后是主进程挂着的那个 MCP 调用，
+   * 用户在作答前那次识图/出图就一直等着，所以必须浮在最上层且不能被别的弹窗盖住。
+   */
+  const [modelAsks, setModelAsks] = useState<ModelAuthAsk[]>([])
+  /**
+   * 本轮（一次发送 → 回合结束）真正调用过的额外模型。
+   * 回合结束时挂到本轮最后一条 AI 回复下方——用户要能一眼看到「这条回答背后动用了哪些模型」。
+   * 用 ref 累计、回合结束再落盘：事件是流式来的，逐条 setState 会让整棵树每来一次就重渲。
+   */
+  const turnModels = useRef<ModelUsed[]>([])
+  /** 已结束回合的模型用量：助手消息 id → 那一轮用过的额外模型 */
+  const [usedByMsg, setUsedByMsg] = useState<Record<string, ModelUsed[]>>({})
   // 内核管理的终端（pty）：有 running 的才在项目名旁显示入口
   const [terms, setTerms] = useState<PtySession[]>([])
   const [showTerms, setShowTerms] = useState(false)
@@ -342,8 +376,8 @@ export function ChatView(p: Props) {
   const [panelUrl, setPanelUrl] = useState('')
   /** 浏览器收藏夹：地址栏星标收藏 / 取消，全屏时顶部收藏条展示（localStorage 持久化） */
   const [marks, setMarks] = useState<Bookmark[]>(() => load<Bookmark[]>('qingniao.bookmarks', []))
-  /** 已注入的浏览器上下文（会话 + URL）：没变过就不再重复注入，避免每条消息都塞一份 */
-  const browserCtxRef = useRef<{ sid: string; url: string } | null>(null)
+  /** 已注入的浏览器上下文（会话 + URL + 是否全屏）：没变过就不再重复注入，避免每条消息都塞一份 */
+  const browserCtxRef = useRef<{ sid: string; url: string; max: boolean } | null>(null)
   /** 已注入的桌面控制上下文（会话 + 本轮原话）：同上，同一轮不重复注入 */
   const desktopCtxRef = useRef<{ sid: string; text: string } | null>(null)
   /** 浮动聊天卡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
@@ -451,6 +485,26 @@ export function ChatView(p: Props) {
     save('qingniao.bookmarks', marks)
   }, [marks])
 
+  /**
+   * 「AI 调用其他模型」授权闸门的两条推送（主进程 gate.ts → IPC）：
+   *   ask  —— 有 MCP 正挂着等用户点头（识图 / 桌面代看 / 生图 / 生视频 / 配音 / 音乐 / 听写）
+   *   used —— 某个额外模型真的被调成功了一次，累计到本轮、回合结束时挂到那条回复下方
+   *
+   * 挂载即订阅、卸载即解：订阅里只碰 ref 与 setState，不带依赖，避免每次渲染重订。
+   */
+  useEffect(() => {
+    const offAsk = window.qingniao.onModelAuth((a) => {
+      setModelAsks((prev) => (prev.some((x) => x.reqId === a.reqId) ? prev : [...prev, a]))
+    })
+    const offUsed = window.qingniao.onModelUsed((u) => {
+      turnModels.current = [...turnModels.current, u]
+    })
+    return () => {
+      offAsk()
+      offUsed()
+    }
+  }, [])
+
   /** 收藏 / 取消收藏当前页：按 URL 去重，title 为页面标题（拿不到时调用方传域名兜底） */
   function toggleMark(url: string, title: string) {
     if (!url) return
@@ -512,26 +566,20 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 全屏时地址栏右侧那颗「AI 对话」按钮：**不是单向隐藏，而是开关**——
-   * 想打游戏/看片时点一下收起来，回头再点一下放出来，全在这一颗上完成。
-   *
-   * 逐级展开/收起（避免一次点掉太多、用户找不回来）：
-   *   对话卡开着 → 收起卡片，气泡仍在右下角（随时点回）
-   *   卡片收了但气泡在 → 连气泡一起藏掉
-   *   连气泡都没了 → 整块复原（气泡 + 卡片一起回来）
-   * 与右下角气泡是同一状态的两个入口（气泡只能收起/展开卡片，这一颗还能把气泡本身也藏掉）。
+   * 全屏时地址栏右侧那颗「AI 对话」按钮：**两态开关**——
+   *   隐藏：把右下角气泡 + 浮动对话卡一起收掉；再点一次：气泡 + 卡片整块复原。
+   * 不做逐级收起（避免一次点一下只收一半、还要点第二下才能彻底藏干净）。
    */
   function toggleChatVisible() {
     if (chatHidden) {
+      // 已整块藏掉 → 再点：把右下角的对话气泡唤回来（卡片先不展开，点气泡再展开）
       setChatHidden(false)
-      setFloatOpen(true)
-      return
-    }
-    if (floatOpen) {
       setFloatOpen(false)
       return
     }
+    // 有任何东西显示 → 点一下：气泡 + 浮动对话卡一起收掉
     setChatHidden(true)
+    setFloatOpen(false)
   }
 
   /** 拖动浮动聊天卡（顶部拖拽条）：pointer capture 防止划过 webview 丢事件，松手记住位置 */
@@ -765,6 +813,10 @@ export function ChatView(p: Props) {
     syncRetryView()
     markBusy(sid, false)
     setError('')
+    // 点「重试」发出去的是**续跑指令**（多半就是「继续」），界面不该冒出一个用户气泡。
+    // 这里显式打标记，而不是在 runPrompt 里按「文本等于继续」判断——用户手打「继续」是
+    // 正常发言，必须看得见自己的话（曾经按文本判断，把用户手打的「继续」一起吞了）。
+    autoContinuePending.current = true
     void runPrompt(text, sid, dir)
   }
 
@@ -1041,13 +1093,22 @@ export function ChatView(p: Props) {
         const isCurrent = idleSid === sidRef.current
         oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
           .then((list) => {
-            // 回合结束但还残留半截工具调用（写入空转、断流截断）= 中断，自动续跑
+            // 回合结束但还残留半截工具调用（写入空转、断流截断）= 中断，自动续跑；
+            // 「最后一条是空的助手消息」= 模型请求中途断了，同样给中断提示（否则界面一片静默）
             const last = list[list.length - 1]
-            if (last && (last.info.role === 'user' || isAbortedAssistant(last))) scheduleRetry(idleSid)
+            if (last && (last.info.role === 'user' || isAbortedAssistant(last) || isEmptyTurn(last))) scheduleRetry(idleSid)
             if (!isCurrent) return
             setTodos([])
             setMsgs(hydrate(list, shown.current, texts.current))
             p.onRefreshSessions()
+            // 本轮用过的额外模型（识图 / 生图 / 配音…）挂到本轮最后一条 AI 回复下方。
+            // 一轮没额外调用过就不挂——每轮都挂一行「未使用其他模型」纯属噪音。
+            const usedNow = turnModels.current
+            turnModels.current = []
+            if (usedNow.length) {
+              const lastAsstOfTurn = [...list].reverse().find((m) => m.info.role === 'assistant')
+              if (lastAsstOfTurn) setUsedByMsg((prev) => ({ ...prev, [lastAsstOfTurn.info.id]: usedNow }))
+            }
           })
           .catch(() => { /* 事件流已展示内容 */ })
       } else if (e.type === 'qingniao.sse.reconnected') {
@@ -1530,10 +1591,13 @@ export function ChatView(p: Props) {
       }
     }
     // 浏览器对话上下文：面板开着且有页面时，先把「当前页面」以仅上下文注入，
-    // 让本轮对话默认针对这个 URL（网页浏览场景）而不是本地项目；URL 没变就不重复注入
+    // 让本轮对话默认针对这个 URL（网页浏览场景）而不是本地项目；URL 没变就不重复注入。
+    // **全屏浏览（浏览模式 / 面板放大）时另外标一份**：这时面板占满整个窗口，
+    // 操作面就是那个网页，本轮必须走 panel_*、禁用 computer（见下方桌面路由的互斥判定）。
+    const browserFullscreen = (browserMax || manualBrowser) && !!panelUrl
     if ((browserOpen || manualBrowser || browserMax) && panelUrl) {
       const bc = browserCtxRef.current
-      if (!bc || bc.sid !== sid || bc.url !== panelUrl) {
+      if (!bc || bc.sid !== sid || bc.url !== panelUrl || bc.max !== browserFullscreen) {
         try {
           await oc.injectContext(
             sid,
@@ -1541,15 +1605,20 @@ export function ChatView(p: Props) {
             BROWSER_CTX_PREFIX +
               '用户正在内置浏览器里看下面这个页面，本轮对话默认针对该页面（网页浏览场景，不是本地项目开发）：\n' +
               `- 当前页面：${panelUrl}\n` +
+              (browserFullscreen
+                ? '- 浏览器**全屏浏览中**（面板占满窗口，右下角是浮动对话卡）：操作面就是这个网页。\n' +
+                  '- **本轮禁止调用 `computer`（桌面控制）**：不要截整个桌面、不要点桌面上的图标——' +
+                  '网页的一切点击/输入/滚动都用 `panel_*`（ref 来自 `panel_snapshot`）。\n'
+                : '') +
               '用户说「换个网址 / 换 URL / 换个页面」时，指的是**在这个浏览器里导航到新地址**' +
               '（用 panel_navigate 打开，或让用户自己在地址栏输入），不是重开面板、也不是调整浏览器窗口大小。\n' +
               '浏览器面板的尺寸（右栏 / 全屏 / 浮动对话卡）由用户自己控制：**不要主动关闭、缩小或放大面板**，' +
               '也不要建议用户这么做，除非用户明确要求。\n' +
               '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）：' +
-              '看页面内容就再调一次 panel_snapshot（文本元素清单），**不要用 computer 截屏来看网页**——截屏又慢又要求模型支持图片输入，而面板页面本来就能读到结构。\n' +
+              '看页面内容就再调一次 panel_snapshot（文本元素清单），**不要用桌面控制去截屏看网页**——截屏又慢又要求模型支持图片输入，而面板页面本来就能读到结构。\n' +
               '不要读写项目文件或执行终端命令，除非用户明确要求；回答优先基于当前页面的实际内容。'
           )
-          browserCtxRef.current = { sid, url: panelUrl }
+          browserCtxRef.current = { sid, url: panelUrl, max: browserFullscreen }
         } catch {
           /* 注入失败不阻塞对话，AI 仍可自行用工具探页面 */
         }
@@ -1558,7 +1627,11 @@ export function ChatView(p: Props) {
     // 桌面控制场景：本轮要操作的是用户**真实的整个桌面**，与内置浏览器（应用内一块网页面板）
     // 是两套互不替代的操作面。不点名的话模型容易串台——拿 panel_* 去开桌面应用（开不动），
     // 或在控制桌面中途跑去开内置浏览器。这里把边界按死：只用 computer，不要碰 panel_*。
-    if (isDesktopIntent(text) && p.desktopControl) {
+    //
+    // **全屏浏览时反过来压制**：面板已占满窗口、用户正盯着一个网页，此时「打开微信发消息」
+    // 这类命中桌面意图的词，若照旧注入「只用 computer」，就会与浏览器上下文互相打架，
+    // 结果 AI 去截整个桌面（用户明确要求：全屏浏览时禁用 computer-use，只用 panel_）。
+    if (isDesktopIntent(text) && p.desktopControl && !browserFullscreen) {
       const dc = desktopCtxRef.current
       if (!dc || dc.sid !== sid || dc.text !== text) {
         try {
@@ -1567,10 +1640,27 @@ export function ChatView(p: Props) {
             dir,
             DESKTOP_CTX_PREFIX +
               '这一轮的任务是**操作本机桌面 / 桌面应用**（不是浏览网页）。\n' +
-              '- 只用 `computer` 工具完成（截屏看画面 → left_click / type / key 动手 → 再截屏确认）。\n' +
+              '- 优先走无障碍树（`uia_windows` 找窗口 → `uia_tree` 读元素 → `uia_click` / `uia_set_text` / `uia_focus`）：' +
+              '原生控件应用（资源管理器、记事本、系统设置等）走这一档，纯文本、几十毫秒、不需要看图。\n' +
+              '- 自绘界面（微信这类，`uia_tree` 会明确回「没有可操作元素」）改用**键盘动作**：' +
+              '`uia_tree` 一旦告诉你树是空的，**立刻转键盘，不要再试第二遍 `uia_windows` / `uia_tree`**。\n' +
+              '  先 `uia_window_focus "微信"` 把窗口提到前台，再看它回的 `前台窗口` 是不是目标——' +
+              '**不是目标就不要发按键**（键会打进别的窗口），改用 `{"action":"left_click","coordinate":[x,y]}` ' +
+              '点一下那个窗口的可见区域把它点成前台，然后再发键。\n' +
+              '  **按键串一律放 `text` 字段**：`{"action":"key","text":"ctrl+f"}`（Ctrl+F）、' +
+              '`{"action":"key","text":"return"}`（回车）、`{"action":"type","text":"要输入的文字"}`（输入）、' +
+              '`{"action":"left_click","coordinate":[x,y]}`（点坐标）。' +
+              '**只有 action / coordinate / text 三个字段——写 `key`/`keys`/`hotkey` 会被判参数非法**。\n' +
+              '  键盘路线是**确定性流程，全程不需要看画面**。微信完整例子：`uia_window_focus "微信"` → ' +
+              '`{"action":"key","text":"esc"}` → `{"action":"key","text":"ctrl+f"}` → ' +
+              '`{"action":"key","text":"ctrl+v"}`（先用剪贴板放好会话名）→ `{"action":"key","text":"return"}` ' +
+              '→ 剪贴板换成正文 → `{"action":"key","text":"ctrl+v"}` → `{"action":"key","text":"return"}`。\n' +
+              '- **截屏是最后的最后兜底，同一轮最多用一次**：只有「无障碍树和键盘都不适用」（游戏、纯 canvas）' +
+              '才用 `{"action":"get_screenshot"}`，而且**只能用来决定「先点哪儿」这种开局判断**。\n' +
+              '  **严禁用截屏去确认某一步成没成**——每一步都截一张就是用户看到的「反复截图死循环」：' +
+              '每张截图都要额外调一次视觉模型（慢、消耗额度），而且它并不比键盘流程更可靠。\n' +
               '- **不要调用 `panel_*`**：内置浏览器是青鸟窗口里的网页面板，只能操作网页，' +
-              '打不开也控制不了桌面上的应用（微信、资源管理器、外部浏览器窗口等），调它只会白跑一趟。\n' +
-              '- 也不要为了「看看桌面长什么样」去 panel_navigate 开网页——要看桌面就 `computer` 的 get_screenshot。'
+              '打不开也控制不了桌面上的应用（微信、资源管理器、外部浏览器窗口等），调它只会白跑一趟。'
           )
           desktopCtxRef.current = { sid, text }
         } catch {
@@ -1619,13 +1709,17 @@ export function ChatView(p: Props) {
     atBottomRef.current = true
     setAtBottom(true)
     const tmpId = 'tmp-' + Date.now()
-    // 自动续跑（含手动点重试按钮）发的「继续」：不落用户气泡，尾部状态条已有「重试 x/10」提示；
-    // 真实消息 id 由 message.updated 认领后补记
-    if (text === RETRY_CONTINUE) {
-      autoContinuePending.current = true
+    // 续跑（点「重试」/ 中断自动接续）发的指令：不落用户气泡，尾部状态条已有「重试」提示，
+    // 真实消息 id 由 message.updated 认领后补记。
+    // 判据是 autoContinuePending 这个**发起方打的标记**，不是文本内容——
+    // 用户手打「继续」走的是普通发送，气泡必须照常显示。
+    if (autoContinuePending.current) {
       autoContinueIds.current.add(tmpId)
     }
     turnBase.current = new Set(msgs.map((m) => m.info.id))
+    // 新一轮从零开始计「额外调用了哪些模型」；跨会话并行时手机那轮也会计进同一个桶，
+    // 顶多多一行「另调用」，不值得为此把 sessionID 一路透传到 MCP 再带回来。
+    turnModels.current = []
     const optimistic: MessageView = {
       info: { id: tmpId, role: 'user', sessionID: sid },
       parts: [
@@ -1669,6 +1763,11 @@ export function ChatView(p: Props) {
           const list = await oc.messages(sid, dir)
           setMsgs(hydrate(list, shown.current, texts.current))
           startTicker()
+          // 请求回来了、但最后一轮是条空壳助手消息（模型响应中途断掉）：内核不会报错、
+          // 也没有 idle 之外任何信号。这里补一次「中断」提示，给用户一个重试入口——
+          // 否则界面上只会看到 AI「突然就结束了」，既没原因也没法接着跑。
+          const last = list[list.length - 1]
+          if (last && isEmptyTurn(last)) scheduleRetry(sid)
         } catch { /* 保留已渲染内容 */ }
       }
     }
@@ -1723,6 +1822,18 @@ export function ChatView(p: Props) {
         setError(`权限应答没能送达内核：${err}`)
         setPerms((prev) => (prev.some((x) => x.id === req.id) ? prev : [...prev, req]))
       }
+    })
+  }
+
+  /**
+   * 应答「调用其他模型」的授权卡。与 replyPerm 同一套打法：先本地摘掉卡片（MCP 那侧正等着），
+   * 回执说没人接（卡片已超时自动作废）再补一条提示——否则用户点了、卡片消失了、
+   * 那次识图/出图却按拒绝走，界面上完全看不出来。
+   */
+  function replyModelAllow(req: ModelAuthAsk, scope: ModelAuthScope) {
+    setModelAsks((prev) => prev.filter((x) => x.reqId !== req.reqId))
+    void window.qingniao.replyModelAuth({ reqId: req.reqId, scope }).then((err) => {
+      if (err) setNotice(`授权未生效：${err}`)
     })
   }
 
@@ -1815,6 +1926,13 @@ export function ChatView(p: Props) {
                     <AlertCircle size={13} /> <span>{msgErrorText(m)}</span>
                   </div>
                 )}
+                {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账 */}
+                {!busy && !!usedByMsg[m.info.id]?.length && (
+                  <div className="cu-models" title={usedByMsg[m.info.id].map((u) => `${u.label || u.id}（${u.provider || u.id}）`).join('\n')}>
+                    <Cpu size={12} />
+                    <span>本轮另调用：{summarizeModels(usedByMsg[m.info.id])}</span>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -1870,11 +1988,18 @@ export function ChatView(p: Props) {
               </div>
             </div>
           )}
-          {asks.length > 0 && (
+          {/*
+            「调用其他模型」授权卡排在最前：它背后是一个**正在超时**的挂起调用（桌面代看只有 20s），
+            排在最后会被别的弹窗挡住，用户还没看清就已经自动按拒绝处理了。
+          */}
+          {modelAsks.length > 0 && (
+            <ModelAuthModal key={modelAsks[0].reqId} req={modelAsks[0]} onReply={(s) => replyModelAllow(modelAsks[0], s)} />
+          )}
+          {modelAsks.length === 0 && asks.length > 0 && (
             <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
           )}
           {/* 权限询问：与助手提问互斥显示（同一时刻只弹一件事，避免两层弹窗叠在一起） */}
-          {asks.length === 0 && perms.length > 0 && (
+          {modelAsks.length === 0 && asks.length === 0 && perms.length > 0 && (
             <PermModal
               key={perms[0].id}
               req={perms[0]}
@@ -2059,8 +2184,9 @@ export function ChatView(p: Props) {
               onPickDir={p.onPickDir}
             />
             {/* 访问权限：独立一颗按钮，紧挨「选择文件夹」右侧。放这儿才能常显当前档位。
-                它是**全局**一档（对所有文件夹生效），与左边选哪个项目无关 */}
-            <AccessPicker access={p.access} onAccess={p.onAccess} />
+                它是**全局**一档（对所有文件夹生效），与左边选哪个项目无关。
+                全屏浏览时不显示：浏览场景不需要切权限档位 */}
+            {!browserMax && <AccessPicker access={p.access} onAccess={p.onAccess} />}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
@@ -2081,7 +2207,8 @@ export function ChatView(p: Props) {
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
             />
-            <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />
+            {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
+            {!browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
             {/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
             {busy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopCurrent()}>
@@ -2264,12 +2391,12 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
           className={'icon-btn bp-chat-switch' + (chatHidden ? ' off' : '')}
           title={
             chatHidden
-              ? 'AI 对话已隐藏 · 点击显示（连右下角气泡一起找回）'
-              : 'AI 对话显示中 · 点击隐藏（先收卡片，再点藏气泡）'
+              ? 'AI 对话已隐藏 · 点击显示右下角气泡'
+              : 'AI 对话显示中 · 点击隐藏'
           }
           onClick={onToggleChat}
         >
-          <Power size={15} />
+          <MessageCircleOff size={15} />
         </button>
       )}
     </div>
@@ -2729,7 +2856,10 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   question: { name: '提问', icon: <HelpCircle size={13} /> },
   skill: { name: '技能', icon: <Sparkles size={13} /> },
   retry: { name: '重试', icon: <RotateCw size={13} /> },
-  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> }
+  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> },
+  // MCP 工具：内核注册时会拼上「服务名_工具名」，桌面键鼠那条就变成 computer-use_computer
+  // 这种重复到读不出来的名字。标签里只留服务名那一半（用户明确要求：就叫 computer-use）。
+  'computer-use_computer': { name: 'computer-use', icon: <Monitor size={13} /> }
 }
 
 /** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
@@ -2901,6 +3031,84 @@ const PERM_LABEL: Record<string, string> = {
   list: '列出目录',
   webfetch: '访问网页',
   external_directory: '访问项目外目录'
+}
+
+/**
+ * 把本轮用过的额外模型压成一行：`看图（视觉代看）「deepseek-flash」×3 · 生成图片「agnes-image-2」`。
+ *
+ * 为什么要带次数：用户真正关心的是「这一轮被扣了几次别的模型的钱」，
+ * 只说「用了 deepseek-flash」看不出是读了一次屏还是读了十次。
+ */
+function summarizeModels(list: ModelUsed[]): string {
+  const byRole = new Map<string, ModelUsed[]>()
+  for (const u of list) {
+    const arr = byRole.get(u.role) ?? []
+    arr.push(u)
+    byRole.set(u.role, arr)
+  }
+  return [...byRole.entries()]
+    .map(([role, items]) => {
+      const names = [...new Set(items.map((x) => x.label || x.id))].join('、')
+      return `${MODEL_ROLE_LABEL[role] ?? role}「${names}」${items.length > 1 ? `×${items.length}` : ''}`
+    })
+    .join(' · ')
+}
+
+/**
+ * 「要不要让 AI 调用另一个模型」的授权卡。
+ *
+ * 与权限卡（读文件/执行命令）是两回事：那个管「能不能动本机」，这个管「能不能再雇一个模型」。
+ * 所以即使访问权限是「完全控制」，这张卡照样会弹——用户明确要求过。
+ *
+ * 四档粒度对应四种心智：
+ *   仅这一次  = 就这一次，下一张截图还会问我
+ *   本次会话  = 今天这个应用跑着期间别烦我（内存态，重启即失效）
+ *   永久允许  = 以后都别问了（写进设置，设置页可撤销）
+ *   拒绝      = 别调，让 AI 想别的办法
+ */
+function ModelAuthModal({
+  req,
+  onReply
+}: {
+  req: ModelAuthAsk
+  onReply: (scope: ModelAuthScope) => void
+}) {
+  const label = MODEL_ROLE_LABEL[req.role] ?? req.role ?? '调用模型'
+  const name = req.label || req.id
+
+  return (
+    <Modal title="是否允许调用其他模型？" anchor="top" onClose={() => onReply('reject')}>
+      <div className="perm-q">
+        <p className="perm-lead">
+          AI 要用「{name}」来{label}，需要你确认：
+        </p>
+        <ul className="perm-list">
+          <li title={`${req.provider || req.id} / ${req.id}`}>
+            {name}
+            <span className="perm-sub">　{req.provider ? `${req.provider} · ` : ''}{req.id}</span>
+          </li>
+        </ul>
+        <p className="perm-note">
+          这一步会调用<strong>除当前对话模型之外</strong>的模型，可能产生额外费用。
+          「仅这一次」只放行这一下；「本次会话」在应用重启前不再问；「永久允许」写进设置，之后可随时撤销。
+        </p>
+      </div>
+      <div className="perm-acts">
+        <button className="primary" onClick={() => onReply('once')}>
+          仅这一次
+        </button>
+        <button className="ghost" onClick={() => onReply('session')}>
+          本次会话允许
+        </button>
+        <button className="ghost" onClick={() => onReply('always')}>
+          永久允许
+        </button>
+        <button className="ghost danger-text" onClick={() => onReply('reject')}>
+          拒绝
+        </button>
+      </div>
+    </Modal>
+  )
 }
 
 /**

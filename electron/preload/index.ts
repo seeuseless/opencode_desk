@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AccessLevel,
   DeskStatus,
+  ModelAuthAsk,
+  ModelAuthScope,
+  ModelUsed,
   PlatformAccount,
   PlatformStatus,
   Settings,
@@ -42,6 +45,29 @@ const api = {
    */
   replyPermission: (req: { id: string; sessionID?: string; reply: 'once' | 'always' | 'reject' }): Promise<string> =>
     ipcRenderer.invoke('permission:reply', req),
+  /**
+   * 「AI 调用**其他**模型」的授权询问（识图 / 桌面代看 / 生图 / 生视频 / 配音 / 音乐 / 听写）。
+   * 这几类调用发生在 MCP 子进程里、主进程原本看不见，现在会先拦下来问用户。
+   * 与访问权限档位无关：完全控制档下照样会问。
+   */
+  onModelAuth: (cb: (a: ModelAuthAsk) => void): (() => void) => {
+    const handler = (_: unknown, a: ModelAuthAsk): void => cb(a)
+    ipcRenderer.on('modelauth:ask', handler)
+    return () => ipcRenderer.removeListener('modelauth:ask', handler)
+  },
+  /** 应答授权卡：once=仅这一次 / session=本次会话 / always=永久 / reject=拒绝。返回空串表示成功 */
+  replyModelAuth: (req: { reqId: string; scope: ModelAuthScope }): Promise<string> =>
+    ipcRenderer.invoke('modelauth:reply', req),
+  /** 某个额外模型真的被调用成功了一次（回复末尾的「本轮用到哪些模型」靠它累计） */
+  onModelUsed: (cb: (u: ModelUsed) => void): (() => void) => {
+    const handler = (_: unknown, u: ModelUsed): void => cb(u)
+    ipcRenderer.on('modelauth:used', handler)
+    return () => ipcRenderer.removeListener('modelauth:used', handler)
+  },
+  /** 永久授权清单（键为 `角色|provider/model`）；设置页展示与撤销用 */
+  modelAuthList: (): Promise<string[]> => ipcRenderer.invoke('modelauth:list'),
+  /** 撤销授权：key 省略＝清空全部（会话级一并失效），返回撤销后的永久清单 */
+  revokeModelAuth: (key?: string): Promise<string[]> => ipcRenderer.invoke('modelauth:revoke', key),
   fetchModels: (
     baseURL: string,
     apiKey?: string

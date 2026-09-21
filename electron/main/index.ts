@@ -5,10 +5,11 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setUiaMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import type { AccessLevel } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
+import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 
 /**
@@ -459,7 +460,11 @@ function startPanelApi(): Promise<number> {
       req.on('end', () => {
         let body: Record<string, unknown> = {}
         try { body = data ? JSON.parse(data) : {} } catch { /* 空体/坏 JSON 按空参处理 */ }
-        panelOp((req.url ?? '').replace(/^\/+/, '').split('?')[0], body)
+        const path = (req.url ?? '').replace(/^\/+/, '').split('?')[0]
+        // `/qn/*` 是「AI 调其他模型」的授权闸门（MCP 子进程发来的），其余是面板浏览器操作。
+        // 注意 authorize 会**挂起这个响应**直到用户作答——HTTP 那侧等着，正是我们要的阻塞语义。
+        const task = path.startsWith('qn/') ? handleGate(path.slice(3), body) : panelOp(path, body)
+        task
           .then((r) => res.end(JSON.stringify(r ?? { ok: true })))
           .catch((e: unknown) => res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) })))
       })
@@ -537,6 +542,17 @@ function screenMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'screen-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'mcp', 'screen-mcp.mjs')
+}
+
+/**
+ * UIA 桌面 MCP（读 Windows 无障碍树、按元素名点击/输入）脚本位置（随安装包分发）。
+ * 同目录还必须带上 uia-host.ps1：uia-mcp.mjs 靠 import.meta.url 从**自己所在目录**找那个宿主，
+ * 所以打包时两个文件都平铺到 resources 根（见 electron-builder.yml 的 extraResources）。
+ */
+function uiaMcpPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'uia-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'uia-mcp.mjs')
 }
 
 /** 语音合成 MCP（generate_speech 配音工具）脚本位置（随安装包分发） */
@@ -619,6 +635,35 @@ ipcMain.handle(
     }
   }
 )
+
+/**
+ * 「AI 调用其他模型」授权闸门（见 gate.ts）。
+ *
+ * 闸门把 MCP 的 HTTP 请求挂着，靠 IPC 推卡到界面、再由这里把用户的答案解回去。
+ * 之所以走 IPC 而不是让界面来轮询：这一步是**阻塞式**的（MCP 那边在等），
+ * 轮询的延迟会直接叠加到每一次识图/生图的体感上。
+ */
+setModelAuthSink((channel, payload) => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, payload)
+})
+
+ipcMain.handle(
+  'modelauth:reply',
+  (_e, req: { reqId: string; scope: 'once' | 'session' | 'always' | 'reject' }) => {
+    const scope: 'once' | 'session' | 'always' | 'reject' =
+      req?.scope === 'always' || req?.scope === 'session' || req?.scope === 'once' ? req.scope : 'reject'
+    // 卡片可能已经因超时自动作废：返回失败原因让界面知道「这一答案没人接」，别静默当成功
+    return replyModelAuth(String(req?.reqId ?? ''), scope)
+      ? ''
+      : '这张授权卡已经失效（等待超时，那次调用已按拒绝处理）'
+  }
+)
+
+/** 永久授权清单（设置界面展示 / 撤销用） */
+ipcMain.handle('modelauth:list', () => modelAuthList())
+
+/** 撤销某条永久授权（key 省略＝清空全部，会话级一并失效） */
+ipcMain.handle('modelauth:revoke', (_e, key?: string) => revokeModelAuth(typeof key === 'string' ? key : undefined))
 
 /** 拉取 OpenAI 兼容端点的模型列表：GET {baseURL}/models */
 ipcMain.handle('models:fetch', async (_e, req: { baseURL: string; apiKey?: string }) => {
@@ -914,6 +959,7 @@ app.whenReady().then(async () => {
   setMediaMcp({ path: mediaMcpPath() })
   setVisionMcp({ path: visionMcpPath() })
   setScreenMcp({ path: screenMcpPath(), upstreamBin: builtinComputerUseMcp() })
+  setUiaMcp({ path: uiaMcpPath() })
   setTtsMcp({ path: ttsMcpPath() })
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })
@@ -969,6 +1015,9 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
+  // 还在等用户作答的「调用其他模型」授权：应用都关了就别再等，全部按拒绝结掉。
+  // 不做的话连接会随进程一起断，MCP 侧 fetch 抛错 → 按 fail-open 放行 → 模型照调，白问一场。
+  rejectAllPending()
   relay.stop()
   adapter.stop()
   app.quit()

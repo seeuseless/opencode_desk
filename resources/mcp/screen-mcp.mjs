@@ -15,6 +15,7 @@
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { authorize, deniedText, markUsed } from './gate.mjs'
 
 const parse = (v) => {
   try {
@@ -47,6 +48,31 @@ if (!UPSTREAM_ARGS.length) UPSTREAM_ARGS.push('-y', 'computer-use-mcp')
 const CALL_BUDGET_MS = 25000
 const UPSTREAM_TIMEOUT_MS = 20000
 const VISION_TIMEOUT_MS = 10000
+
+/**
+ * 截图预算：**一段时间内最多截几次图**。超了直接熔断（isError 回执），不再往上游发。
+ *
+ * 为什么要有（用户明确反馈过两次）：上游 computer-use-mcp 的工具描述里写着
+ * 「you may need to wait and take successive screenshots」「consult a screenshot to determine
+ * the coordinates」，模型照做就成了「点一下 → 截一张 → 再点一下 → 再截一张」——
+ * 每一张截图都要额外调一次视觉模型（10s 级、消耗额度），在用户眼里就是**反复截屏死循环**。
+ * 提示词层面已经反复写「截屏是最后兜底」，但模型并不总听；这里落成硬约束，
+ * 让它想转也转不动，只能改用 uia_* / 键盘，或者如实把卡点告诉用户。
+ *
+ * 阈值可用环境变量调（QN_SCREEN_SHOT_MAX / QN_SCREEN_SHOT_WINDOW_MS）。
+ */
+const SHOT_MAX = Number(process.env.QN_SCREEN_SHOT_MAX) > 0 ? Number(process.env.QN_SCREEN_SHOT_MAX) : 3
+const SHOT_WINDOW_MS =
+  Number(process.env.QN_SCREEN_SHOT_WINDOW_MS) > 0 ? Number(process.env.QN_SCREEN_SHOT_WINDOW_MS) : 120000
+const shotAt = []
+/** 记一次截图并回答「这次允许吗」：窗口内已达上限则拒绝（且不再记账） */
+function shootAllowed() {
+  const now = Date.now()
+  while (shotAt.length && now - shotAt[0] > SHOT_WINDOW_MS) shotAt.shift()
+  if (shotAt.length >= SHOT_MAX) return false
+  shotAt.push(now)
+  return true
+}
 
 /** 给一个 promise 套上截止时间：到点以 Error 结束，绝不悬着 */
 function withDeadline(p, ms, msg) {
@@ -185,6 +211,22 @@ const STATIC_TOOLS = [
     name: 'computer',
     title: 'Computer Control',
     description:
+      // ---- 青鸟前置约束（必须放在上游英文之前：模型对描述里靠前的硬规则更买账，
+      //      而上游原文明确鼓励「多截几张看结果 / 看截图定坐标」，那正是截屏死循环的源头）----
+      '【青鸟桌面控制 · 最高优先级，与下面通用说明冲突时以本段为准】\n' +
+      '操作本机桌面应用，**先看能不能走无障碍树**：`uia_windows` 找窗口 → `uia_tree` 读元素 → ' +
+      '`uia_click` / `uia_set_text` / `uia_focus` 操作。能用的应用（资源管理器、记事本、Office 等）' +
+      '一律走这一档：纯文本、几十毫秒、不需要看画面，也**不需要也不许**截图。\n' +
+      '自绘界面（微信 4.0 等把 UI 画在画布上的应用）`uia_tree` 会回「没有任何可操作元素」——**看到空树就立刻转纯键盘流程**：' +
+      '`uia_window_focus "<窗口名>"` 提到前台（回执里的「前台窗口」不是目标时，**不要盲发按键**，' +
+      '先 `{"action":"left_click","coordinate":[x,y]}` 点一下目标窗口把它点成前台），' +
+      '再发快捷键：`{"action":"key","text":"ctrl+f"}` / `{"action":"key","text":"ctrl+v"}` / `{"action":"key","text":"return"}`。' +
+      '**中文一律用剪贴板 + `ctrl+v`，不要直接 `type`**（会被输入法拦掉）。这一整条链路是确定性的，**一条截图都不用**。\n' +
+      '**`get_screenshot` 是最后的兜底：同一轮最多用一次，而且只能用来做开局判断（先决定点哪儿）**。' +
+      '**严禁用截图去确认某一步成没成**——下面英文里「take successive screenshots to see the results of your actions」' +
+      '与「consult a screenshot to determine the coordinates of the element」这两条**在青鸟里一律不适用**：' +
+      '每次截图都要额外调用一次视觉模型，又慢又费额度，还会把任务钉在原地反复截图。' +
+      '截图次数超限会被直接熔断。\n\n' +
       'Use a mouse and keyboard to interact with a computer, and take screenshots.\n' +
       '* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\n' +
       '* Always prefer using keyboard shortcuts rather than clicking, where possible.\n' +
@@ -239,10 +281,19 @@ const STATIC_TOOLS = [
           items: { type: 'number' },
           description: '(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates'
         },
-        text: { description: 'Text to type or key command to execute', type: 'string' }
+        text: {
+          description:
+            'The text to type, or the key combination to press.\n' +
+            '* For action "type": the literal string to type, e.g. "文件传输助手".\n' +
+            '* For action "key": an xdotool-style key string, e.g. "return", "ctrl+f", "alt+tab", "win". This is where the key(s) go — there is NO separate "key" field.\n' +
+            '* For action "scroll": direction, optionally ":N", e.g. "down:500".',
+          type: 'string'
+        }
       },
       required: ['action'],
-      additionalProperties: false
+      // 故意放开额外字段：模型偶发把按键串写成 key/keys 等，本层归一化会把它翻成 text。
+      // 若这里设成 false，内核会先一步拒收，模型只看到「参数不完整」，反而更容易改成乱试。
+      additionalProperties: true
     },
     annotations: { readOnlyHint: false },
     execution: { taskSupport: 'forbidden' }
@@ -320,22 +371,41 @@ async function describeScreen(result, deadline) {
   // 上游没回图（被截断/异常）：原样交出，至少让模型看到尺寸信息
   if (!img) return result
   if (!VISION_TARGETS.length) {
-    return {
-      content: [
-        ...content,
-        {
-          type: 'text',
-          text:
-            '【电脑画面说明】上面是本次屏幕截图。若你看到的是图片，直接看即可；' +
-            '若当前模型不支持图片输入、只看到尺寸信息，请让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，' +
-            '保存并重开内核后重试——否则你无法看到屏幕，不要凭猜测点击。'
-        }
-      ]
+    /**
+     * 没有配任何视觉代看，且当前模型（大概率）收不了图 → 直接熔断。
+     * 软提示会让模型以为「也许能看见」继续截屏空转；这里明确：看不到就是看不到，
+     * 停止重试，去让用户配视觉模型。
+     */
+    if (img) {
+      return {
+        isError: true,
+        content: [
+          {
+            type: 'text',
+            text:
+              '【电脑控制失败：看不到屏幕】你（当前对话模型）不能直接读取本截图（只能收到尺寸信息），' +
+              '而当前也没有配置任何视觉代看模型。不要再 get_screenshot 重试了。' +
+              '请如实告诉用户：桌面控制需要视觉模型代看画面，请到 设置 → 模型 给真正带视觉能力的模型勾选「图片」输入，' +
+              '保存并重开内核后再操作桌面。'
+          }
+        ]
+      }
     }
+    // 没图可看的情况极罕见，原样交还让内核自行处理
+    return result
   }
   const png = Buffer.from(String(img.data), 'base64')
   const errs = []
-  for (const t of VISION_TARGETS.slice(0, 4)) {
+  for (const [i, t] of VISION_TARGETS.slice(0, 4).entries()) {
+    const who = { role: 'vision', id: t.id, label: t.label ?? t.model, provider: t.provider }
+    // 第 0 个目标已在外面（预算开始前）问过用户，这里不重复问——否则用户选「仅这一次」会被连问两遍
+    if (i > 0) {
+      const grant = await authorize(who)
+      if (!grant.allowed) {
+        errs.push(`${t.id} → 用户未授权调用该模型`)
+        break
+      }
+    }
     const left = deadline - Date.now()
     // 预算见底就别再试下一个了：再问一次必然会拖到整次调用超时，截图也一并作废
     if (left < 2500) {
@@ -343,25 +413,131 @@ async function describeScreen(result, deadline) {
       break
     }
     const r = await askVision(t, png, Math.min(VISION_TIMEOUT_MS, left - 1000))
-    if (r.ok)
+    if (r.ok) {
+      await markUsed(who)
       return {
         content: [...content, { type: 'text', text: `【电脑画面（由 ${t.id} 识别）】\n${r.answer}` }]
       }
+    }
     errs.push(`${t.id} → ${r.error}`)
   }
+  /**
+   * 代看全部失败：**硬终止**，绝不让模型再截屏重试。
+   *
+   * 为什么必须 isError + 强硬措辞：死循环最常见的形态就是模型「get_screenshot → 收不到可靠画面
+   * → 再 get_screenshot」，一直空转到用户看得不耐烦。软文案（早先是「请在设置里勾图片后重试」）
+   * 模型经常无视、继续拼截图。这里直接声明本轮桌面操作无法继续，明确要求模型**停手并转告用户**，
+   * 让「反复截屏」在 1 次内被熔断，而不是无限打转。
+   */
   return {
+    isError: true,
     content: [
-      ...content,
       {
         type: 'text',
         text:
-          '【电脑画面说明】如果你看不到上面的截图，那么本次识图也失败了：\n' +
+          '【电脑控制失败：视觉不可用】你（当前对话模型）拿不到屏幕画面，且所有代看模型也都失败：\n' +
           errs.join('\n') +
-          '\n请在 设置 → 模型 里给真正带视觉能力的模型勾选「图片」输入后重试；在此之前不要凭猜测点击。'
+          '\n\n不要再重复 get_screenshot 重试——数你刚才的截图，已经证明这条路走不通，再截多少张也看不到画面。' +
+          '请如实向用户说明：桌面控制的视觉代看不可用，需要到 设置 → 模型 里给真正带视觉能力的模型（如名字带 vl/vision、或确实支持读图的模型）' +
+          '勾选「图片」输入，保存并重开内核后再让 AI 操作桌面。'
       }
     ]
   }
 }
+
+// ---------- 入参归一化：把模型常见的「近义写法」翻译成上游的严格 schema ----------
+/**
+ * 上游 computer-use-mcp 的入参是 `z.object({action, coordinate?, text?}).strict()`：
+ * **多一个字段名就整次调用失败**（内核回「The computer tool was called with invalid arguments」，
+ * 界面显示成「调用参数不完整」）。实测最高频的两种错法：
+ *   ① 按哪个键写成 `key` / `keys` / `hotkey` —— 上游只认 `text`（`{"action":"key","text":"ctrl+f"}`）；
+ *   ② 缺 `text` 直接调 `{"action":"key"}` —— 上游抛 `Text required for key`。
+ * 这两类错误一旦发生，模型往往接着改叫裸名 `computer`（内核里不存在这个名字）而连续扑空。
+ * 所以在这一层做翻译与校验，别指望模型每次都写对。
+ */
+const VALID_ACTIONS = [
+  'key',
+  'type',
+  'mouse_move',
+  'left_click',
+  'left_click_drag',
+  'right_click',
+  'middle_click',
+  'double_click',
+  'scroll',
+  'get_screenshot',
+  'get_cursor_position'
+]
+const ACTION_ALIASES = {
+  screenshot: 'get_screenshot',
+  take_screenshot: 'get_screenshot',
+  screen_shot: 'get_screenshot',
+  click: 'left_click',
+  move: 'mouse_move',
+  move_mouse: 'mouse_move',
+  drag: 'left_click_drag',
+  press: 'key',
+  keyboard: 'key',
+  hotkey: 'key',
+  write: 'type',
+  input: 'type'
+}
+/** 模型可能把「按键串」塞进这些字段名：全部归一到 text */
+const KEY_FIELDS = ['key', 'keys', 'keyCombination', 'key_combination', 'combo', 'hotkey', 'shortcut', 'shortcutKeys']
+
+/** 把一次 computer 调用的入参收敛成上游只认的三个字段；返回 { args } 或 { bad: 原因 } */
+function normalizeComputerArgs(raw) {
+  const a = raw && typeof raw === 'object' ? raw : {}
+  const action = ACTION_ALIASES[String(a.action ?? '').trim().toLowerCase()] ?? a.action
+  const out = { action }
+  // 坐标：coordinate / coordinates / [x,y] / "x,y" / {x,y} / {x:..,y:..} —— 全部收成 [x, y]
+  let c = a.coordinate
+  if (!(Array.isArray(c) && c.length === 2)) {
+    if (Array.isArray(a.coordinates) && a.coordinates.length === 2) c = a.coordinates
+    else if (typeof c === 'string') {
+      const n = c.split(/[\s,]+/).filter(Boolean).map(Number)
+      c = n.length === 2 && n.every(Number.isFinite) ? n : undefined
+    } else if (typeof a.x === 'number' && typeof a.y === 'number') c = [a.x, a.y]
+    else if (a.point && typeof a.point.x === 'number' && typeof a.point.y === 'number') c = [a.point.x, a.point.y]
+    else c = undefined
+  }
+  if (Array.isArray(c) && c.length === 2 && c.every((v) => Number.isFinite(v))) {
+    out.coordinate = [Math.round(Number(c[0])), Math.round(Number(c[1]))]
+  }
+  // 文本 / 按键串
+  let t = a.text ?? a.content
+  if (typeof t !== 'string') t = undefined
+  if (t === undefined) {
+    for (const k of KEY_FIELDS) {
+      if (typeof a[k] === 'string') {
+        t = a[k]
+        break
+      }
+    }
+  }
+  if (typeof t === 'string') out.text = t
+  if (!VALID_ACTIONS.includes(String(out.action ?? ''))) {
+    return { bad: `action 取了个不认识的值：${JSON.stringify(a.action ?? null)}` }
+  }
+  // 这三个动作没有 text 上游必然抛错，在这里就挡住并给出正确写法
+  if ((out.action === 'key' || out.action === 'type' || out.action === 'scroll') && !out.text) {
+    return { bad: `action="${out.action}" 缺少 text 参数` }
+  }
+  return { args: out }
+}
+
+/** 入参不对时的回执：给模型一份可直接照抄的正确形状，避免它继续猜字段名 */
+const correctShape = (why) =>
+  `【computer 调用参数不对】${why}。\n` +
+  '本工具**只有三个字段**：action（必填）、coordinate（`[x, y]`，点击/滚动用）、text（要输入的文字或按键串）。\n' +
+  '**没有 `key` / `keys` / `hotkey` 这类字段——按键串一律放 `text`**。正确示例：\n' +
+  '- `{"action":"get_screenshot"}`\n' +
+  '- `{"action":"key","text":"ctrl+f"}`  ← 按 Ctrl+F\n' +
+  '- `{"action":"key","text":"return"}`\n' +
+  '- `{"action":"type","text":"文件传输助手"}`  ← 输入文字\n' +
+  '- `{"action":"left_click","coordinate":[640,360]}`\n' +
+  '- `{"action":"scroll","coordinate":[640,360],"text":"down:500"}`\n' +
+  '请严格按上面的形状改一次再调用，不要增删字段。'
 
 // ---------- 主循环：透传 initialize / tools，只改 get_screenshot 的返回 ----------
 createInterface({ input: process.stdin }).on('line', async (line) => {
@@ -395,13 +571,56 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     send({ jsonrpc: '2.0', id, result: { tools: STATIC_TOOLS } })
     return
   }
+  // computer 的入参先在本层归一化 + 校验：上游是 z.strict()，字段名差一个字就整次调用失败，
+  // 而「失败→重写→再失败」正是用户看到的连环报错。写错时直接回一份可照抄的正确形状。
+  let callParams = params
+  const isComputerCall = method === 'tools/call' && String(params?.name ?? '') === 'computer'
+  if (isComputerCall) {
+    const n = normalizeComputerArgs(params?.arguments)
+    if (n.bad) {
+      fail(id, correctShape(n.bad))
+      return
+    }
+    callParams = { ...params, arguments: n.args }
+  }
+  /**
+   * 截图熔断：先于授权闸门判断——既然这次调用注定要被拒，就别再弹卡片打扰用户。
+   */
+  if (isComputerCall && callParams?.arguments?.action === 'get_screenshot' && !shootAllowed()) {
+    fail(
+      id,
+      `【截图已被熔断：这一轮别再截了】你在 ${Math.round(SHOT_WINDOW_MS / 1000)} 秒内已经截了 ${SHOT_MAX} 次图。` +
+        '反复截图不会让画面变清楚，每一步都截一张只会把任务钉在原地——每张截图都要额外调一次视觉模型，又慢又费额度。\n' +
+        '请改用：① `uia_windows` / `uia_tree` 读无障碍树（原生控件应用，纯文本、几十毫秒）；' +
+        '② 自绘界面（如微信）走纯键盘流程：`uia_window_focus "<窗口名>"` → ' +
+        '`{"action":"key","text":"ctrl+f"}` / `{"action":"key","text":"ctrl+v"}` / `{"action":"key","text":"return"}`；' +
+        '③ 真的要判断画面，就用你手上已有的那段「【电脑画面】」文字描述，不要再截新的。\n' +
+        '如果确实卡住了，请如实告诉用户卡在哪一步、需要他做什么，不要再用截图试探。'
+    )
+    return
+  }
+  /**
+   * 授权闸门（会**调用另一个模型**的只有 get_screenshot 这一条路：截图要交给视觉模型代看）。
+   *
+   * 刻意放在 deadline 之前：用户看卡片、想清楚、点按钮的时间**不该算进那次调用的 25 秒预算**，
+   * 否则「认真读一遍再决定」会直接把这次截图判成超时。已授权时这里立即返回，零感知。
+   */
+  if (isComputerCall && callParams?.arguments?.action === 'get_screenshot' && VISION_TARGETS.length) {
+    const t = VISION_TARGETS[0]
+    const who = { role: 'vision', id: t.id, label: t.label ?? t.model, provider: t.provider }
+    const grant = await authorize(who)
+    if (!grant.allowed) {
+      fail(id, deniedText(who, grant))
+      return
+    }
+  }
   try {
     // 一次调用的截止时间：等上游就绪、回包、识图，全在这 25 秒里分
     const deadline = Date.now() + CALL_BUDGET_MS
     const left = () => Math.max(3000, deadline - Date.now())
     await withDeadline(upstreamReady, left(), 'computer-use-mcp 迟迟没能就绪，本次调用已放弃')
-    const result = await askUpstream(method, params, left())
-    if (method === 'tools/call' && String(params?.name ?? '') === 'computer' && params?.arguments?.action === 'get_screenshot') {
+    const result = await askUpstream(method, callParams, left())
+    if (isComputerCall && callParams?.arguments?.action === 'get_screenshot') {
       send({ jsonrpc: '2.0', id, result: await describeScreen(result, deadline) })
       return
     }
