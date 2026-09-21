@@ -604,7 +604,10 @@ export function SettingsView(p: Props) {
       thinking: f.thinking,
       gen: f.gen
     }
-    const nextIds = f.isNew ? [...ids.slice(0, f.index), mid, ...ids.slice(f.index)] : ids
+    // 新增：插到下标处；编辑：就地替换（含改名——否则 modelsText 仍留旧名，列表就不动）
+    const nextIds = f.isNew
+      ? [...ids.slice(0, f.index), mid, ...ids.slice(f.index)]
+      : ids.map((x, i) => (i === f.index ? mid : x))
     // 改名时把旧名字的配置一并清掉，不然 cfgs 里会留一条永远用不到的孤儿配置
     const cfgs = { ...draft.cfgs }
     if (!f.isNew && ids[f.index] !== mid) delete cfgs[ids[f.index]]
@@ -1256,15 +1259,17 @@ export function SettingsView(p: Props) {
                 )
               })
             })()}
-            <button className="ghost model-add" onClick={() => openNewModelForm(parseModels(draft.modelsText).length)}>
-              <Plus size={14} /> 添加
-            </button>
-          </div>
-          <div className="form-row">
-            <button className="ghost" onClick={fetchModels} disabled={fetching}>
-              <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> 自动获取模型
-            </button>
-            {formMsg && <span className={'form-msg' + (formMsg.bad ? ' bad' : '')}>{formMsg.text}</span>}
+            <div className="model-foot">
+              <button className="ghost model-add" onClick={() => openNewModelForm(parseModels(draft.modelsText).length)}>
+                <Plus size={14} /> 添加
+              </button>
+              <span className="model-foot-right">
+                {formMsg && <span className={'form-msg' + (formMsg.bad ? ' bad' : '')}>{formMsg.text}</span>}
+                <button className="ghost" onClick={fetchModels} disabled={fetching}>
+                  <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> 自动获取模型
+                </button>
+              </span>
+            </div>
           </div>
           <div className="actions">
             <button className="ghost" onClick={closeProviderModal}>取消</button>

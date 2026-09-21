@@ -1270,7 +1270,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .model-row-io.sep { padding-left: 9px; border-left: 1px solid var(--line); }
 .model-row-none { font-size: 11.5px; color: var(--fg2); opacity: .75; }
 .model-row-acts { display: flex; align-items: center; gap: 2px; flex: none; margin-left: 2px; }
-.model-add { align-self: flex-start; margin-top: 2px; }
+/* 模型列表底部一行：左「添加」、右「自动获取模型」，两句提示挤在两者之间 */
+.model-foot { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.model-foot-right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex: none; }
 /* 列表内的小号胶囊（比弹窗内的勾选控件小一档，避免列表行过高）。
    不许换行：换行会把行撑成两截高，列表看起来就乱了 */
 .iochip.sm { padding: 1px 7px; font-size: 10.5px; pointer-events: none; white-space: nowrap; }
