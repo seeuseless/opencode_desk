@@ -295,6 +295,26 @@ export interface QuestionAsk {
 }
 
 /**
+ * 内核的权限询问（`permission.asked` 事件）。
+ *
+ * v1/v2 两套事件名并存，字段名不同，归一到这里：
+ *   v1：permission（工具名）+ patterns + always
+ *   v2：action + resources + save
+ * 内核在用户应答前**一直阻塞**，所以这张卡片必须有出口（允许/拒绝），不能只是提示。
+ */
+export interface PermissionAsk {
+  id: string
+  sessionID: string
+  /** 动作/工具名，如 edit / bash / read（展示用，也决定提示文案） */
+  kind: string
+  /** 要动的东西：文件路径、要跑的命令等 */
+  targets: string[]
+  /** 允许「总是允许」时可选的资源（内核给的候选，为空则不显示该按钮） */
+  always: string[]
+  metadata: Record<string, unknown>
+}
+
+/**
  * 会话文件差量（内核 /session/{id}/diff 返回项）
  * messageID 必须是「用户消息」id：内核把整轮（该用户消息 + 其后续助手消息）的快照差量挂在它身上，
  * patch 是带 +/- 行的完整 unified diff，直接拿来着色即可

@@ -757,6 +757,20 @@ export function SettingsView(p: Props) {
     )
   }
 
+  /**
+   * 桌面控制开关：同时管 computer-use（截屏 + 键鼠）与 desktop-helper（app_running 查进程）两个内置 MCP。
+   *
+   * **默认关**——开了以后 AI 能看整块屏幕、能动键盘鼠标，风险面远大于读写文件，
+   * 所以不做成内置默认项，由用户在这里显式打开（落盘后走 applySettings → 重启内核生效）。
+   */
+  async function toggleDesktopControl() {
+    const on = !p.settings.desktopControl
+    applySettings(
+      { ...p.settings, desktopControl: on },
+      { note: on ? '将启用桌面控制（截屏 + 模拟键鼠）。' : '将停用桌面控制。' }
+    )
+  }
+
   // ---------- 技能（Skills）----------
   // 技能 = 磁盘上的 <技能名>/SKILL.md。模型只看到 name + description 两行，
   // 判断需要时才读全文，所以不占常驻上下文；改完即时生效，不用重启内核。
@@ -1022,28 +1036,22 @@ export function SettingsView(p: Props) {
             </button>
           </h3>
           <p className="sec-tip">
-            内置浏览器与桌面控制是内置能力，随内核自动开启、不提供开关（首次使用需本机有 Node.js，会自动经 npx 拉起）；
+            桌面控制（截屏 + 模拟键鼠）能看屏幕、能动键鼠，风险较高，默认关闭，需要时在下面自行打开。
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="mcp-list">
-          <div className="prow builtin">
-            <span className="prow-ico"><Globe size={15} /></span>
-            <div className="prow-main">
-              <div className="prow-name">
-                内置浏览器
-                <span className="chip kind-local">内置 · 自动开启</span>
-              </div>
-              <div className="prow-url">AI 与右侧面板共用同一个浏览器（登录态共享），打开网页/链接默认都走它</div>
-            </div>
-          </div>
-          <div className="prow builtin">
+          {/* 桌面控制：与下面用户自加的 MCP 一样带开关，但它是内置项、不可删除（关闭即停用） */}
+          <div className={'prow builtin' + (p.settings.desktopControl ? '' : ' off')}>
+            <Switch checked={!!p.settings.desktopControl} onChange={() => void toggleDesktopControl()} />
             <span className="prow-ico"><Monitor size={15} /></span>
             <div className="prow-main">
               <div className="prow-name">
                 桌面控制
-                <span className="chip kind-local">内置 · 自动开启</span>
+                <span className="chip kind-local">内置 · 默认关闭</span>
               </div>
-              <div className="prow-url">AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入），仅用于用户点名要操作桌面的时候</div>
+              <div className="prow-url">
+                AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入），仅用于用户点名要操作桌面的时候
+              </div>
             </div>
           </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}

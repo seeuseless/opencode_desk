@@ -4,18 +4,18 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Music, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Monitor, Music, Paperclip, Pencil, Power, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
-import { ProjectPicker } from './ProjectPicker'
+import { ProjectPicker, AccessPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
-import type { Project } from './Sidebar'
+import type { AccessLevel, Project } from './Sidebar'
 
 interface Props {
   project?: Project
@@ -39,14 +39,16 @@ interface Props {
   onPickDir: () => void
   /** 切换当前激活项目（点击左侧项目下拉中的某项） */
   onSwitchProject: (id: string) => void
+  /** 当前项目的访问权限档位（项目下拉右栏展示与切换） */
+  access: AccessLevel
+  /** 拨权限档位；切到「完全控制」的二次确认由 App 负责 */
+  onAccess: (level: AccessLevel) => void
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
   browserMaxSignal: number
-  /** 全屏浏览时标题栏「AI 对话」开关的触发计数（App 转发，收起/展开右下角浮动对话卡） */
-  floatToggleSignal: number
-  /** 上报浏览器面板开合、放大、浮动卡与对话彻底隐藏状态（驱动标题栏按钮行为与图标） */
-  onBrowserUi: (s: { open: boolean; max: boolean; float: boolean; chatHidden: boolean }) => void
+  /** 上报浏览器面板开合与放大状态（标题栏浏览器按钮与最大化按钮据此决定行为与图标） */
+  onBrowserUi: (s: { open: boolean; max: boolean }) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -338,6 +340,14 @@ export function ChatView(p: Props) {
   const [todos, setTodos] = useState<TodoItem[]>([])
   // 内核 question 工具的待答问题（事件 + busy 轮询双通道，阻塞等待用户应答）
   const [asks, setAsks] = useState<QuestionAsk[]>([])
+  /**
+   * 内核的权限询问（`permission.asked`）：默认权限档位下，AI 要改文件/执行命令时
+   * 内核会阻塞在这里等用户点允许。多条时只弹最前一条（一次问一件事，别堆叠弹窗）。
+   *
+   * 与 asks（助手提问）分开存：两者语义不同、回复端点也不同，混在一个队列里
+   * 会出现「拿 question 的 id 去答 permission」这种错配。
+   */
+  const [perms, setPerms] = useState<PermissionAsk[]>([])
   // 内核管理的终端（pty）：有 running 的才在项目名旁显示入口
   const [terms, setTerms] = useState<PtySession[]>([])
   const [showTerms, setShowTerms] = useState(false)
@@ -515,8 +525,8 @@ export function ChatView(p: Props) {
   /**
    * 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关）。
    *
-   * 全屏浏览中一律不动尺寸——全屏时这一颗按钮不再用来关面板，而是交给标题栏的
-   * 「AI 对话」开关（见 toggleFloatFromHeader）与「缩小」按钮；用户想退出全屏就点还原。
+   * 全屏浏览中一律不动尺寸——全屏时这一颗按钮直接不渲染（面板已占满，关它等于退出全屏），
+   * 想退出全屏点标题栏的「还原」；「AI 对话」开关则挪到了地址栏右侧那颗电源图标。
    */
   function toggleBrowserFromHeader() {
     if (browserMax) return
@@ -539,8 +549,9 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 全屏时标题栏「AI 对话」开关：收起/展开右下角浮动聊天卡。
+   * 全屏时右下角那颗气泡的开关：收起/展开浮动对话卡。
    * 打游戏等不想看到对话的场景直接收起，气泡留在右下角随时唤回。
+   * 与地址栏那颗电源图标是同一状态的两个入口（那个还能把气泡本身也藏掉）。
    */
   function toggleFloatFromHeader() {
     setFloatOpen((v) => !v)
@@ -548,11 +559,21 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 全屏时「隐藏 AI 对话」（地址栏右侧那颗按钮）：逐级隐藏——对话卡开着就只收卡片
-   * （右下角气泡仍在，点它随时唤回）；对话卡已收起时再点才连气泡一起藏掉，
-   * 这之后由标题栏的「显示 AI 对话」按钮负责唤回。
+   * 全屏时地址栏右侧那颗「AI 对话」按钮：**不是单向隐藏，而是开关**——
+   * 想打游戏/看片时点一下收起来，回头再点一下放出来，全在这一颗上完成。
+   *
+   * 逐级展开/收起（避免一次点掉太多、用户找不回来）：
+   *   对话卡开着 → 收起卡片，气泡仍在右下角（随时点回）
+   *   卡片收了但气泡在 → 连气泡一起藏掉
+   *   连气泡都没了 → 整块复原（气泡 + 卡片一起回来）
+   * 与右下角气泡是同一状态的两个入口（气泡只能收起/展开卡片，这一颗还能把气泡本身也藏掉）。
    */
-  function hideChat() {
+  function toggleChatVisible() {
+    if (chatHidden) {
+      setChatHidden(false)
+      setFloatOpen(true)
+      return
+    }
     if (floatOpen) {
       setFloatOpen(false)
       return
@@ -1069,6 +1090,30 @@ export function ChatView(p: Props) {
       } else if (['question.v2.replied', 'question.v2.rejected', 'question.replied', 'question.rejected'].includes(e.type)) {
         const pr = e.properties as { requestID?: string }
         setAsks((prev) => prev.filter((x) => x.id !== pr.requestID))
+      } else if (e.type === 'permission.asked' || e.type === 'permission.v2.asked') {
+        // 默认权限档位下，AI 要动文件/执行命令，内核停在这里等用户点头。
+        // 两套事件名（v1 带 permission/patterns/always，v2 带 action/resources）都认——
+        // 漏一个名字的后果是「永远不弹确认」，AI 就卡在那里直到超时。
+        const raw = e.properties as Record<string, unknown>
+        const id = String(raw.id ?? '')
+        if (!id) return
+        setPerms((prev) => [
+          ...prev.filter((x) => x.id !== id),
+          {
+            id,
+            sessionID: String(raw.sessionID ?? ''),
+            // v1 是 permission（工具名），v2 是 action
+            kind: String(raw.permission ?? raw.action ?? ''),
+            // v1 是 patterns，v2 是 resources
+            targets: (Array.isArray(raw.patterns) ? raw.patterns : Array.isArray(raw.resources) ? raw.resources : []).map(String),
+            always: (Array.isArray(raw.always) ? raw.always : Array.isArray(raw.save) ? raw.save : []).map(String),
+            metadata: (raw.metadata ?? {}) as Record<string, unknown>
+          }
+        ])
+      } else if (['permission.replied', 'permission.rejected', 'permission.v2.replied'].includes(e.type)) {
+        const pr = e.properties as { requestID?: string; id?: string }
+        const rid = pr.requestID ?? pr.id
+        if (rid) setPerms((prev) => prev.filter((x) => x.id !== rid))
       } else if (e.type === 'session.idle') {
         const idleSid = (e.properties as { sessionID?: string }).sessionID
         if (!idleSid) return
@@ -1236,17 +1281,11 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserMaxSignal])
 
-  // 全屏时标题栏「AI 对话」按钮：彻底隐藏后点它把对话（含右下角气泡）找回来
-  useEffect(() => {
-    if (p.floatToggleSignal > 0) toggleFloatFromHeader()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.floatToggleSignal])
-
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
-    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax, float: floatOpen, chatHidden })
+    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserOpen, manualBrowser, browserMax, floatOpen, chatHidden])
+  }, [browserOpen, manualBrowser, browserMax])
 
   // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
   useEffect(() => {
@@ -1765,6 +1804,23 @@ export function ChatView(p: Props) {
     oc.rejectQuestion(req.id, dirRef.current).catch(() => { /* 已应答/已失效 */ })
   }
 
+  /**
+   * 应答内核的权限询问。
+   *
+   * 先本地摘掉卡片再发请求：内核阻塞等这一下，用户点完就该立刻看到框消失；
+   * 失败时补一条错误提示并把卡片放回来——否则「点了没反应、框也没了」，
+   * 用户既不知道成没成，也没法重试，而内核那侧还卡着。
+   */
+  function replyPerm(req: PermissionAsk, reply: 'once' | 'always' | 'reject') {
+    setPerms((prev) => prev.filter((x) => x.id !== req.id))
+    void window.qingniao.replyPermission({ id: req.id, sessionID: req.sessionID, reply }).then((err) => {
+      if (err) {
+        setError(`权限应答没能送达内核：${err}`)
+        setPerms((prev) => (prev.some((x) => x.id === req.id) ? prev : [...prev, req]))
+      }
+    })
+  }
+
   // 可见消息数：项目记忆、浏览器页面上下文都是「仅上下文」注入（AI 可见、界面不渲染），
   // 不能算进「有内容」，否则注入记忆后 msgs 非空、空态引导就不显示了
   const visibleMsgCount = msgs.filter((m) => {
@@ -1947,6 +2003,15 @@ export function ChatView(p: Props) {
           )}
           {asks.length > 0 && (
             <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
+          )}
+          {/* 权限询问：与助手提问互斥显示（同一时刻只弹一件事，避免两层弹窗叠在一起） */}
+          {asks.length === 0 && perms.length > 0 && (
+            <PermModal
+              key={perms[0].id}
+              req={perms[0]}
+              dir={p.project?.path ?? ''}
+              onReply={(r) => replyPerm(perms[0], r)}
+            />
           )}
           {todos.length > 0 && <TodoCard todos={todos} live={busy} />}
           {busy && (
@@ -2138,6 +2203,9 @@ export function ChatView(p: Props) {
               onChange={p.onSwitchProject}
               onPickDir={p.onPickDir}
             />
+            {/* 访问权限：独立一颗按钮，紧挨「选择文件夹」右侧。放这儿才能常显当前档位。
+                它是**全局**一档（对所有文件夹生效），与左边选哪个项目无关 */}
+            <AccessPicker access={p.access} onAccess={p.onAccess} />
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
@@ -2182,7 +2250,7 @@ export function ChatView(p: Props) {
         marks={marks}
         onToggleMark={toggleMark}
         chatHidden={chatHidden}
-        onHideChat={hideChat}
+        onToggleChat={toggleChatVisible}
       />
     )}
     {/* 全屏 + 对话未彻底隐藏时才留这颗气泡；藏掉后由标题栏「AI 对话」按钮负责唤回 */}
@@ -2202,7 +2270,7 @@ export function ChatView(p: Props) {
   )
 }
 /** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
-function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onHideChat }: {
+function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onToggleChat }: {
   url: string
   /** 用户点链开面板的计数：变化时即使地址相同也强制重新导航 */
   navSeq: number
@@ -2212,10 +2280,13 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
   onUrl: (u: string) => void
   marks: Bookmark[]
   onToggleMark: (url: string, title: string) => void
-  /** AI 对话是否已被彻底隐藏（连右下角气泡一起藏掉）：决定地址栏那颗按钮的图标与提示 */
+  /**
+   * AI 对话是否已被彻底隐藏（连右下角气泡一起藏掉）：决定地址栏那颗按钮的图标与提示，
+   * 也决定标题栏的「AI 对话」按钮还留不留（留着才找得回来）。面包板只读它，不改。
+   */
   chatHidden: boolean
-  /** 彻底隐藏 AI 对话：收起浮动卡并藏掉右下角气泡 */
-  onHideChat: () => void
+  /** 地址栏那颗按钮：开关 AI 对话（收卡片 → 藏气泡 → 整块复原，见 toggleChatVisible） */
+  onToggleChat: () => void
 }) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
@@ -2329,15 +2400,20 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
       >
         <Star size={14} fill={starred ? 'currentColor' : 'none'} />
       </button>
-      {/* 全屏时才显示：紧跟地址栏，一键把 AI 对话彻底藏起来（连右下角气泡一起） */}
+      {/* 全屏时才显示：紧跟地址栏，一颗按钮开关 AI 对话。
+          用「电源」图标而不是「对话气泡 + 斜杠」——它是一个开关，不是"把某个东西删掉"；
+          且**任何状态下都可点**（禁用态会让人以为按钮坏了，而这颗正是唯一的自救入口）。 */}
       {max && (
         <button
-          className="icon-btn bp-hide-chat"
-          title={chatHidden ? 'AI 对话已隐藏（点标题栏「AI 对话」按钮可重新显示）' : '隐藏 AI 对话（连右下角气泡一起藏起来）'}
-          onClick={onHideChat}
-          disabled={chatHidden}
+          className={'icon-btn bp-chat-switch' + (chatHidden ? ' off' : '')}
+          title={
+            chatHidden
+              ? 'AI 对话已隐藏 · 点击显示（连右下角气泡一起找回）'
+              : 'AI 对话显示中 · 点击隐藏（先收卡片，再点藏气泡）'
+          }
+          onClick={onToggleChat}
         >
-          <MessageCircleOff size={15} />
+          <Power size={15} />
         </button>
       )}
     </div>
@@ -2835,7 +2911,7 @@ function AskModal({
   }
 
   return (
-    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} onClose={onReject}>
+    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} anchor="top" onClose={onReject}>
       <div className="ask-q">
         <div className="ask-title">{q.question}</div>
         <div className="ask-opts">
@@ -2892,6 +2968,96 @@ function AskModal({
       </div>
     </Modal>
   )
+}
+
+/**
+ * 权限确认弹窗：默认权限档位下，AI 要改文件 / 执行命令时内核停在这里等用户点头。
+ *
+ * 三个出口对应内核的三种应答：
+ *   仅这一次（once）  —— 放行这一下，下次还问。**默认推荐**，卡在最左最显眼处
+ *   总是允许（always）—— 本会话内同类操作不再问。内核只在给了 always 候选时才认，故按需显示
+ *   拒绝（reject）    —— 拦下，AI 会收到拒绝并另想办法
+ *
+ * 展示上把「要动什么」放在最显眼处：用户判断该不该放行，靠的就是那几个路径/命令，
+ * 而不是「edit」这个工具名。命令类内容用等宽字体，避免把 `rm -rf` 看成普通文本。
+ */
+function PermModal({
+  req,
+  dir,
+  onReply
+}: {
+  req: PermissionAsk
+  /** 当前项目目录：把绝对路径缩短成相对路径，长路径一眼能看出是项目里的哪个文件 */
+  dir: string
+  onReply: (r: 'once' | 'always' | 'reject') => void
+}) {
+  const { kind, targets } = req
+  const label = PERM_LABEL[kind] ?? kind ?? '操作'
+  /** 命令类：整行等宽显示；文件类：缩成相对项目路径 */
+  const isCmd = /bash|shell|command|exec/i.test(kind)
+  const shown = targets.map((t) => (isCmd ? t : relPath(t, dir)))
+
+  return (
+    <Modal title={`是否允许${label}？`} anchor="top" onClose={() => onReply('reject')}>
+      <div className="perm-q">
+        <p className="perm-lead">
+          AI 想{label}，需要你确认：
+        </p>
+        {shown.length > 0 && (
+          <ul className="perm-list">
+            {shown.map((t, i) => (
+              <li key={i} className={isCmd ? 'mono' : undefined} title={targets[i]}>
+                {t}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="perm-note">
+          选「仅这一次」只放行这一下，之后同类操作仍会问你；
+          「总是允许」在本会话内不再询问。想彻底不再问，可把该项目的访问权限改为「完全控制」。
+        </p>
+      </div>
+      <div className="perm-acts">
+        <button className="primary" onClick={() => onReply('once')}>
+          仅这一次
+        </button>
+        {req.always.length > 0 && (
+          <button className="ghost" onClick={() => onReply('always')}>
+            总是允许
+          </button>
+        )}
+        <button className="ghost danger-text" onClick={() => onReply('reject')}>
+          拒绝
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/** 权限动作名 → 中文（认不出就用原文，别吞掉信息） */
+const PERM_LABEL: Record<string, string> = {
+  edit: '修改文件',
+  write: '写入文件',
+  bash: '执行命令',
+  read: '读取文件',
+  glob: '搜索文件',
+  grep: '搜索内容',
+  list: '列出目录',
+  webfetch: '访问网页',
+  external_directory: '访问项目外目录'
+}
+
+/**
+ * 绝对路径 → 项目相对路径（不在项目内就原样返回）。
+ * 只做展示：确认框里「src/renderer/App.tsx」比「D:\github\xxx\opencode_desk\src\renderer\App.tsx」好判得多。
+ */
+function relPath(p: string, dir: string): string {
+  if (!dir) return p
+  const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '')
+  const a = norm(p)
+  const b = norm(dir)
+  if (a.toLowerCase().startsWith(b.toLowerCase() + '/')) return a.slice(b.length + 1)
+  return p
 }
 
 /** 内核工具的英文系统消息 → 中文；纯结果确认句（"写入成功"类）视为无信息量，返回空串让渲染层决定回退展示 */

@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  AccessLevel,
   DeskStatus,
   PlatformAccount,
   PlatformStatus,
@@ -28,6 +29,19 @@ const api = {
   /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */
   kernelHealth: (): Promise<boolean> => ipcRenderer.invoke('kernel:health'),
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),
+  /**
+   * 改**全局**访问权限档位（'default' = 写操作要确认 / 'full' = 完全控制），对所有文件夹生效。
+   * 只落盘、**不重启内核**（拨档位不该打断正在跑的任务）；生效需再走一次 saveSettings。
+   */
+  setAccess: (level: AccessLevel): Promise<Settings> =>
+    ipcRenderer.invoke('settings:setAccess', { level }),
+  /**
+   * 应答内核的权限询问（permission.asked）。
+   * once = 只这一次允许；always = 这个会话内同类操作都允许；reject = 拒绝。
+   * 返回空串表示成功，否则是失败原因。
+   */
+  replyPermission: (req: { id: string; sessionID?: string; reply: 'once' | 'always' | 'reject' }): Promise<string> =>
+    ipcRenderer.invoke('permission:reply', req),
   fetchModels: (
     baseURL: string,
     apiKey?: string

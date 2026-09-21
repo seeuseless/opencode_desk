@@ -1,11 +1,12 @@
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type WebContents } from 'electron'
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type OpenDialogOptions, type WebContents } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import type { AccessLevel } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
@@ -73,9 +74,26 @@ ipcMain.handle('opencode:api', (_e, path: string, opts?: { method?: string; body
 
 ipcMain.handle('app:info', () => ({ workspace }))
 
+/**
+ * 选目录对话框（左栏「选择文件夹」与对话区项目下拉共用）。
+ *
+ * **访问权限由系统对话框自己决定**：macOS 上这个对话框会带「完全访问 / 受限访问」选项，
+ * 用户勾「完全访问」即把该目录授权给应用；Windows / Linux 上 showOpenDialog 本身
+ * 就是完整授权，没有这一步。所以应用内不做权限模型、也不在此二次校验——
+ * 真读不到时由内核在读写时报错，比在这里猜准确（见 App.tsx addProject 的说明）。
+ *
+ * `defaultPath` 只是让对话框开在常见位置、少点两下，不构成任何授权。
+ */
 ipcMain.handle('dialog:pickDir', async () => {
-  const r = await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-  return r.canceled ? null : r.filePaths[0]
+  const win = BrowserWindow.getFocusedWindow() ?? mainWin
+  const opts: OpenDialogOptions = {
+    title: '选择文件夹',
+    buttonLabel: '选择',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: workspace
+  }
+  const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+  return r.canceled ? null : (r.filePaths[0] ?? null)
 })
 
 // 浏览面板的「在外部浏览器打开」：只放行网页地址
@@ -521,6 +539,54 @@ ipcMain.handle('settings:save', async (_e, s: Settings) => {
   // 「远程服务」这个全局总开关（只能改配置文件）：关掉它要顺手把中转通道停掉（一个请求都不再发）
   relay.apply()
 })
+
+/**
+ * 更新**全局**访问权限档位（对话区「选择文件夹」右侧的档位选择器）。
+ *
+ * 权限对所有文件夹生效，不分项目，所以只传档位、不传路径。
+ *
+ * 保存后**立即重启内核**让档位生效——内核的 permission 是启动时读的，
+ * 不重启切了等于没切。用户明确要求「切换权限就要重启内核」，
+ * 重启正在跑的任务会被打断，但这是让权限即刻生效唯一可靠的办法。
+ */
+ipcMain.handle('settings:setAccess', async (_e, req: { level: AccessLevel }) => {
+  setAccess(req?.level === 'full' ? 'full' : 'default')
+  await adapter.restart()
+  relay.apply()
+})
+
+/**
+ * 应答内核的权限询问（permission.asked 事件）。
+ *
+ * 内核 REST 有两个版本的端点，`/permission/{id}/reply` 是当前 `GET /permission` 配套的那个
+ * （body: { reply: once|always|reject }），旧的按会话走的 `/session/{sid}/permissions/{id}`
+ * （body: { response }）作为兜底——内核升级/降级时至少有一条能成。
+ */
+ipcMain.handle(
+  'permission:reply',
+  async (_e, req: { id: string; sessionID?: string; reply: 'once' | 'always' | 'reject' }) => {
+    const id = String(req?.id ?? '').trim()
+    if (!id) return '权限请求 id 为空'
+    const reply = req?.reply === 'always' ? 'always' : req?.reply === 'reject' ? 'reject' : 'once'
+    const dir = String(req?.sessionID ?? '').trim()
+    try {
+      const r = await adapter.api(`/permission/${encodeURIComponent(id)}/reply`, 'POST', { reply })
+      if (r.status >= 200 && r.status < 300) return ''
+      // 兜底：按会话走的旧端点
+      if (dir) {
+        const r2 = await adapter.api(
+          `/session/${encodeURIComponent(dir)}/permissions/${encodeURIComponent(id)}`,
+          'POST',
+          { response: reply }
+        )
+        if (r2.status >= 200 && r2.status < 300) return ''
+      }
+      return `应答失败（HTTP ${r.status}）`
+    } catch (err) {
+      return String((err as Error).message ?? err)
+    }
+  }
+)
 
 /** 拉取 OpenAI 兼容端点的模型列表：GET {baseURL}/models */
 ipcMain.handle('models:fetch', async (_e, req: { baseURL: string; apiKey?: string }) => {

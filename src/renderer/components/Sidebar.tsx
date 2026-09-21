@@ -18,6 +18,9 @@ import { Modal } from './Modal'
 import { Switch } from './Switch'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
 
+/** 项目的访问权限档位（定义在主进程 types.ts，这里 re-export 给渲染层各处引用） */
+export type { AccessLevel } from '../../../electron/main/types'
+
 export interface Project {
   id: string
   path: string
@@ -121,9 +124,9 @@ export function Sidebar(p: Props) {
             <div className="proj-empty">
               <FolderPlus size={22} />
               <span>还没有项目</span>
-              <button className="ghost pick-dir" onClick={p.onAddProject}>
-                选择本地文件夹
-              </button>
+            <button className="ghost pick-dir" onClick={p.onAddProject}>
+              选择文件夹
+            </button>
             </div>
           )}
           {/*

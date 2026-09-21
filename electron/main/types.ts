@@ -220,6 +220,26 @@ export interface PlatformCfg {
   device: DeviceCfg | null
 }
 
+/**
+ * 访问权限档位 —— 决定 AI 操作文件时要不要先问过用户。
+ *
+ * **全局一档，对所有文件夹生效**，不按项目分别设。原因有二：
+ *   1. 内核的 `permission` 配置**一个实例只有一份**，且启动时一次性读入，物理上做不到按目录分开；
+ *   2. 用户心智上这也是「我信任这个 AI 到什么程度」的一件事，而不是「这个仓库给多少权限」——
+ *      换个项目就要重设一遍档位，只会让人搞不清现在到底放开了没有。
+ * 早期版本曾按目录存一张表，再取「最严一档」喂给内核，属于绕远路且行为难解释，已废弃。
+ *
+ * 两档，语义对齐用户直觉：
+ *   'default'  = 默认权限。**写操作要确认**：AI 每次改文件 / 写文件 / 执行命令，
+ *                界面先弹一个确认框告诉它要动哪个路径，用户点允许才继续。
+ *                读操作（看文件、搜代码）不打扰——那本来就是这个应用的全部意义。
+ *   'full'     = 完全控制。全部放行，不再逐次询问。
+ *
+ * 落点是内核的 `permission` 配置（read/edit/bash 等按 tool 设 allow|ask|deny），
+ * 见 config.ts 的 permissionCfgFor()。
+ */
+export type AccessLevel = 'default' | 'full'
+
 export interface Settings {
   providers: ProviderCfg[]
   mcps: McpCfg[]
@@ -235,6 +255,22 @@ export interface Settings {
   mobile: boolean
   /** 平台登录态（第三方 provider 与它并存，不互相影响） */
   platform: PlatformCfg
+  /**
+   * 桌面控制（截屏 + 模拟键鼠操作本机）是否启用，**默认关**。
+   *
+   * 这是个很重的能力：开了以后 AI 能看整块屏幕、能动键盘鼠标，风险面远大于读写文件。
+   * 所以不做成内置默认项，交给用户在「设置 → 浏览器与扩展」里自己打开——
+   * 开关同时控制 desktop-helper（app_running 查进程）与 computer-use（截屏键鼠）两个 MCP，
+   * 见 config.ts buildOpencodeConfig。
+   */
+  desktopControl: boolean
+  /**
+   * 访问权限档位，**全局一份、对所有文件夹生效**（默认 'default'：写操作要确认）。
+   *
+   * 为什么不按目录存：内核的 permission 是一份全局配置，按目录存再合并回去只是自欺；
+   * 而且「信任 AI 到什么程度」是用户的一条整体偏好，不该随切换项目而变。
+   */
+  access: AccessLevel
 }
 
 export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:9002'
@@ -244,7 +280,9 @@ export const DEFAULT_SETTINGS: Settings = {
   mcps: [],
   remote: false,
   mobile: false,
-  platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null }
+  platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
+  desktopControl: false,
+  access: 'default'
 }
 
 /** 平台状态（渲染层左下角登录入口用） */

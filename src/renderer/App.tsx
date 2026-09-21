@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderPlus, Settings } from 'lucide-react'
-import { Sidebar, type Project } from './components/Sidebar'
+import { Sidebar, type AccessLevel, type Project } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
 import { Titlebar } from './components/Titlebar'
@@ -51,10 +51,8 @@ export default function App() {
   const [browserSignal, setBrowserSignal] = useState(0)
   /** 自增计数：浏览器打开时标题栏最大化按钮接管面板放大/还原 */
   const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
-  /** 自增计数：全屏浏览时标题栏「AI 对话」按钮收起/展开右下角浮动对话卡 */
-  const [floatSignal, setFloatSignal] = useState(0)
-  /** 浏览器面板开合/放大/浮动对话卡/对话彻底隐藏（ChatView 上报），驱动标题栏按钮行为与图标 */
-  const [browserUi, setBrowserUi] = useState({ open: false, max: false, float: false, chatHidden: false })
+  /** 浏览器面板开合/放大（ChatView 上报），驱动标题栏浏览器按钮的行为与图标 */
+  const [browserUi, setBrowserUi] = useState({ open: false, max: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -63,7 +61,10 @@ export default function App() {
     mcps: [],
     remote: false,
     mobile: false,
-    platform: { baseUrl: '', token: '', user: null, models: [], device: null }
+    platform: { baseUrl: '', token: '', user: null, models: [], device: null },
+    // 桌面控制默认关；access 'default' = 写操作要确认（均与主进程 DEFAULT_SETTINGS 一致）
+    desktopControl: false,
+    access: 'default'
   })
   const [settingsReady, setSettingsReady] = useState(false)
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
@@ -87,6 +88,14 @@ export default function App() {
   const [mobileBusy, setMobileBusy] = useState(false)
   /** 操作失败提示（如「打开文件夹」找不到目录），用自绘弹窗而非原生 alert */
   const [notice, setNotice] = useState('')
+  /**
+   * 待确认的权限升级：用户点了「完全控制」后先存这里，弹确认框，点确认才真落盘。
+   *
+   * 为什么不直接切：完全控制意味着 AI 不再问一声就能改**任何文件夹**里的文件。
+   * 这是个**后果不可逆且会长期生效**的选择，值得挡一道——用户点错的成本远高于多点一下。
+   * 降级到「默认权限」不拦（收权限本来就是安全方向，趁机再确认纯属添乱）。
+   */
+  const [accessAsk, setAccessAsk] = useState<{ level: AccessLevel } | null>(null)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -310,11 +319,38 @@ export default function App() {
   }
 
   async function addProject() {
-    const path = await window.qingniao.pickDir()
-    if (!path || projects.some((x) => x.path === path)) return
+    // 允许访问的范围由系统权限对话框决定（macOS 在那里勾「完全访问」即可；Windows/Linux
+    // 的 showOpenDialog 本身就是完整授权），所以这里不做二次校验、也不因为"访问受限"就拒绝加入——
+    // 加了但读不到时，报错由内核在真正读写时给出，比在这里猜更准确。
+    let path: string | null
+    try {
+      path = await window.qingniao.pickDir()
+    } catch (e) {
+      // 对话框本身没弹出来（极少见）：必须说一声，否则点完毫无动静像卡死
+      setNotice(`没能打开选择文件夹对话框：${e instanceof Error ? e.message : String(e)}`)
+      return
+    }
+    if (!path) return // 用户取消
+    // 已在列表里：不重复添加，但要**切过去**——用户点它就是想用它，
+    // 静默 return 会让人以为没点动（尤其是已存在的目录在列表下方时）
+    const exist = projects.find((x) => x.path === path)
+    if (exist) {
+      setActiveId(exist.id)
+      save('qingniao.activeProject', exist.id)
+      setExpanded((e) => ({ ...e, [exist.id]: true }))
+      setSessionId('')
+      toChat()
+      setFocusTick((t) => t + 1)
+      return
+    }
     const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
     const proj: Project = { id: 'p' + Date.now(), path, name, added: Date.now() }
+    // 新加的项目要顶到最前（仅次「任务」目录），所以 added 得压过现有项目的活动时间：
+    // 用 now 与「已有最大活动时间 + 1」取大值，避免刚加完就被一个刚聊过的老项目挤下去
+    const top = Math.max(Date.now(), ...projects.map((x) => lastActive[x.id] ?? x.added ?? 0)) + 1
+    proj.added = top
     setProjectsPersisted([...projects, proj])
+    setLastActive((a) => ({ ...a, [proj.id]: top }))
     setActiveId(proj.id)
     save('qingniao.activeProject', proj.id)
     setExpanded((e) => ({ ...e, [proj.id]: true }))
@@ -469,9 +505,40 @@ export default function App() {
     if (err) setNotice(err)
   }
 
-  // 展示顺序：最近有对话活动的文件夹排最前
+  /** 全局访问权限档位（权限对所有文件夹生效，不跟项目走） */
+  const access: AccessLevel = settings.access === 'full' ? 'full' : 'default'
+
+  /**
+   * 拨访问权限档位。
+   *
+   * 升级到「完全控制」先弹确认（见 accessAsk 注释），降级直接生效。
+   * 落盘后立刻回读设置——权限写的是 `settings.access`，不回读的话 UI 上的选中态
+   * 要等下一次整体刷新才跟着变，看着像没点动。
+   * 生效需要重载内核配置，这一步由主进程在落盘后自动重启内核完成（用户不需要手动做什么）。
+   */
+  async function setAccess(level: AccessLevel) {
+    if (level === 'full' && access !== 'full') {
+      setAccessAsk({ level })
+      return
+    }
+    setSettings(await window.qingniao.setAccess(level))
+  }
+
+  /** 确认框点「确认」：真正落盘，主进程会自动重启内核让权限生效 */
+  async function applyAccess() {
+    const ask = accessAsk
+    setAccessAsk(null)
+    if (!ask) return
+    setSettings(await window.qingniao.setAccess(ask.level))
+    setNotice('已切换为「完全控制」：AI 读写文件、执行命令都不再询问（对所有文件夹生效）。')
+  }
+
+  // 展示顺序：最近有对话活动的文件夹排最前，但「任务」目录（builtin）永远钉在最上面
+  // （「选择文件夹」下拉与左栏共用这一份顺序，见 Sidebar.tsx 的同款排序）
   const orderedProjects = [...projects].sort(
-    (a, b) => (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
+    (a, b) =>
+      Number(!!b.builtin) - Number(!!a.builtin) ||
+      (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
   )
 
   return (
@@ -480,9 +547,7 @@ export default function App() {
         onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
         browserOpen={browserUi.open}
         browserMax={browserUi.max}
-        chatHidden={browserUi.chatHidden}
         onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
-        onToggleFloat={() => setFloatSignal((v) => v + 1)}
       />
       <div className="app">
         <Sidebar
@@ -537,10 +602,11 @@ export default function App() {
             focusSignal={focusTick}
             browserToggleSignal={browserSignal}
             browserMaxSignal={browserMaxSignal}
-            floatToggleSignal={floatSignal}
             onBrowserUi={setBrowserUi}
             onOpenSettings={() => openSettingsAt('providers')}
             onPickDir={addProject}
+            access={access}
+            onAccess={setAccess}
             onSwitchProject={(id) => {
               if (id === activeId) return
               setActiveId(id)
@@ -586,6 +652,28 @@ export default function App() {
           <div className="actions">
             <button className="primary" onClick={() => setNotice('')}>
               知道了
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* 切「完全控制」前的确认：把后果说清（不再询问、影响所有文件夹），让用户明确点一下 */}
+      {accessAsk && (
+        <Modal title="切换为完全控制？" onClose={() => setAccessAsk(null)}>
+          <p className="confirm-text">
+            访问权限将改为<strong>完全控制</strong>：
+            AI 之后读写文件、执行命令都<strong>不再先问你</strong>，直接动手。
+          </p>
+          <p className="confirm-text hint">
+            这条权限<strong>对所有文件夹生效</strong>，不是只对当前项目。如果只是想让它改一次，
+            保持「默认权限」、在弹确认时点「仅这一次」更稳妥。
+          </p>
+          <div className="actions">
+            <button className="ghost" onClick={() => setAccessAsk(null)}>
+              取消
+            </button>
+            <button className="primary danger-btn" onClick={() => void applyAccess()}>
+              确认切换
             </button>
           </div>
         </Modal>

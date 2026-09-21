@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
+import type { AccessLevel, DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
 import { DEFAULT_PLATFORM_URL, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
@@ -87,8 +87,8 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
           enabled: m.enabled !== false
         }))
     : []
-  // 内置浏览器默认开启：没记录过开关的新/旧配置都开，用户显式关过（false）才保持关；
-  // 桌面控制涉及键鼠操控，默认关；移动端连接会把服务暴露到局域网，默认关
+  // 内置浏览器默认开启（它没有开关：没记录过的新/旧配置都开）；
+  // 桌面控制涉及键鼠操控，**默认关**，用户显式存过 true 才开；移动端连接会把服务暴露到局域网，默认关
   // 平台登录态：地址、token、用户、模型清单都是纯数据；缺字段一律落默认
   const rawPlatform = (raw?.platform ?? {}) as Partial<PlatformCfg>
   const rawDevice = rawPlatform.device as Partial<DeviceCfg> | null | undefined
@@ -115,12 +115,49 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
   return {
     providers,
     mcps,
-    // 内置浏览器与桌面控制不再有开关（旧存档里那两个键读到时直接忽略）：见 writeOpencodeConfig 的挂载段
+    // 内置浏览器没有开关（见 writeOpencodeConfig 的挂载段：面板 MCP 一直是开的）
     // 远程服务默认关：只有显式存过 true 才开（老配置没有这个键，自然落到关）
     remote: raw?.remote === true,
     mobile: raw?.mobile === true,
-    platform
+    platform,
+    // 桌面控制默认关：只有显式存过 true 才开（老配置没有这个键 → 关，符合「不内置、让用户自己开」）
+    desktopControl: raw?.desktopControl === true,
+    // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
+    access: normalizeAccess(raw?.access)
   }
+}
+
+/**
+ * 访问权限归一化：**全局一档**，只认 'full' | 'default'，其余一律落 'default'。
+ *
+ * 兼容老存档：早期版本存的是 `{ "<项目路径>": "full" }` 这张按目录表，现在若读到对象，
+ * 取「只要有任一条是 full 就算 full」——用户当初既然对某个目录开过完全控制，
+ * 说明他整体上愿意放开，升级后不该反而被收紧；其余键值（含形状不对的）一律忽略。
+ */
+function normalizeAccess(raw: unknown): AccessLevel {
+  if (raw === 'full') return 'full'
+  if (raw && typeof raw === 'object') {
+    const vals = Object.values(raw as Record<string, unknown>)
+    return vals.includes('full') ? 'full' : 'default'
+  }
+  return 'default'
+}
+
+/**
+ * 内核 `permission` 配置：按访问档位生成。
+ *
+ * 两档的差别只在**写操作**上——`edit`（改文件）、`bash`（执行命令）默认要确认；
+ * 读类的 `read` / `glob` / `grep` / `list` 一律放行：这是本应用的核心用途，
+ * 每看一眼文件都弹框只会把人逼疯，而读操作本身不可逆伤害为 0。
+ *
+ * 注意内核对**项目外**目录的写入本来就是 'ask'（external_directory），这里不动它——
+ * 用户授权的是「这个项目目录」，越过边界仍然要问。
+ */
+function permissionCfgFor(level: AccessLevel): Record<string, unknown> {
+  if (level === 'full') {
+    return { edit: 'allow', bash: 'allow' }
+  }
+  return { edit: 'ask', bash: 'ask' }
 }
 
 /**
@@ -184,6 +221,23 @@ export function setMobileEnabled(on: boolean): void {
   s.mobile = on
   mkdirSync(storeDir(), { recursive: true })
   writeFileSync(settingsPath(), JSON.stringify(normalize(s), null, 2))
+}
+
+/**
+ * 只改「全局访问权限档位」并落盘——**不重启内核**。
+ *
+ * 同 setMobileEnabled 的理由：拨档位只是改一个数，走 saveSettings 会让内核白重启一次，
+ * 正在跑的任务直接断掉。档位真正生效需要内核重载配置（permission 是启动时读的），
+ * 由界面侧显式确认后再走一次保存即可。
+ *
+ * 权限是**全局一份、对所有文件夹生效**，所以这里不需要任何路径参数。
+ */
+export function setAccess(level: AccessLevel): Settings {
+  const s = loadSettings()
+  s.access = normalizeAccess(level)
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(normalize(s), null, 2))
+  return s
 }
 
 /** provider 密钥经环境变量注入（opencode.json 的 {env:...} 插值） */
@@ -407,7 +461,9 @@ export function writeOpencodeConfig(s: Settings): void {
     }
   }
   const mcp: Record<string, unknown> = {}
-  // 内置浏览器与桌面控制是内置能力，一律挂上，不再受设置开关控制（要停得改这份配置本身）
+  // 内置浏览器是应用自身的一部分（右侧面板里的 webview），永远挂上、不受设置开关控制
+  // （要停得改这份配置本身）。桌面控制（浏览器里操作桌面 / 截屏键鼠）则与「浏览器与扩展」
+  // 其它 MCP 一样**默认不内置**：它能力很重（能看屏幕、能动键鼠），让用户在设置里自己开。
   if (panelMcp) {
     // 内置浏览器 = 右侧面板里的 webview：AI 与用户看同一个浏览器（登录态共享），
     // 靠元素 ref 定位点击/输入，不依赖模型支持图片。playwright 独立浏览器已由它取代。
@@ -417,8 +473,12 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   }
-  // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
-  if (desktopMcp) {
+  // 桌面控制开关：用户在「设置 → 浏览器与扩展」里显式打开后才挂这两个 MCP。
+  // desktop-helper（app_running 查进程）与 computer-use（截屏 + 键鼠）是同一件事的两半，
+  // 共用这一个开关——只挂一半会让模型「知道应用在跑却点不动」。
+  const desktopOn = s.desktopControl === true
+  if (desktopOn && desktopMcp) {
+    // 桌面辅助：app_running 给模型确定性的「应用在不在跑」答案，杜绝重复启动实例
     mcp['desktop-helper'] = { type: 'local', command: ['node', desktopMcp.path], enabled: true }
   }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
@@ -523,7 +583,7 @@ export function writeOpencodeConfig(s: Settings): void {
   // 电脑控制的视觉叠加：把 computer-use-mcp 包一层。截图原样透传，另外附一段视觉模型写的
   // 画面文字描述——收不了图的模型（deepseek 等）被内核丢掉 image 后，靠这段文字照样看得见屏幕。
   // 「文本 + 图片 + 视频」之外再叠一层视觉，桌面控制不再闭眼点鼠标。
-  if (screenMcp) {
+  if (desktopOn && screenMcp) {
     mcp['computer-use'] = {
       type: 'local',
       command: ['node', screenMcp.path],
@@ -536,7 +596,7 @@ export function writeOpencodeConfig(s: Settings): void {
       timeout: 180000,
       enabled: true
     }
-  } else {
+  } else if (desktopOn) {
     // 兜底（screen 脚本缺失）：退回直接挂原始的 computer-use-mcp
     mcp['computer-use'] = {
       type: 'local',
@@ -554,7 +614,7 @@ export function writeOpencodeConfig(s: Settings): void {
       mcp[m.name] = { type: 'local', command: argv, enabled: m.enabled }
     }
   }
-  // 内置浏览器与桌面控制常驻，这份工具路由约定也就常驻
+  // 内置浏览器常驻；桌面控制按开关决定在不在，工具路由约定也就跟着拆成两段
   const instructions: string[] = []
   const routing = join(opencodeConfigDir(), 'qingniao-tools.md')
   writeFileSync(
@@ -564,25 +624,32 @@ export function writeOpencodeConfig(s: Settings): void {
       '它与用户看同一个浏览器、登录态共享，靠元素 ref 定位点击/输入，不需要截屏。**本回复里给出的 URL 要打开时同样走 panel_*。**\n' +
       '- **网页内容一律用 `panel_snapshot` 读（文本元素清单 + 标题），严禁为了「看看打开没有 / 页面长什么样」去 `computer` 截屏**：' +
       '截屏要移动鼠标、等画面、还要求当前模型支持图片输入，比 snapshot 慢一个数量级，而且面板页面本来就能直接读到结构。\n' +
-      '- 只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时，才用 computer 工具（截屏 + 键鼠）去操作桌面浏览器。\n' +
-      '- **操作本机桌面应用一律用 `computer` 工具**（它在内置清单里，永远可用）：`{"action":"get_screenshot"}` 看画面 → ' +
-      '`left_click` / `type` / `key` 动手 → 再截屏确认。典型任务如「打开微信给文件助手发条消息」：' +
-      '截屏找到窗口 → 点搜索框 → `type` 搜「文件传输助手」→ 点开 → 点输入框 → `type` 正文 → `key` Return。\n' +
-      '- **严禁改用写代码的方式操作桌面**：不要 `bash` 跑 PowerShell 的 SendKeys / `Add-Type` UIAutomation / user32 `keybd_event`，' +
-      '也不要装 pyautogui、AutoIt、RobotJS 之类去模拟点击输入。这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。' +
-      '`bash` 在这类任务里只允许用来「启动一个进程」，其余一律 `computer`。\n' +
-      '- `computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
-      (visionTargets.length
-        ? '**若你只看到 `image_width` / `image_height` 这类尺寸文字、看不到画面，说明系统已经把截图交给视觉模型代看**——' +
-          '紧随其后的「【电脑画面（由 xxx 识别）】」段落就是画面内容，以它为准来决定点哪里。' +
-          '**这种情况下绝不要说「我看不到屏幕」、更不要改成写脚本硬猜**。\n' +
-          '- 上面那段「电脑画面」是别人转述的画面：坐标要按截图尺寸自己估算，点完后**必须再截屏确认**，若发现和描述不符就以最新截图为准。\n'
-        : '若你收不到画面（只看到尺寸文字、没有「【电脑画面】」段落），说明当前没有配置视觉模型：' +
-          '如实说明并让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，**不要退化成写脚本硬猜**。\n') +
-      '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
-      '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
-      '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
-      '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
+      (desktopOn
+        ? '- 只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时，才用 computer 工具（截屏 + 键鼠）去操作桌面浏览器。\n' +
+          '- **操作本机桌面应用一律用 `computer` 工具**（它在内置清单里，永远可用）：`{"action":"get_screenshot"}` 看画面 → ' +
+          '`left_click` / `type` / `key` 动手 → 再截屏确认。典型任务如「打开微信给文件助手发条消息」：' +
+          '截屏找到窗口 → 点搜索框 → `type` 搜「文件传输助手」→ 点开 → 点输入框 → `type` 正文 → `key` Return。\n' +
+          '- **严禁改用写代码的方式操作桌面**：不要 `bash` 跑 PowerShell 的 SendKeys / `Add-Type` UIAutomation / user32 `keybd_event`，' +
+          '也不要装 pyautogui、AutoIt、RobotJS 之类去模拟点击输入。这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。' +
+          '`bash` 在这类任务里只允许用来「启动一个进程」，其余一律 `computer`。\n' +
+          '- `computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
+          (visionTargets.length
+            ? '**若你只看到 `image_width` / `image_height` 这类尺寸文字、看不到画面，说明系统已经把截图交给视觉模型代看**——' +
+              '紧随其后的「【电脑画面（由 xxx 识别）】」段落就是画面内容，以它为准来决定点哪里。' +
+              '**这种情况下绝不要说「我看不到屏幕」、更不要改成写脚本硬猜**。\n' +
+              '- 上面那段「电脑画面」是别人转述的画面：坐标要按截图尺寸自己估算，点完后**必须再截屏确认**，若发现和描述不符就以最新截图为准。\n'
+            : '若你收不到画面（只看到尺寸文字、没有「【电脑画面】」段落），说明当前没有配置视觉模型：' +
+              '如实说明并让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，**不要退化成写脚本硬猜**。\n') +
+          '- 「打开某应用」动手前必须先调 app_running 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
+          '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为截屏找任务栏图标点击唤起，找不到再试 Alt+Tab 或系统托盘；\n' +
+          '  未在运行 → 才走启动流程，启动后截屏确认窗口出现。\n' +
+          '- 「打开某应用」直接就是任务：第一步调 app_running，不要先截屏猜、更不要直接 Win+R。'
+        : // 桌面控制没开：本轮**没有** computer / app_running 工具，不能让模型去找它们。
+          // 明确告知「用户可以在哪打开」，比让模型反复试一个不存在的工具好。
+          '- 本轮**没有** `computer` / `app_running` 等桌面控制工具（用户未启用）：' +
+          '遇到「打开某个应用 / 在桌面上操作 / 帮我点一下」这类要求，直接如实说明' +
+          '「桌面控制未启用，可在 设置 → 浏览器与扩展 里打开」，**不要试图用 `bash` 跑 PowerShell / pyautogui ' +
+          '模拟键鼠来绕过**——这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。')
   )
   instructions.push(routing)
   /**
@@ -656,6 +723,17 @@ export function writeOpencodeConfig(s: Settings): void {
     $schema: 'https://opencode.ai/config.json',
     provider,
     mcp,
+    /**
+     * 访问权限：**全局一档，对所有文件夹生效**（见 types.ts AccessLevel）。
+     *
+     * 内核的 permission 配置在**启动时一次性读入**，所以切档位必须重启内核才生效——
+     * 界面侧的切换提示与 saveSettings 的「保存并重启内核」流程已经覆盖这一点。
+     *
+     * 早先按「每个项目目录各存一档、再取最严的那档」来做，属于绕远路：内核本来就只有
+     * 一份全局 permission，按目录存既做不到真正的分目录，又让「现在到底是什么档位」
+     * 变得需要推演。现在直接是用户选的那一档。
+     */
+    permission: permissionCfgFor(s.access),
     instructions
   }
   writeFileSync(opencodeConfigPath(), JSON.stringify(cfg, null, 2))
