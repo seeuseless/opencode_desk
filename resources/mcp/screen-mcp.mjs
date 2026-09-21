@@ -15,7 +15,13 @@
 import { createInterface } from 'node:readline'
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { authorize, deniedText, markUsed } from './gate.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+/** 原生键盘输入脚本（与 uia 宿主共用同一份实现），见文件头的说明 */
+const WIN_INPUT_PS = join(HERE, 'win-input.ps1')
 
 const parse = (v) => {
   try {
@@ -87,7 +93,9 @@ function withDeadline(p, ms, msg) {
 
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n')
 /** 工具回执（含超时/失败说明）：用 isError 而非 JSON-RPC error——模型拿到的是可读原因，能据此继续 */
-const fail = (id, text) => send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text }], isError: true } })
+const textResult = (text) => ({ content: [{ type: 'text', text }] })
+const errResult = (text) => ({ content: [{ type: 'text', text }], isError: true })
+const fail = (id, text) => send({ jsonrpc: '2.0', id, result: errResult(text) })
 
 // ---------- 上游 computer-use-mcp 子进程：JSON-RPC 行协议透传 ----------
 /** 上游初始化失败时用它把 upstreamReady 打下去（声明在前，error 回调里才不会踩 TDZ） */
@@ -204,6 +212,16 @@ const upstreamReady = new Promise((resolve, reject) => {
     clientInfo: { name: 'screen-mcp', version: '1.0.0' }
   }).then(resolve, reject)
 })
+/**
+ * 预置一个 no-op 处理器，**不能删**。
+ *
+ * 这个 promise 只在真有 tools/call 进来时才被 await。若上游在第一次调用之前就挂了
+ * （`npx` 不在 PATH、包没装、安全软件拦截），裸 reject 会变成 **unhandled rejection**，
+ * Node 15+ 默认直接把进程带走——用户看到的是「桌面控制整块消失」，而不是「这一次截图失败」。
+ * 实测就是这么崩的：`spawn npx ENOENT` 之后 MCP 进程当场退出，内核侧连 tools/list 都拿不到。
+ * 挂上 catch 之后，reject 仍会正常传给 await 它的那次调用（错误信息照旧），进程活着。
+ */
+upstreamReady.catch(() => {})
 
 /** 上游 tools/list 的真实返回（1.8.0 实测抄录）：握手阶段直接交出，不等上游 */
 const STATIC_TOOLS = [
@@ -217,11 +235,13 @@ const STATIC_TOOLS = [
       '操作本机桌面应用，**先看能不能走无障碍树**：`uia_windows` 找窗口 → `uia_tree` 读元素 → ' +
       '`uia_click` / `uia_set_text` / `uia_focus` 操作。能用的应用（资源管理器、记事本、Office 等）' +
       '一律走这一档：纯文本、几十毫秒、不需要看画面，也**不需要也不许**截图。\n' +
-      '自绘界面（微信 4.0 等把 UI 画在画布上的应用）`uia_tree` 会回「没有任何可操作元素」——**看到空树就立刻转纯键盘流程**：' +
-      '`uia_window_focus "<窗口名>"` 提到前台（回执里的「前台窗口」不是目标时，**不要盲发按键**，' +
-      '先 `{"action":"left_click","coordinate":[x,y]}` 点一下目标窗口把它点成前台），' +
-      '再发快捷键：`{"action":"key","text":"ctrl+f"}` / `{"action":"key","text":"ctrl+v"}` / `{"action":"key","text":"return"}`。' +
-      '**中文一律用剪贴板 + `ctrl+v`，不要直接 `type`**（会被输入法拦掉）。这一整条链路是确定性的，**一条截图都不用**。\n' +
+      '自绘界面（微信 4.0 等把 UI 画在画布上的应用）`uia_tree` 会回「没有任何可操作元素」（实测只读得到标题栏三个按钮）——' +
+      '**看到空树就立刻转键盘流程**：按键一律用 `uia_keys {"keys":"ctrl+f","match":"微信"}`，' +
+      '粘贴一律用 `uia_paste {"match":"微信"}`（先把内容 set_clipboard 再粘贴）。两者带上 `match` 会先聚焦目标窗口并确认，' +
+      '切不过去就直接拒绝——所以键永远不会打进别的窗口。\n' +
+      '本工具的 `key` / `type` 动作**也走同一条原生通路**（不再用会丢修饰键的旧实现），但**青鸟自己的窗口永远不会被输入**：' +
+      '当前最前面是青鸟时，key/type 会被直接拒绝并提示你改用带 `match` 的 `uia_keys` / `uia_paste`。\n' +
+      '**中文/文件/图片一律走剪贴板 + `uia_paste`，不要用 `type` 直接打中文**（会被输入法拦掉）。这一整条链路是确定性的，**一条截图都不用**。\n' +
       '**`get_screenshot` 是最后的兜底：同一轮最多用一次，而且只能用来做开局判断（先决定点哪儿）**。' +
       '**严禁用截图去确认某一步成没成**——下面英文里「take successive screenshots to see the results of your actions」' +
       '与「consult a screenshot to determine the coordinates of the element」这两条**在青鸟里一律不适用**：' +
@@ -297,6 +317,48 @@ const STATIC_TOOLS = [
     },
     annotations: { readOnlyHint: false },
     execution: { taskSupport: 'forbidden' }
+  }
+]
+
+/**
+ * 本层自有工具（不代理上游）：剪贴板。
+ *
+ * 为什么要造它——用户实测卡在这一步过：
+ * 「生成一个鹈鹕图片并发送给微信好友」时，生图工具已经回了本地绝对路径，
+ * 但模型不知道怎么把一个**本地文件**交给微信（自绘界面里没有可点的「发送文件」元素），
+ * 于是它去调 vision_describe_image「看」这张图，还凭空编了个路径（工作目录下的 image.png），
+ * 报错后又 glob **\/*.png 找不到，最后只能回一句「未能读取到图片文件路径」摆烂。
+ *
+ * Windows 上把内容交给另一个程序，可靠手段其实只有**剪贴板 + Ctrl+V**：
+ *  · 中文文本：模拟按键打中文会被输入法拦掉（ID 里既有的老坑），剪贴板一步到位；
+ *  · 文件/图片：在微信、QQ 的聊天窗口里粘贴剪贴板中的文件或位图，等于直接发送该文件。
+ * 以前模型只能自己 `bash` 跑 PowerShell Set-Clipboard（能成，但绕、还常写错编码），
+ * 现在给它一个正经工具。
+ */
+const LOCAL_TOOLS = [
+  {
+    name: 'set_clipboard',
+    description:
+      '把内容放进 Windows 剪贴板，然后**用 `uia_paste {"match":"微信"}` 粘进目标窗口**（粘贴一律走这个组合，' +
+      '不要自己拼 `ctrl+v`——那样容易打进别的窗口）。三种模式：\n' +
+      '· `mode:"text"`（默认）——放文字。**往任何程序里输入中文都必须走这条路**（直接 type 会被输入法拦掉或出乱码）。\n' +
+      '· `mode:"image"`——把本地图片放进剪贴板（位图）。在微信/QQ 聊天窗口里粘贴会**作为图片消息发送**。\n' +
+      '· `mode:"file"`——把本地文件放进剪贴板（文件形式）。在微信/QQ 里粘贴会**作为文件发送**。\n' +
+      'files 传**本地绝对路径**：生图 / 生视频 / 转音频等工具回执里「本地文件：」那一行，原样照抄即可，不要改写、不要猜路径。\n' +
+      '**发送给真人/群之前，先用 `uia_read_input` 核对输入框里真实的内容**，确认无误再回车——粘错了就重新 set_clipboard 再粘一次。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['text', 'image', 'file'], description: '放什么进剪贴板，默认 text' },
+        text: { type: 'string', description: 'mode="text" 时要放进剪贴板的文字' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'mode="image"/"file" 时的本地文件绝对路径（image 只用第一个）'
+        }
+      }
+    },
+    annotations: { readOnlyHint: false }
   }
 ]
 
@@ -539,6 +601,264 @@ const correctShape = (why) =>
   '- `{"action":"scroll","coordinate":[640,360],"text":"down:500"}`\n' +
   '请严格按上面的形状改一次再调用，不要增删字段。'
 
+// ---------- 本层自有工具的实现：剪贴板 ----------
+/**
+ * `set_clipboard` 起一个**一次性** PowerShell，干完就退。三个约束缺一不可：
+ *  · **必须 STA**——`System.Windows.Forms.Clipboard` 在 MTA 线程上直接抛异常，所以带 `-STA`；
+ *  · **脚本必须纯 ASCII**——PS 5.1 会把无 BOM 的脚本按系统 ANSI 解码，脚本里写中文必乱码。
+ *    这里用 `-EncodedCommand`（UTF-16LE base64）把脚本送进去，业务数据（中文文本、中文路径）
+ *    再经 `QN_CLIP_B64`（UTF-8 base64）送，整条链路上没有一处会被编码搞坏；
+ *  · **SetImage / SetFileDropList 是「立即复制」语义**——数据已经交给系统剪贴板，
+ *    PowerShell 退出后内容依然有效，所以不必为它常驻一个进程。
+ */
+const CLIP_PS = process.env.QN_SCREEN_POWERSHELL || 'powershell.exe'
+const CLIP_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  'Add-Type -AssemblyName System.Windows.Forms',
+  'Add-Type -AssemblyName System.Drawing',
+  "$j=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:QN_CLIP_B64))|ConvertFrom-Json",
+  'function Emit($o){[Console]::Out.WriteLine(($o|ConvertTo-Json -Compress))}',
+  '$mode=[string]$j.mode',
+  "if($mode -eq 'file'){",
+  '  $c=New-Object System.Collections.Specialized.StringCollection',
+  '  foreach($f in @($j.files)){ if($f -and (Test-Path -LiteralPath $f)){ [void]$c.Add((Resolve-Path -LiteralPath $f).Path) } }',
+  "  if($c.Count -eq 0){Emit @{ok=$false;error='no_existing_file'};exit 0}",
+  '  [System.Windows.Forms.Clipboard]::SetFileDropList($c)',
+  "  Emit @{ok=$true;mode='file';count=$c.Count}",
+  '  exit 0',
+  '}',
+  "if($mode -eq 'image'){",
+  "  $f=[string]($j.files|Select-Object -First 1)",
+  "  if(-not $f -or -not (Test-Path -LiteralPath $f)){Emit @{ok=$false;error='no_existing_file'};exit 0}",
+  '  $p=(Resolve-Path -LiteralPath $f).Path',
+  '  $img=[System.Drawing.Image]::FromFile($p)',
+  '  [System.Windows.Forms.Clipboard]::SetImage($img)',
+  "  Emit @{ok=$true;mode='image';width=$img.Width;height=$img.Height}",
+  '  exit 0',
+  '}',
+  '$t=[string]$j.text',
+  '[System.Windows.Forms.Clipboard]::SetText($t)',
+  "Emit @{ok=$true;mode='text';length=$t.Length}"
+].join('\n')
+const CLIP_ENC = Buffer.from(CLIP_SCRIPT, 'utf16le').toString('base64')
+
+/** 跑一次剪贴板写入，返回 PowerShell 回执解析出的对象 */
+function runClipboard(payload) {
+  return new Promise((resolve) => {
+    let ps
+    try {
+      ps = spawn(CLIP_PS, ['-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', CLIP_ENC], {
+        env: { ...process.env, QN_CLIP_B64: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64') },
+        windowsHide: true
+      })
+    } catch (e) {
+      resolve({ ok: false, error: '启动 PowerShell 失败：' + (e?.message ?? e) })
+      return
+    }
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => {
+      try {
+        ps.kill()
+      } catch {}
+      resolve({ ok: false, error: '写剪贴板超时（15s）' })
+    }, 15000)
+    ps.stdout.on('data', (d) => (out += d.toString('utf8')))
+    ps.stderr.on('data', (d) => (err += d.toString('utf8')))
+    ps.on('error', (e) => {
+      clearTimeout(timer)
+      resolve({ ok: false, error: e?.message ?? String(e) })
+    })
+    ps.on('close', () => {
+      clearTimeout(timer)
+      const line = out.trim().split(/\r?\n/).filter(Boolean).pop() ?? ''
+      let j = null
+      try {
+        j = JSON.parse(line)
+      } catch {
+        /* 非 JSON：把原始输出带给模型 */
+      }
+      if (!j) {
+        resolve({ ok: false, error: (err.trim() || out.trim() || '没有任何输出').slice(-300) })
+        return
+      }
+      resolve(j)
+    })
+  })
+}
+
+/** files 里路径不对时的说明：直接点出「照抄回执里那条路径」，比泛泛报错有用 */
+const clipWhy = (error) =>
+  error === 'no_existing_file'
+    ? '路径在磁盘上不存在。请照抄生图 / 生视频 / 转音频工具回执里「本地文件：」那一行的**绝对路径**，不要改写、不要自己拼路径。'
+    : error
+
+async function runSetClipboard(args) {
+  const mode = String(args.mode ?? 'text').toLowerCase()
+  if (mode === 'text') {
+    const t = typeof args.text === 'string' ? args.text : ''
+    if (!t) return errResult('mode="text" 需要 text 参数（要放进剪贴板的文字）。')
+    const r = await runClipboard({ mode: 'text', text: t })
+    if (!r.ok) return errResult(`写剪贴板失败：${clipWhy(r.error)}`)
+    return textResult(
+      `已把 ${r.length ?? t.length} 个字符放进剪贴板。现在用 \`{"action":"key","text":"ctrl+v"}\` 粘贴到目标窗口的输入框里。`
+    )
+  }
+  if (mode !== 'image' && mode !== 'file') return errResult(`mode 只能是 text / image / file，收到的是 ${JSON.stringify(args.mode ?? null)}。`)
+  const files = (Array.isArray(args.files) ? args.files : []).map((x) => String(x)).filter(Boolean)
+  if (!files.length) return errResult(`mode="${mode}" 需要 files 参数（本地文件的绝对路径）。`)
+  const r = await runClipboard({ mode, files })
+  if (!r.ok) return errResult(`写剪贴板失败：${clipWhy(r.error)}`)
+  if (mode === 'image')
+    return textResult(
+      `已把图片放进剪贴板（位图 ${r.width}x${r.height}）。现在切到聊天窗口，用 \`{"action":"key","text":"ctrl+v"}\` 粘贴，` +
+        '再按一次 `{"action":"key","text":"return"}` 发送（微信里粘贴位图即作为图片消息）。'
+    )
+  return textResult(
+    `已把 ${r.count} 个文件放进剪贴板（文件形式）。现在切到聊天窗口，用 \`{"action":"key","text":"ctrl+v"}\` 粘贴，` +
+      '再按一次 `{"action":"key","text":"return"}` 发送（微信里粘贴文件即作为文件发送）。'
+  )
+}
+
+// ---------- 键盘动作：本层用原生 SendInput 接管，不走上游 nut-js ----------
+/**
+ * 为什么必须接管。
+ *
+ * 上游 computer-use-mcp 的 `key` 是 `keyboard.pressKey(...toKeys(text))`（nut-js）。在 Windows 上
+ * 组合键的修饰键经常不生效：`ctrl+v` 会变成往目标窗口里打一个**裸的 v**，`ctrl+f` 变成一个 f。
+ * 用户实测的原话是「发了个 F，明显是黏贴有问题」——粘贴退化成了输入单个字符，而整条链路
+ * 没有任何一步发现这件事。这里改用 win-input.ps1 的 SendInput（修饰键按住 → 主键 → 逆序释放，
+ * 分两批提交，实测按键序列完全正确），并在发送前加一道**青鸟自身窗口守卫**。
+ *
+ * `type` 同理：逐字符模拟按键既打不了中文（会被输入法拦掉），在自绘界面里也常常丢字，
+ * 所以改成「写剪贴板 + Ctrl+V」，与 set_clipboard 共用同一条可靠通路。
+ */
+function runWinInput(payload) {
+  return new Promise((resolve) => {
+    let ps
+    try {
+      ps = spawn(CLIP_PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', WIN_INPUT_PS], {
+        env: { ...process.env, QN_INPUT_B64: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64') },
+        windowsHide: true
+      })
+    } catch (e) {
+      resolve({ ok: false, error: 'spawn_failed', message: e?.message ?? String(e) })
+      return
+    }
+    let out = ''
+    let err = ''
+    const timer = setTimeout(() => {
+      try {
+        ps.kill()
+      } catch {}
+      resolve({ ok: false, error: 'timeout' })
+      // 冷启动实测约 4 秒（powershell 起 + Add-Type 现场编译 C#），首次执行还可能叠上杀软扫描。
+      // 给 20 秒：宁可多等一会，也不要让「第一次发按键」变成一次莫名其妙的超时失败。
+    }, 20000)
+    ps.stdout.on('data', (d) => (out += d.toString('utf8')))
+    ps.stderr.on('data', (d) => (err += d.toString('utf8')))
+    ps.on('error', (e) => {
+      clearTimeout(timer)
+      resolve({ ok: false, error: 'spawn_failed', message: e?.message ?? String(e) })
+    })
+    ps.on('close', () => {
+      clearTimeout(timer)
+      const line = out.trim().split(/\r?\n/).filter(Boolean).pop() ?? ''
+      let j = null
+      try {
+        j = JSON.parse(line)
+      } catch {
+        /* 非 JSON：把原始输出交给上层 */
+      }
+      if (!j) {
+        resolve({ ok: false, error: 'bad_output', message: (err.trim() || out.trim() || '没有任何输出').slice(-300) })
+        return
+      }
+      resolve(j)
+    })
+  })
+}
+
+/** 模型偶尔把组合键写成 `Ctrl-V` / `Ctrl + V`，统一成 `ctrl+v` 再交给 SendInput */
+function normalizeKeyString(raw) {
+  let t = String(raw ?? '').trim()
+  if (!t) return ''
+  t = t.replace(/\s*\+\s*/g, '+').replace(/\s+/g, '')
+  t = t.replace(/(ctrl|control|alt|shift|win|meta)[-](?=[a-z0-9])/gi, '$1+')
+  return t.toLowerCase()
+}
+
+/**
+ * 键盘类拒绝的人话文案。
+ *
+ * self_window 是用户明确要求的一道闸：「控制电脑的时候，我们自己的聊天窗口不要输入」。
+ * 落到模型侧必须是**明确改做法**，而不是「重试一次」。
+ */
+function keyRefusal(r) {
+  const msg = String(r?.message ?? '')
+  if (r?.error === 'self_window') {
+    return errResult(
+      '【已拒绝发送按键：当前最前面的窗口是青鸟自己】' +
+        (r.title ? `（「${r.title}」/ ${r.proc}）` : '') +
+        '\n按键会直接打进用户正在跟你对话的那个输入框，把用户正在写的内容搅乱。\n' +
+        '请带目标窗口改用 `uia_keys`（它会先把目标窗口切到前台、确认成功后才发键）：' +
+        '`uia_keys {"keys":"ctrl+v","match":"微信"}`；粘贴整段内容用 `uia_paste {"match":"微信"}`。'
+    )
+  }
+  if (r?.error === 'focus_refused') {
+    return errResult(
+      `【已放弃发送按键：没能把「${r?.name || r?.proc || r?.hwnd}」切到最前面】` +
+        '此时发键会打进当前前台那个窗口。请如实告诉用户请他手动点一下那个窗口，不要改用点坐标或截图硬试。'
+    )
+  }
+  if (msg.startsWith('unknown_key:')) {
+    return errResult(
+      `不认识这个按键名：${msg.slice('unknown_key:'.length)}。` +
+        '按键串请用 `ctrl+v` / `ctrl+f` / `shift+tab` / `return` / `esc` 这种写法（小写、用 + 连接）。'
+    )
+  }
+  if (r?.error === 'exception' && /empty_keys/.test(msg)) return errResult('按键串是空的，请给出具体按键，如 `"ctrl+v"`。')
+  if (r?.error === 'send_failed' || r?.error === 'exception') {
+    return errResult(
+      '按键没有送出去（`' + (msg || r.error) + '`）。最常见的原因是目标窗口属于**管理员权限**进程，' +
+        '普通权限的输入会被系统挡下；请如实告诉用户这一步没能执行。'
+    )
+  }
+  if (r?.error === 'timeout') {
+    return errResult(
+      '这一步没能在时限内完成（多半是输入层首次启动偏慢，或系统当时正忙）。\n' +
+        '**直接再做一次同样的调用即可**——第二次通常是秒回。不要改用点坐标或截图硬试。'
+    )
+  }
+  return errResult(`键盘操作失败：${msg || r?.error || '未知原因'}`)
+}
+
+async function runKeyboardAction(action, args) {
+  if (action === 'type') {
+    const text = String(args?.text ?? '')
+    if (!text) return errResult('action="type" 需要 text 参数。')
+    const w = await runClipboard({ mode: 'text', text })
+    if (!w.ok) return errResult('写剪贴板失败：' + clipWhy(w.error))
+    const r = await runWinInput({ mode: 'keys', keys: 'ctrl+v' })
+    if (r.ok !== true) return keyRefusal(r)
+    return textResult(
+      '已把这段文字输入到当前焦点窗口（改用**写剪贴板 + Ctrl+V**：逐字符模拟按键打不了中文，还会被输入法拦掉）。\n' +
+        '注意：系统剪贴板现在装的是这段文字——如果你之前往剪贴板放过文件/图片，那个内容已经被覆盖，要重发得重新 set_clipboard。'
+    )
+  }
+  const keys = normalizeKeyString(args?.text)
+  if (!keys) return errResult('action="key" 需要 text 参数（按键串，如 "ctrl+v"）。')
+  const r = await runWinInput({ mode: 'keys', keys })
+  if (r.ok !== true) return keyRefusal(r)
+  return textResult(`已按 ${keys}（原生 SendInput，按键序列确定生效）。`)
+}
+
+// ---------- 预热输入层 ----------
+// powershell 启动 + Add-Type 现场编译 C# 实测约 4 秒；若第一次真发按键正好赶上这段冷启动，
+// 很容易在时限上被判成超时（实测就撞过一次：第一次 computer key 超时、第二次秒回）。
+// 开机后在后台先跑一次只读的 foreground（零副作用），把这段耗时挪出关键路径。
+void runWinInput({ mode: 'foreground' })
+
 // ---------- 主循环：透传 initialize / tools，只改 get_screenshot 的返回 ----------
 createInterface({ input: process.stdin }).on('line', async (line) => {
   if (!line.trim()) return
@@ -568,7 +888,18 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     return
   }
   if (method === 'tools/list') {
-    send({ jsonrpc: '2.0', id, result: { tools: STATIC_TOOLS } })
+    // 自有工具与上游 computer 并列交出；前缀（computer-use_）由内核注册时统一加
+    send({ jsonrpc: '2.0', id, result: { tools: [...STATIC_TOOLS, ...LOCAL_TOOLS] } })
+    return
+  }
+  // 自有工具（set_clipboard）：本层直接处理，不走上游那条链路
+  const localName = String(params?.name ?? '').replace(/^computer-use_/, '')
+  if (method === 'tools/call' && LOCAL_TOOLS.some((t) => t.name === localName)) {
+    try {
+      send({ jsonrpc: '2.0', id, result: await runSetClipboard(params?.arguments ?? {}) })
+    } catch (e) {
+      fail(id, '写剪贴板失败：' + (e?.message ?? e))
+    }
     return
   }
   // computer 的入参先在本层归一化 + 校验：上游是 z.strict()，字段名差一个字就整次调用失败，
@@ -582,6 +913,18 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       return
     }
     callParams = { ...params, arguments: n.args }
+  }
+  /**
+   * 键盘动作（key / type）由本层接管，**不转发给上游 nut-js**（见 runKeyboardAction 的说明）。
+   * 放在截图熔断与授权闸门之前：它既不截图、也不调用别的模型，没有任何需要审批的东西。
+   */
+  if (isComputerCall && (callParams?.arguments?.action === 'key' || callParams?.arguments?.action === 'type')) {
+    try {
+      send({ jsonrpc: '2.0', id, result: await runKeyboardAction(callParams.arguments.action, callParams.arguments) })
+    } catch (e) {
+      fail(id, '键盘操作失败：' + (e?.message ?? e))
+    }
+    return
   }
   /**
    * 截图熔断：先于授权闸门判断——既然这次调用注定要被拒，就别再弹卡片打扰用户。

@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setUiaMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setSelfRefs, setUiaMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import type { AccessLevel } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
@@ -57,6 +57,30 @@ function createWindow(): void {
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
+  })
+  /**
+   * 把自己的原生窗口句柄与窗口标题一起报给 MCP 的键盘守卫。
+   *
+   * 为什么在有了 pid 之后还要这两样：
+   *  · pid 判据依赖「Electron 顶层窗口属于主进程」这个实现细节——Windows 上渲染进程所属的窗口、
+   *    以及后开的窗口常常报的是另一个 pid，光靠 pid 会漏判（实测就漏过：前台明明是青鸟的窗口，
+   *    却因为 pid 对不上而被放行，按键直接打进了用户的对话框）。
+   *  · 标题是兜底判据：应用今后开的任何窗口，标题都以本应用名开头，不依赖 pid 也不依赖句柄。
+   * 窗口建好才知道句柄、标题随后还可能被渲染层改写，而 MCP 的环境变量是内核启动时写死的——
+   * 所以这里持续记下来，下一次写配置（保存设置 → 重启内核）时自然带进去。
+   */
+  try {
+    const buf = mainWin.getNativeWindowHandle()
+    const hwnd = buf.length >= 8 ? Number(buf.readBigUInt64LE(0)) : buf.readUInt32LE(0)
+    const t = mainWin.getTitle()
+    if (Number.isFinite(hwnd) && hwnd > 0) setSelfRefs({ pids: [process.pid], hwnds: [hwnd], titles: t ? [t] : [] })
+  } catch {
+    /* 拿不到句柄就算了，pid 与标题那两道判据还在 */
+  }
+  // 渲染层会按当前会话改写标题（「青鸟 QingNiao — xxx」）；前缀匹配本来就能覆盖，
+  // 但标题若是被整体换掉的，这里把新标题也并进清单，避免守卫漏判。
+  mainWin.on('page-title-updated', (_e, t) => {
+    if (t) setSelfRefs({ titles: [t] })
   })
   const sendMax = (v: boolean) => mainWin?.webContents.send('win:maximized', v)
   mainWin.on('maximize', () => sendMax(true))
@@ -960,6 +984,10 @@ app.whenReady().then(async () => {
   setVisionMcp({ path: visionMcpPath() })
   setScreenMcp({ path: screenMcpPath(), upstreamBin: builtinComputerUseMcp() })
   setUiaMcp({ path: uiaMcpPath() })
+  // 「不要往这些窗口里输入」清单：主进程自己的 pid。窗口的原生句柄要等 createWindow
+  // 之后才有，那时补进 selfRefs（下一次重启内核时写进 MCP 环境）。pid 这一步已经够用——
+  // Chromium 的顶层窗口句柄就属于主进程。
+  setSelfRefs({ pids: [process.pid] })
   setTtsMcp({ path: ttsMcpPath() })
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })

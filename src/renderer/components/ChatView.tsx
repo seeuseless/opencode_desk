@@ -1642,19 +1642,26 @@ export function ChatView(p: Props) {
               '这一轮的任务是**操作本机桌面 / 桌面应用**（不是浏览网页）。\n' +
               '- 优先走无障碍树（`uia_windows` 找窗口 → `uia_tree` 读元素 → `uia_click` / `uia_set_text` / `uia_focus`）：' +
               '原生控件应用（资源管理器、记事本、系统设置等）走这一档，纯文本、几十毫秒、不需要看图。\n' +
-              '- 自绘界面（微信这类，`uia_tree` 会明确回「没有可操作元素」）改用**键盘动作**：' +
+              '- 自绘界面（微信这类，`uia_tree` 会明确回「没有可操作元素」，实测只剩标题栏三个按钮）改用**键盘流程**：' +
               '`uia_tree` 一旦告诉你树是空的，**立刻转键盘，不要再试第二遍 `uia_windows` / `uia_tree`**。\n' +
-              '  先 `uia_window_focus "微信"` 把窗口提到前台，再看它回的 `前台窗口` 是不是目标——' +
-              '**不是目标就不要发按键**（键会打进别的窗口），改用 `{"action":"left_click","coordinate":[x,y]}` ' +
-              '点一下那个窗口的可见区域把它点成前台，然后再发键。\n' +
-              '  **按键串一律放 `text` 字段**：`{"action":"key","text":"ctrl+f"}`（Ctrl+F）、' +
-              '`{"action":"key","text":"return"}`（回车）、`{"action":"type","text":"要输入的文字"}`（输入）、' +
-              '`{"action":"left_click","coordinate":[x,y]}`（点坐标）。' +
-              '**只有 action / coordinate / text 三个字段——写 `key`/`keys`/`hotkey` 会被判参数非法**。\n' +
-              '  键盘路线是**确定性流程，全程不需要看画面**。微信完整例子：`uia_window_focus "微信"` → ' +
-              '`{"action":"key","text":"esc"}` → `{"action":"key","text":"ctrl+f"}` → ' +
-              '`{"action":"key","text":"ctrl+v"}`（先用剪贴板放好会话名）→ `{"action":"key","text":"return"}` ' +
-              '→ 剪贴板换成正文 → `{"action":"key","text":"ctrl+v"}` → `{"action":"key","text":"return"}`。\n' +
+              '  **按键一律用 `uia_keys` 并带上目标窗口**：`uia_keys {"keys":"ctrl+f","match":"微信"}`——' +
+              '它会先把目标窗口切到前台、确认成功后才发键；切不过去就直接拒绝，**绝不会把键打进别的窗口**。\n' +
+              '  **粘贴一律用 `uia_paste`**（内容先用 `computer-use_set_clipboard` 放好）：`uia_paste {"match":"微信"}`。' +
+              '它粘贴前会先 Ctrl+A 全选，**是覆盖不是追加**——不管输入框里原本剩着什么，粘完里面就是你要发的这一份，重发不会叠成两份。\n' +
+              '  **青鸟自己的窗口永远不会被输入**：当前最前面是青鸟（就是用户正在跟你对话的这个窗口）时，按键类调用会被' +
+              '**直接拒绝**——这是保护用户输入框的一道闸，不是故障；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n' +
+              '  **发给真人 / 群的消息，在按回车之前先用 `uia_read_input` 核对输入框里真实的内容**' +
+              '（Ctrl+A + Ctrl+C 把输入框内容读回来，**不需要截图**）；内容不对就重新 set_clipboard 再 ' +
+              '`uia_paste {"match":"微信","enter":false}` 粘一次，**别把明显不对的内容发出去**。\n' +
+              '  键盘路线是**确定性流程，全程不需要看画面**。微信完整例子：' +
+              '`uia_keys {"keys":"esc","match":"微信"}` → `uia_keys {"keys":"ctrl+f","match":"微信"}` → ' +
+              '`computer-use_set_clipboard`（mode="text" 放好会话名）→ `uia_paste {"match":"微信"}`（打开会话）→ ' +
+              '`computer-use_set_clipboard`（mode="text" 换成正文）→ `uia_paste {"match":"微信","enter":false}` → ' +
+              '`uia_read_input {"match":"微信"}` 核对内容 → `uia_keys {"keys":"return","match":"微信"}`。\n' +
+              '  **要发送本地文件 / 图片**（如「把这张图发给微信好友 X」）：`computer-use_set_clipboard` 的 ' +
+              'mode="image"（发图片消息）或 mode="file"（发文件），files 填前面工具回执里「本地文件：」那一行的绝对路径，' +
+              '再 `uia_paste {"match":"微信"}` 发出。' +
+              '**不要为了「确认图片内容」去调识图工具**，也不要用 glob 满目录找图片——路径就在回执里。\n' +
               '- **截屏是最后的最后兜底，同一轮最多用一次**：只有「无障碍树和键盘都不适用」（游戏、纯 canvas）' +
               '才用 `{"action":"get_screenshot"}`，而且**只能用来决定「先点哪儿」这种开局判断**。\n' +
               '  **严禁用截屏去确认某一步成没成**——每一步都截一张就是用户看到的「反复截图死循环」：' +

@@ -3,7 +3,7 @@
 # desktop apps by element name instead of screenshots.
 #
 # Protocol
-#   in : {"id":<any>,"method":"windows|tree|invoke|set_value|focus|focus_window|ping","params":{...}}
+#   in : {"id":<any>,"method":"windows|tree|invoke|set_value|focus|focus_window|send_keys|paste|read_input|foreground|ping","params":{...}}
 #   out: {"id":<any>,"ok":true|false,...}
 #
 # NOTE: this file MUST stay pure ASCII. Windows PowerShell 5.1 decodes a .ps1 without a BOM
@@ -41,8 +41,19 @@ public class QnW32 {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, IntPtr pid);
   [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr h, bool altTab);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  // Last-resort foreground grab: a real mouse click somewhere on the window. Windows grants
+  // foreground rights to whoever owns the last input event, so clicking the window (we use its
+  // title bar) is the one trick that always works, whereas the API calls above are best-effort.
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr dwExtraInfo);
 }
 "@
+
+# Native keyboard input (SendInput) + the self-window guard live in win-input.ps1 so that
+# screen-mcp can drive the exact same code path. Dot-sourcing only defines functions - the
+# one-shot runner inside it stays inert because QN_INPUT_B64 is not set here.
+. (Join-Path $PSScriptRoot 'win-input.ps1')
 
 $ctl = [System.Windows.Automation.TreeWalker]::ControlViewWalker
 
@@ -287,14 +298,22 @@ function Do-Focus($ref) {
 }
 
 function Do-FocusWindow($params) {
-  $w = Get-WindowByMatch ([string]$params.match)
+  $w = $null
+  if ($null -ne $params -and $null -ne $params.hwnd -and [string]$params.hwnd -ne '') {
+    foreach ($x in Get-WindowList) {
+      if ([int]$x.hwnd -eq [int]$params.hwnd) { $w = $x; break }
+    }
+  }
+  if ($null -eq $w) { $w = Get-WindowByMatch ([string]$params.match) }
   if ($null -eq $w) { return @{ ok = $false; error = 'window_not_found' } }
   $h = ToHwnd $w.hwnd
+  $target = [int]$w.hwnd
   [void][QnW32]::ShowWindow($h, 9)
   $sent = [QnW32]::SetForegroundWindow($h)
   Start-Sleep -Milliseconds 200
   $fg = [int][QnW32]::GetForegroundWindow()
-  if ($fg -ne [int]$w.hwnd) {
+  $via = 'SetForegroundWindow'
+  if ($fg -ne $target) {
     # Round 1: join our input queue to the current foreground thread, then take the foreground.
     try {
       $fgThread = [QnW32]::GetWindowThreadProcessId([IntPtr]$fg, [IntPtr]::Zero)
@@ -306,8 +325,9 @@ function Do-FocusWindow($params) {
     } catch {}
     Start-Sleep -Milliseconds 150
     $fg = [int][QnW32]::GetForegroundWindow()
+    $via = 'AttachThreadInput'
   }
-  if ($fg -ne [int]$w.hwnd) {
+  if ($fg -ne $target) {
     # Round 2: minimize + restore resets the foreground ladder, then SwitchToThisWindow
     # (the API built for exactly this case) usually lands it.
     [void][QnW32]::ShowWindow($h, 6)
@@ -316,8 +336,149 @@ function Do-FocusWindow($params) {
     try { [QnW32]::SwitchToThisWindow($h, $true) } catch {}
     Start-Sleep -Milliseconds 250
     $fg = [int][QnW32]::GetForegroundWindow()
+    $via = 'SwitchToThisWindow'
   }
-  return @{ ok = $true; name = [string]$w.name; proc = [string]$w.proc; hwnd = [int]$w.hwnd; raised = $sent; foreground = ($fg -eq [int]$w.hwnd) }
+  if ($fg -ne $target) {
+    # Round 3: tap ALT first. Windows releases the foreground lock for a process that has just
+    # received keyboard input, which makes the SetForegroundWindow that follows succeed.
+    try {
+      [QnW32]::keybd_event(0x12, 0, 0, [IntPtr]::Zero)
+      [QnW32]::keybd_event(0x12, 0, 2, [IntPtr]::Zero)
+      [void][QnW32]::SetForegroundWindow($h)
+    } catch {}
+    Start-Sleep -Milliseconds 200
+    $fg = [int][QnW32]::GetForegroundWindow()
+    $via = 'alt-key'
+  }
+  $clicked = $false
+  if ($fg -ne $target) {
+    # Round 4: click the window's title bar. Input events are what actually grant foreground
+    # rights, so this almost always lands - and it beats making the model guess screen
+    # coordinates (which is how it used to end up clicking random spots on the desktop).
+    try {
+      $r = New-Object QnW32+RECT
+      if ([QnW32]::GetWindowRect($h, [ref]$r)) {
+        if ($r.Right -gt $r.Left -and $r.Bottom -gt $r.Top) {
+          $cx = [int](($r.Left + $r.Right) / 2)
+          $cy = [int]$r.Top + 10
+          if ($cx -gt 0 -and $cy -gt 0) {
+            [void][QnW32]::SetCursorPos($cx, $cy)
+            Start-Sleep -Milliseconds 60
+            [QnW32]::mouse_event(0x0002, 0, 0, 0, [IntPtr]::Zero)
+            [QnW32]::mouse_event(0x0004, 0, 0, 0, [IntPtr]::Zero)
+            $clicked = $true
+            Start-Sleep -Milliseconds 300
+            $fg = [int][QnW32]::GetForegroundWindow()
+            $via = 'titlebar-click'
+          }
+        }
+      }
+    } catch {}
+  }
+  return @{
+    ok = $true
+    name = [string]$w.name
+    proc = [string]$w.proc
+    hwnd = $target
+    raised = $sent
+    foreground = ($fg -eq $target)
+    via = $via
+    clicked = $clicked
+  }
+}
+
+# ---------------------------------------------------------------- keyboard input
+# Everything below routes through QnInput (SendInput) instead of the upstream nut-js path, which
+# on Windows drops the modifier of a combination often enough that "ctrl+v" lands as a bare "v".
+#
+# Two gates protect every keystroke:
+#   1) an optional target window (match / hwnd) is focused first, and if the foreground still is
+#      not that window we refuse rather than type into whatever happens to be in front;
+#   2) the foreground must not be one of our own windows (QN_SELF_PIDS / QN_SELF_HWNDS).
+# Gate 2 exists because the agent's keystrokes used to end up in QingNiao's own composer while
+# the user was reading the conversation.
+
+function Resolve-InputTarget($params) {
+  # returns @{ ok = $true; fg = <info> } or @{ ok = $false; ... } (refusal)
+  if ($null -ne $params -and (($null -ne $params.match -and [string]$params.match -ne '') -or ($null -ne $params.hwnd -and [string]$params.hwnd -ne ''))) {
+    $f = Do-FocusWindow $params
+    if ($f.ok -eq $false) { return $f }
+    if (-not $f.foreground) {
+      return @{
+        ok = $false
+        error = 'focus_refused'
+        name = [string]$f.name
+        proc = [string]$f.proc
+        hwnd = [int]$f.hwnd
+        via = [string]$f.via
+      }
+    }
+  }
+  $guard = QnAssert-SafeForeground
+  if ($null -ne $guard) { return $guard }
+  return @{ ok = $true; fg = (QnGet-ForegroundInfo) }
+}
+
+function Do-SendKeys($params) {
+  $keys = [string]$params.keys
+  if (-not $keys) { return @{ ok = $false; error = 'missing_keys' } }
+  $t = Resolve-InputTarget $params
+  if ($t.ok -eq $false) { return $t }
+  try {
+    [QnInput]::SendCombo($keys)
+  } catch {
+    return @{ ok = $false; error = 'send_failed'; message = $_.Exception.Message }
+  }
+  $fg = QnGet-ForegroundInfo
+  return @{ ok = $true; keys = $keys; fg_title = [string]$fg.title; fg_proc = [string]$fg.proc }
+}
+
+function Do-Paste($params) {
+  $t = Resolve-InputTarget $params
+  if ($t.ok -eq $false) { return $t }
+  $enter = $true
+  if ($null -ne $params -and $null -ne $params.enter) { $enter = [bool]$params.enter }
+  try {
+    # Select-all first, then paste: pasting into a field that already holds something (a leftover
+    # draft, a previous search query, the model's own earlier attempt) would otherwise APPEND to it
+    # and send a mix of old + new. Ctrl+A makes the paste a replace, so this step is idempotent -
+    # that is the "the content was wrong and it just sent it anyway" complaint.
+    [QnInput]::SendCombo('ctrl+a')
+    Start-Sleep -Milliseconds 90
+    [QnInput]::SendCombo('ctrl+v')
+    # Give the app time to ingest the clipboard before the send key arrives; a real paste in
+    # a self-drawn IM window is not instantaneous.
+    Start-Sleep -Milliseconds 220
+    if ($enter) {
+      [QnInput]::SendCombo('return')
+      Start-Sleep -Milliseconds 120
+    }
+  } catch {
+    return @{ ok = $false; error = 'send_failed'; message = $_.Exception.Message }
+  }
+  $fg = QnGet-ForegroundInfo
+  return @{ ok = $true; pasted = $true; entered = $enter; fg_title = [string]$fg.title; fg_proc = [string]$fg.proc }
+}
+
+function Do-ReadInput($params) {
+  # Select-all + copy pushes the control's current text through the system clipboard, which works
+  # even in a self-drawn UI where the accessibility tree is empty. This is the only way for the
+  # agent to verify what it actually typed/pasted before committing to send.
+  $t = Resolve-InputTarget $params
+  if ($t.ok -eq $false) { return $t }
+  try {
+    [QnInput]::SendCombo('ctrl+a')
+    Start-Sleep -Milliseconds 130
+    [QnInput]::SendCombo('ctrl+c')
+    Start-Sleep -Milliseconds 220
+    # Collapse the selection again, otherwise the next keystroke would wipe the field.
+    [QnInput]::SendCombo('right')
+    Start-Sleep -Milliseconds 60
+  } catch {
+    return @{ ok = $false; error = 'send_failed'; message = $_.Exception.Message }
+  }
+  $text = QnGet-ClipboardText
+  return @{ ok = $true; text = $text; length = $text.Length }
 }
 
 # ---------------------------------------------------------------- main loop
@@ -372,6 +533,10 @@ while ($true) {
       'set_value' { $res = Do-SetValue $params.ref ([string]$params.text) }
       'focus' { $res = Do-Focus $params.ref }
       'focus_window' { $res = Do-FocusWindow $params }
+      'send_keys' { $res = Do-SendKeys $params }
+      'paste' { $res = Do-Paste $params }
+      'read_input' { $res = Do-ReadInput $params }
+      'foreground' { $res = QnGet-ForegroundInfo }
       default { $res = @{ ok = $false; error = 'unknown_method' } }
     }
   } catch {

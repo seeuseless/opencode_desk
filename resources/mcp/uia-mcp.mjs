@@ -104,7 +104,8 @@ function call(method, params, timeout = CALL_TIMEOUT_MS) {
 const UIA_NOTE =
   '**本工具读的是 Windows 无障碍树，只有原生控件应用才有元素**（资源管理器、记事本、系统设置、Office、' +
   '浏览器、多数传统桌面软件）。像微信这类**自绘界面**（界面是一块画布，如微信 4.0 的 MMUIRenderSubWindow）' +
-  '无障碍树是空的，UIA 对它无效——不要反复重试，改走键盘快捷键。'
+  '无障碍树是空的（实测只读得到标题栏的最小化/最大化/关闭三个按钮），UIA 对它无效——' +
+  '不要反复重试 uia_tree，改走 `uia_keys` / `uia_paste` 的键盘流程。'
 
 function rectText(r) {
   if (!r || r.x === null || r.w === null || r.w <= 0) return ''
@@ -130,10 +131,17 @@ function formatTree(r) {
     return (
       head +
       '\n\n**该窗口无障碍树里没有任何可操作元素。** 这通常意味着它是**自绘界面**（把整个 UI 画在一块画布上），' +
-      'UIA 对它无效——**不要再对同一个窗口重试 uia_tree / uia_windows**。请改走**纯键盘流程**：' +
-      '`uia_window_focus "<窗口名>"` 提到前台（若回执说没能置为前台，先用一个真实点击把它点成前台），' +
-      '再用桌面控制的 `{"action":"key","text":"ctrl+f"}` 这类按键（按键串放 `text` 字段，多数 IM 用 Ctrl+F 打开搜索框）、' +
-      '中文输入走剪贴板 + `{"action":"key","text":"ctrl+v"}`。**这条链路不需要看画面，也不要为了确认去截图**。'
+      'UIA 对它无效——**不要再对同一个窗口重试 uia_tree / uia_windows，也不要试图点它的坐标**（画布给出的坐标不可靠）。\n' +
+      '请改走**键盘流程**（全程不需要看画面，也不要截图）：\n' +
+      '1. 按键一律用 `uia_keys`，并**带上目标窗口**：`uia_keys {"keys":"ctrl+f","match":"微信"}`。' +
+      '带 match 会先把目标窗口切到前台并确认，切不过去就直接拒绝——绝不会把键打进青鸟自己或别的窗口。\n' +
+      '2. **中文输入 / 发文件 / 发图片一律走剪贴板 + 粘贴**：先 `computer-use_set_clipboard`（mode=text / file / image），' +
+      '再 `uia_paste {"match":"微信"}`（默认粘完即回车；想先核对内容就传 `enter:false`）。' +
+      '中文**不要**用 `type` 直接打，会被输入法拦掉。\n' +
+      '3. 切不过去（回执说没能置前）时，**如实告诉用户请他点一下那个窗口**，不要盲试坐标或截图。\n' +
+      '\n微信的完整例子：`uia_keys {"keys":"ctrl+f","match":"微信"}` → set_clipboard 放会话名 → ' +
+      '`uia_paste {"match":"微信"}` → set_clipboard 放正文 → `uia_paste {"match":"微信","enter":false}` → ' +
+      '`uia_read_input {"match":"微信"}` 核对内容对不对 → `uia_keys {"keys":"return","match":"微信"}`。'
     )
   }
   const lines = els.map((e) => {
@@ -150,8 +158,9 @@ function formatTree(r) {
   const bg = els.some((e) => e.offscreen)
     ? [
         '',
-        '注：标了「不可见」的元素属于后台或最小化的窗口。uia_click / uia_set_text 会**先把它的窗口还原并提到前台**再操作，' +
-          '所以通常不必自己先 uia_window_focus；但如果你要连着发键盘按键，请先 uia_window_focus 确保焦点在目标窗口上。'
+        '⚠️ 这个窗口现在是**最小化或在后台**（上面的元素都标了「不可见」）。**先用 `uia_window_focus` 把它还原并提到前台**再继续，' +
+          'uia_click / uia_set_text 本身也会负责还原。' +
+          '**不要**用 `{"action":"left_click","coordinate":[x,y]}` 去点屏幕上猜的坐标：窗口没在前台时估出来的坐标必然点偏，只会点到别的窗口上去。'
       ]
     : []
   return [
@@ -169,10 +178,24 @@ function explainError(err) {
     return '这个 ref 已经失效（窗口内容变了或上一次 uia_tree 已过期）。请重新调 uia_tree 取新的 ref。'
   if (err === 'window_not_found')
     return '没找到匹配的窗口。请先用 uia_windows 看当前有哪些窗口，用其中的准确标题或进程名重试。'
+  if (err === 'self_window')
+    return (
+      '**拒绝发送：当前最前面的窗口是青鸟自己**（就是你现在正在跟用户对话的那个窗口）。' +
+      '按键会直接打进对话框、污染用户正在输入的内容，所以这一步被挡住了。\n' +
+      '正确做法：用本工具的 `match`（如 "微信"）或 `hwnd` 指定目标窗口，它会先把目标切到前台再发。'
+    )
+  if (err === 'focus_refused')
+    return (
+      '**没能把目标窗口切到前台，已放弃发送按键**（否则按键会打进当前前台那个窗口，越搞越乱）。\n' +
+      '请如实告诉用户：「xxx 这个窗口切不到最前面，麻烦你点它一下」，不要改用点坐标或截图硬试。'
+    )
+  if (err === 'missing_keys') return 'keys 参数是必填的（如 `"ctrl+v"`、`"return"`）。'
+  if (err === 'send_failed')
+    return '按键发送失败（多半是目标窗口属于管理员权限进程，普通权限的输入被系统挡下）。请如实告诉用户当前焦点窗口需要以管理员身份运行青鸟才能控制。'
   if (err === 'no_value_pattern')
     return (
       '该元素不支持直接赋值（没有 Value 模式）。请改用：先 uia_focus 聚焦它，' +
-      '再用桌面控制的 `{"action":"type","text":"要输入的文字"}` 把文字打进去。'
+      '再用 `uia_paste` 把剪贴板内容粘进去（中文务必走剪贴板，别用桌面控制的 type）。'
     )
   if (err === 'no_pattern_no_geometry')
     return '该元素既没有可用的操作模式，也没有有效坐标（窗口可能被最小化或已关闭），无法点击。'
@@ -188,6 +211,36 @@ function explainError(err) {
 
 function failText(msg) {
   return { content: [{ type: 'text', text: msg }], isError: true }
+}
+
+/**
+ * 键盘类工具的共同拒绝文案。
+ *
+ * 这两类拒绝都是**有意为之的保护**，而且都必须落到「让模型改做法」而不是「重试一次」：
+ *  · self_window   —— 当前前台是青鸟自己，按键会打进用户正在对话的输入框；
+ *  · focus_refused —— 目标窗口抢不到前台，此时发键会打进别的窗口。
+ * 两条都保持 isError，让模型把话如实转达给用户，而不是继续瞎试。
+ */
+function inputRefusal(r) {
+  if (r.error === 'self_window') {
+    return failText(
+      '【已拒绝发送按键：当前最前面的窗口是青鸟自己】' +
+        (r.title ? `（「${r.title}」/ ${r.proc}）` : '') +
+        '\n按键会直接打进你正在跟用户对话的那个输入框，把用户正在写的内容搅乱，所以这一步被挡下了。\n' +
+        '正确做法：**带上目标窗口再发**——`uia_keys {"keys":"...","match":"微信"}`，' +
+        '或 `uia_paste {"match":"微信"}`，或先 `uia_window_focus "微信"`。' +
+        '带 match 的调用会先把目标窗口切到前台并**确认成功后才发键**，不会再打到青鸟自己身上。'
+    )
+  }
+  if (r.error === 'focus_refused') {
+    return failText(
+      `【已放弃发送按键：没能把「${r.name || r.proc || r.hwnd}」切到最前面】` +
+        '（Windows 不允许后台进程抢前台，且青鸟窗口正挡在前面；此时发键会打进当前前台那个窗口）\n' +
+        '请如实告诉用户：这个窗口切换不到最前面，**麻烦手动点一下它**，然后你继续。\n' +
+        '不要改用点坐标、也不要截图硬试——那只会点到别的窗口上。'
+    )
+  }
+  return failText(explainError(r.error ?? r.message))
 }
 
 // 工具名**不要带 uia_ 前缀**：内核注册时会自动拼上服务名（配置里的 key 就叫 uia），
@@ -237,7 +290,7 @@ const TOOLS = [
     name: 'set_text',
     description:
       '往输入框直接写入文本（ref 来自 uia_tree，需要该元素支持 Value 模式）。中文也能正确写入，' +
-      '不走模拟按键、不受输入法状态影响。若元素不支持直接赋值，会提示你改用 uia_focus + 桌面控制的 type。',
+      '不走模拟按键、不受输入法状态影响。若元素不支持直接赋值，会提示你先 uia_focus 再用 uia_paste 粘贴。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,7 +302,7 @@ const TOOLS = [
   },
   {
     name: 'focus',
-    description: '把某个元素设为键盘焦点，并把它的窗口提到前台（ref 来自 uia_tree）。用于「先聚焦、再用桌面控制的 key/type 输入」这种组合。',
+    description: '把某个元素设为键盘焦点，并把它的窗口提到前台（ref 来自 uia_tree）。用于「先聚焦、再用 uia_keys / uia_paste 输入」这种组合。',
     inputSchema: {
       type: 'object',
       properties: { ref: { type: 'number', description: 'uia_tree 返回的 ref 编号' } },
@@ -260,12 +313,71 @@ const TOOLS = [
     name: 'window_focus',
     description:
       '按标题/进程名把某个窗口还原并提到前台（如「微信」「notepad」）。' +
-      '需要操作一个当前被盖住的窗口时，先用它激活，再 uia_tree（不传参即读前台窗口）或发键盘快捷键。',
+      '需要操作一个当前被盖住的窗口时，先用它激活，再 uia_tree（不传参即读前台窗口）或发键盘快捷键。' +
+      '**如果它回「没能置为前台」，不要接着发按键**（键会打进当前前台那个窗口）——如实告诉用户请他点一下那个窗口。',
     inputSchema: {
       type: 'object',
       properties: { match: { type: 'string', description: '窗口标题或进程名的关键词，不区分大小写' } },
       required: ['match']
     }
+  },
+  {
+    name: 'keys',
+    description:
+      '按一次键盘组合键（原生 SendInput，确定可靠）。**所有按键都走这个工具，不要再用桌面控制的 computer 的 key 动作**。\n' +
+      '· `ctrl+f` 打开搜索框 ｜ `ctrl+v` 粘贴 ｜ `ctrl+a` 全选 ｜ `ctrl+c` 复制 ｜ `return` 回车 ｜ `esc` 取消 ｜ `tab` 切换 ｜ 方向键 `up`/`down`/`left`/`right`。\n' +
+      '· 传 `match`（如 "微信"）或 `hwnd` 时，会**先把那个窗口提到前台并确认**，确认不了就拒绝发送——所以带上它比自己先 focus 再按键更安全。\n' +
+      '· **青鸟自己的窗口永远不会被输入**：若当前最前面的窗口就是青鸟，本工具直接拒绝，不会把按键打进你正在跟用户对话的输入框里。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        keys: { type: 'string', description: '组合键，如 "ctrl+v"、"ctrl+shift+t"、"return"、"esc"' },
+        match: { type: 'string', description: '可选：目标窗口标题/进程名关键词（如 "微信"），会先聚焦并确认' },
+        hwnd: { type: 'number', description: '可选：目标窗口句柄，比 match 精确' }
+      },
+      required: ['keys']
+    }
+  },
+  {
+    name: 'paste',
+    description:
+      '一步完成「把剪贴板内容粘贴进目标窗口」：聚焦目标窗口 → 确认前台 → 全选覆盖 → Ctrl+V →（默认）回车发送。\n' +
+      '**粘贴前会先 Ctrl+A 全选**，所以它是**覆盖**而不是追加——不管输入框里原本剩了什么（上一轮的残留、搜索框旧关键词），' +
+      '粘完里面就是你要发的这一份内容。\n' +
+      '这是**往任何程序里输入中文或发送文件/图片的唯一推荐方式**（直接打字会被输入法拦掉，先 set_clipboard 再调本工具）。\n' +
+      '用法：`computer-use_set_clipboard`（mode=text/file/image）先把内容放进剪贴板 → 调本工具。\n' +
+      '`enter:false` 表示只粘进输入框、先不回车——**发正文时建议这么用**，接着 `uia_read_input` 核对内容，' +
+      '确认无误再 `uia_keys {"keys":"return"}` 发送。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        match: { type: 'string', description: '目标窗口标题/进程名关键词（如 "微信"）；建议总是传' },
+        hwnd: { type: 'number', description: '目标窗口句柄，比 match 精确' },
+        enter: { type: 'boolean', description: '粘贴后再按一次回车发送，默认 true；想先核对内容就传 false' }
+      }
+    }
+  },
+  {
+    name: 'read_input',
+    description:
+      '**读回当前输入框里真实的文字**（Ctrl+A 全选 + Ctrl+C 复制，再读系统剪贴板）——用来核对「刚才那一步到底输进去没有、内容对不对」。\n' +
+      '自绘界面（微信这类无障碍树是空的）读不到元素，这是**唯一不需要截图就能校验输入内容**的手段。\n' +
+      '典型用法：粘贴正文之后、按回车发送之前，先 read_input 确认内容与预期一致；不一致就重新 set_clipboard + paste（粘贴前先 `ctrl+a` 可覆盖旧内容），**不要把一个明显不对的内容发出去**。\n' +
+      '注意：它会占用系统剪贴板（读回的内容就存在剪贴板里），并且会改变输入框的选区状态。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        match: { type: 'string', description: '目标窗口标题/进程名关键词；不传则用当前前台窗口' },
+        hwnd: { type: 'number', description: '目标窗口句柄' }
+      }
+    }
+  },
+  {
+    name: 'foreground',
+    description:
+      '读当前**前台窗口**是什么（标题 / 进程名 / pid / hwnd），以及它是不是青鸟自己。\n' +
+      '发送按键、粘贴、点击这些「不可撤销」的动作之前，用它核对一眼当前焦点在哪个窗口上，比事后补救便宜得多。',
+    inputSchema: { type: 'object', properties: {} }
   }
 ]
 
@@ -312,16 +424,59 @@ async function handleTool(name, args) {
       const r = await call('focus_window', { match: String(a.match ?? '') })
       if (r.ok === false) return text(explainError(r.error ?? r.message))
       const fg = r.foreground
-        ? '已置为前台'
-        : '**没能置为前台**（Windows 不允许后台进程抢前台，已试过 AttachThreadInput 与 SwitchToThisWindow 两种兜底）。' +
-          '此时**不要盲发按键**——键会打进当前前台那个窗口。' +
-          '请改用桌面键鼠的 `{"action":"left_click","coordinate":[x,y]}` 点一下这个窗口的可见区域（真实点击能拿到前台权），再发按键。'
+        ? r.clicked
+          ? '已置为前台（API 抢焦点被系统拒绝，最后靠点了一下它的标题栏拿到前台权，窗口可能因此多了一个搜索框或菜单，发按键前先按一次 `esc` 收掉）'
+          : '已置为前台'
+        : '⚠️ **没能置为前台**：Windows 前台锁不允许后台进程抢焦点，已依次试过 SetForegroundWindow / AttachThreadInput / SwitchToThisWindow / ALT 键 / 点标题栏，全被拒。\n' +
+          '**此时绝对不要发键盘按键**——键会打进当前前台那个窗口，越搞越乱。\n' +
+          '改用 `uia_tree` 读它的元素、`uia_click` 点元素（语义点击不依赖前台权）；' +
+          '如果它确实是自绘界面（树是空的）而任务又必须发按键，就如实告诉用户「这个窗口没能切到前台，请手动点它一下」，不要盲试。'
       return text(`窗口「${r.name}」进程 ${r.proc} (hwnd ${r.hwnd})：${fg}。接下来 uia_tree 不传参即可读它的元素。`)
+    }
+    case 'keys': {
+      const r = await call('send_keys', { keys: String(a.keys ?? ''), match: a.match, hwnd: a.hwnd })
+      // inputRefusal 返回的就是完整结果对象（含 isError），**不能再套 text()**——
+      // 套了会把对象塞进 text 字段，模型看到的是 "[object Object]"。
+      if (r.ok === false) return inputRefusal(r)
+      return text(
+        `已按 ${r.keys}。` + (r.fg_title ? `（当时的当前窗口：「${r.fg_title}」/ ${r.fg_proc}）` : '')
+      )
+    }
+    case 'paste': {
+      const r = await call('paste', { match: a.match, hwnd: a.hwnd, enter: a.enter })
+      if (r.ok === false) return inputRefusal(r)
+      return text(
+        (r.entered
+          ? '已把剪贴板内容粘贴到输入框**并按下回车发送**。'
+          : '已把剪贴板内容粘贴到输入框（**没有回车**，还在输入框里）。想核对内容就调 `uia_read_input`，想发送就再调 `uia_keys {"keys":"return"}`。') +
+          (r.fg_title ? `（目标窗口：「${r.fg_title}」/ ${r.fg_proc}）` : '')
+      )
+    }
+    case 'read_input': {
+      const r = await call('read_input', { match: a.match, hwnd: a.hwnd })
+      if (r.ok === false) return text(inputRefusal(r))
+      return text(
+        `当前输入框里的内容（${r.length} 个字，已复制到剪贴板）：\n"""\n${r.text}\n"""\n` +
+          '拿它和你打算发送的内容对比：一致就按 `return` 发送；不一致就重新 set_clipboard 后 paste（粘贴前先 `ctrl+a` 覆盖旧的），不要把不对的内容发出去。'
+      )
+    }
+    case 'foreground': {
+      const r = await call('foreground')
+      const selfNote = r.self
+        ? '\n⚠️ 这个窗口**就是青鸟自己**：此时发任何按键都会被拒绝，请先指定目标窗口（`uia_window_focus` 或让 `uia_keys` / `uia_paste` 带上 `match`）。'
+        : ''
+      return text(`当前前台窗口：「${r.title || '(无标题)'}」进程 ${r.proc} pid=${r.pid} hwnd=${r.hwnd}${selfNote}`)
     }
     default:
       return text(`未知工具：${name}`)
   }
 }
+
+// ---------------------------------------------------------------- 预热宿主
+// 宿主是 PowerShell 进程，首次启动要现场 Add-Type 编译 C#（实测 2~4 秒，还叠杀软扫描）。
+// 若第一次真调用正好赶上这段冷启动，容易被判成超时。开机后台先 ping 一次（零副作用），
+// 把宿主拉起来并编译完，之后每次调用都是常驻响应。
+void call('ping').catch(() => {})
 
 createInterface({ input: process.stdin }).on('line', async (line) => {
   if (!line.trim()) return

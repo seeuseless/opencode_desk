@@ -379,6 +379,40 @@ let uiaMcp: { path: string } | undefined
 export function setUiaMcp(v: { path: string }): void {
   uiaMcp = v
 }
+
+/**
+ * 「青鸟自己」的进程 / 窗口 / 标题标识 —— 任何**发送键盘输入**的 MCP 都要拿它做最后一道守卫。
+ *
+ * 为什么需要（用户明确提过）：AI 操作桌面时，如果当前最前面的窗口正好是青鸟自己，
+ * 模拟按键就会**直接打进用户正在跟 AI 对话的那个输入框**，把用户写了一半的内容搅乱。
+ * 主进程把自己的 pid、原生窗口句柄、窗口标题前缀交出去，脚本每次发键前比对当前前台窗口，
+ * 命中就拒绝（回执明确告诉模型「改用带目标窗口的调用」），而不是硬着头皮打进去。
+ *
+ * 三条判据是**取并集**（这里做累积，调用方只管往里加）：pid 最精确，但 Windows 上 Electron
+ * 顶层窗口不一定报主进程 pid（渲染进程所属、后开的窗口都会是另一个 pid），
+ * 标题前缀就是兜底——它能覆盖应用今后开出的任何窗口，包括环境变量写定之后才创建的。
+ */
+let selfRefs: { pids: number[]; hwnds: number[]; titles: string[] } = { pids: [], hwnds: [], titles: [] }
+export function setSelfRefs(v: { pids?: number[]; hwnds?: number[]; titles?: string[] }): void {
+  const clean = (xs?: number[]) => (xs ?? []).filter((n) => Number.isFinite(n) && n > 0).map((n) => Math.trunc(n))
+  const merge = <T>(a: T[], b: T[]) => [...new Set([...a, ...b])]
+  selfRefs = {
+    pids: merge(selfRefs.pids, clean(v.pids)),
+    hwnds: merge(selfRefs.hwnds, clean(v.hwnds)),
+    titles: merge(
+      selfRefs.titles,
+      (v.titles ?? []).map((s) => String(s).trim()).filter(Boolean)
+    )
+  }
+}
+/** 注入给 MCP 的「不要往这些窗口里输入」清单 */
+function selfEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (selfRefs.pids.length) env.QN_SELF_PIDS = selfRefs.pids.join(',')
+  if (selfRefs.hwnds.length) env.QN_SELF_HWNDS = selfRefs.hwnds.join(',')
+  if (selfRefs.titles.length) env.QN_SELF_TITLES = selfRefs.titles.join(',')
+  return env
+}
 /** 语音合成 MCP（generate_speech 配音工具）脚本路径 */
 let ttsMcp: { path: string } | undefined
 export function setTtsMcp(v: { path: string }): void {
@@ -516,6 +550,8 @@ export function writeOpencodeConfig(s: Settings): void {
     mcp.uia = {
       type: 'local',
       command: ['node', uiaMcp.path],
+      // QN_SELF_* 让 uia_keys / uia_paste 在发键前拦住「打进青鸟自己输入框」这种情况
+      environment: { ...selfEnv() },
       // 单次读树本身几十毫秒（内层 PowerShell 宿主常驻、已预热），给 20s 是留给首次
       // spawn + Add-Type 编译 C# 的冷启动——那次可能要 1~2 秒，之后每次都是常驻响应。
       timeout: 20000,
@@ -646,6 +682,8 @@ export function writeOpencodeConfig(s: Settings): void {
         QN_VISION_TARGETS: JSON.stringify(visionTargets),
         QN_SCREEN_UPSTREAM_CMD: upstreamLocal ? process.execPath : 'npx',
         QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(upstreamLocal ? [upstreamBin] : ['-y', 'computer-use-mcp']),
+        // computer 的 key/type 由 screen-mcp 本层接管（原生 SendInput），同样要拦「打进青鸟自己」
+        ...selfEnv(),
         ...gateEnv()
       },
       // 桌面控制的每一步都必须在几十秒内出结果——拖着不回比做错更糟：界面会一直卡在
@@ -695,29 +733,43 @@ export function writeOpencodeConfig(s: Settings): void {
           '  ① **`uia_*` 无障碍树（首选）**：`uia_windows` 找窗口 → `uia_tree` 读元素清单 → ' +
           '`uia_click` / `uia_set_text` / `uia_focus` 操作。原生控件应用（资源管理器、记事本、系统设置、Office、多数传统桌面软件）' +
           '走这一档：纯文本、几十毫秒、**不需要模型支持图片输入**。**操作后重新 `uia_tree` 看变化就够了，严禁为了「确认点没点中」去截屏**。\n' +
-          '  ② **键盘快捷键（自绘界面走这一档）**：有些应用把整个界面画在一块画布上（微信 4.0 的 MMUIRenderSubWindow 就是），' +
-          '无障碍树是空的——`uia_tree` 会明确告诉你「没有任何可操作元素」。**看到空树就立刻转本档，不要再试第二遍 `uia_windows` / `uia_tree`**。\n' +
-          '     做法：`uia_window_focus "<窗口名>"` 提到前台，再发快捷键。**必须先看它回的「前台窗口」是不是目标**：' +
-          '不是目标就**不要盲发按键**（键会打进别的窗口，越点越乱），先 ' +
-          '`{"action":"left_click","coordinate":[x,y]}` 点一下那个窗口的可见区域把它点成前台，然后再发键。\n' +
-          '     **调用形状（只有 action / coordinate / text 三个字段，按键串一律放 `text`，没有 `key` 这个字段）**：\n' +
-          '     `{"action":"key","text":"ctrl+f"}` 打开搜索 ｜ `{"action":"key","text":"return"}` 回车 ｜ ' +
-          '`{"action":"type","text":"文件传输助手"}` 输入文字 ｜ `{"action":"left_click","coordinate":[640,360]}` 点坐标。\n' +
-          '     **多写一个字段（如 `key`/`keys`/`hotkey`）整次调用会被拒**，别自己发明字段名。\n' +
-          '     例：「打开微信给文件传输助手发条消息」= `uia_window_focus "微信"` → `{"action":"key","text":"esc"}` ' +
-          '→ `{"action":"key","text":"ctrl+f"}`（中文用剪贴板 `ctrl+v` 更稳）→ `{"action":"key","text":"return"}` → ' +
-          '剪贴板换成正文 → `{"action":"key","text":"ctrl+v"}` → `{"action":"key","text":"return"}`。' +
-          '**整条链路是确定性的，一条截屏都不需要。**\n' +
+          '  ② **键盘流程（自绘界面走这一档）**：有些应用把整个界面画在一块画布上（微信 4.0 的 MMUIRenderSubWindow 就是），' +
+          '无障碍树是空的——`uia_tree` 会明确告诉你「没有任何可操作元素」（实测微信只剩标题栏三个按钮）。' +
+          '**看到空树就立刻转本档，不要再试第二遍 `uia_windows` / `uia_tree`**。\n' +
+          '     **按键一律用 `uia_keys`，并且带上目标窗口**：`uia_keys {"keys":"ctrl+f","match":"微信"}`。' +
+          '带 `match` 会先把目标窗口切到前台、确认成功后才发键；切不回来就直接拒绝——所以键永远不会打进别的窗口。\n' +
+          '     **粘贴一律用 `uia_paste`**：先 `computer-use_set_clipboard` 放好内容，再 `uia_paste {"match":"微信"}`。' +
+          '中文、文件、图片全走这一条路（`type` 直接打中文会被输入法拦掉，自己拼 `ctrl+v` 打错窗口也没人拦）。\n' +
+          '     **绝不往青鸟自己的窗口里输入**：当前最前面是青鸟（用户正在跟你对话的这个窗口）时，按键类调用会被**直接拒绝**——' +
+          '这不是故障，是保护用户输入框的一道闸；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n' +
+          '     **发给真人 / 群的消息，在按回车发送之前先用 `uia_read_input` 核对输入框里真实的内容**' +
+          '（Ctrl+A + Ctrl+C 把输入框内容读回来，**不需要截图**）。内容不对就重新 set_clipboard 再 ' +
+          '`uia_paste {"match":"微信","enter":false}` 粘一次——**绝不要把明显不对的内容发出去**。' +
+          '打开会话后也可以先 `uia_foreground` 看一眼当前焦点落在哪个窗口上。\n' +
+          '     **把本地文件 / 图片发给别人（微信、QQ 等）——照这个固定流程走，不要自己发明**：\n' +
+          '     ① `uia_keys {"keys":"ctrl+f","match":"微信"}` 打开搜索框（先 `esc` 收掉可能开着的面板）。\n' +
+          '     ② set_clipboard（mode="text"，text="联系人名"）→ `uia_paste {"match":"微信"}`（粘贴 + 回车 = 打开会话）。\n' +
+          '     ③ set_clipboard（mode="image" 发图片 / mode="file" 发文件；files 填生图、生视频工具回执里' +
+          '「本地文件：」那一行的绝对路径）→ `uia_paste {"match":"微信"}` 发出。\n' +
+          '     ④ 要确认没发错就往 ③ 里插一步：`uia_paste {"match":"微信","enter":false}` → ' +
+          '`uia_read_input {"match":"微信"}` 核对 → 对了再 `uia_keys {"keys":"return","match":"微信"}`。\n' +
+          '     ⑤ 全程**不截图、不识图**：你不需要看见那张图，路径就是全部证据。做完直接说「已发给谁、发的是什么」。\n' +
           '  ③ **截图 + 视觉（最后兜底，且同一轮最多一次）**：只有前两档都不适用（游戏、纯 canvas 界面）才用 `{"action":"get_screenshot"}`；' +
           '**严禁用截图去确认某一步成没成**——每步截一张就是用户看到的「反复截图死循环」。' +
           '只有用户明确要求「在桌面上 / 外部真实浏览器里打开」时才用它去操作桌面浏览器。\n' +
+          '- **不要拿识图工具（`vision_describe_image`）去「看」你自己刚生成 / 刚拿到的图片**：生图回执里已经给了提示词与本地路径；' +
+          '也不要凭空编造路径（例如工作目录下的 `image.png`）让它去读——识图只用于**用户发来的附件**。\n' +
           '- **工具名要写全名**（内核注册时会拼上服务名前缀，清单里的名字就是全名）：' +
-          '桌面键鼠/截屏 = `computer-use_computer`，查应用是否在运行 = `desktop-helper_app_running`，' +
+          '桌面键鼠/截屏 = `computer-use_computer`，**剪贴板（中文输入 / 发文件 / 发图片）= `computer-use_set_clipboard`**，' +
+          '查应用是否在运行 = `desktop-helper_app_running`，' +
           '无障碍树 = `uia_windows` / `uia_tree` / `uia_click` / `uia_set_text` / `uia_focus` / `uia_window_focus`，' +
+          '**键盘输入（按键 / 粘贴 / 核对输入框 / 看前台窗口）= `uia_keys` / `uia_paste` / `uia_read_input` / `uia_foreground`**，' +
           '内置浏览器 = `panel_navigate` / `panel_snapshot` / `panel_click` / `panel_type`。' +
           '**写裸名（`computer`、`app_running`、`uia_tree` 少前缀等）会报「工具不存在」**，只能照清单里的全名调。\n' +
-          '- **严禁改用写代码的方式操作桌面**：系统已经内置了 `uia_*`（无障碍树）和 `computer-use_computer`（键鼠）两套工具，直接用它们。' +
-          '不要 `bash` 跑 PowerShell / Python 现写 UI Automation、SendKeys、user32 `keybd_event`，也不要装 pyautogui、AutoIt、RobotJS —— ' +
+          '- **严禁改用写代码的方式操作桌面**：系统已经内置了 `uia_*`（无障碍树）、`uia_keys` / `uia_paste`（键盘输入与粘贴）、' +
+          '`computer-use_computer`（键鼠/截图）、`computer-use_set_clipboard`（剪贴板：中文输入、发文件、发图片）这几套工具，直接用它们。' +
+          '不要 `bash` 跑 PowerShell / Python 现写 UI Automation、SendKeys、user32 `keybd_event`，也不要自己跑 `Set-Clipboard`，' +
+          '更不要装 pyautogui、AutoIt、RobotJS —— ' +
           '现写的脚本看不见画面、不会等界面就绪，只会把东西打进错误的地方。`bash` 在这类任务里只允许用来「启动一个进程」。\n' +
           '- `computer-use_computer` 的 `get_screenshot` 返回屏幕截图：若你的模型能看图就直接看。' +
           (visionTargets.length

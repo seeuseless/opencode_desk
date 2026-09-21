@@ -390,6 +390,12 @@ async function generateImage(args) {
     else parts.push(r.url ? '（外链下载失败，只有 URL 可用，注意它可能过期）' : '（本地文件写入失败，只拿到了 base64）')
     if (att.extra?.length) parts.push(`（注意：改图接口只接受一张参考图，多出的 ${att.extra.length} 张未使用）`)
     if (refs.dropped.length) parts.push(`（注意：以下参考图没能用上：${refs.dropped.join('；')}）`)
+    if (file)
+      parts.push(
+        '（要把这张图**发给别人**——微信 / QQ / 邮件等——用 `computer-use_set_clipboard`：' +
+          `mode="image" 或 "file"，files 填上面这条本地路径，然后到目标窗口按 Ctrl+V。` +
+          '**不要用识图工具去「看」自己刚生成的图**，你不需要看见画面，路径就是全部证据。）'
+      )
     return parts.join('\n')
   }
   return (
@@ -593,6 +599,10 @@ async function checkVideo(args) {
       ]
       if (local) parts.push(`本地文件：${local}`)
       else parts.push(`（没能拿到成品文件，原始返回：${JSON.stringify(last).slice(0, 400)}）`)
+      if (local)
+        parts.push(
+          '（要把它**发给别人**：用 `computer-use_set_clipboard` 的 mode="file" 把上面这条本地路径放进剪贴板，再到目标窗口按 Ctrl+V。）'
+        )
       return parts.join('\n')
     }
     await new Promise((ok) => setTimeout(ok, 3000))

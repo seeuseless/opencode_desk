@@ -45,6 +45,11 @@ extraResources:
   # 薄壳靠 import.meta.url 从自己所在目录找它，放子目录就找不到
   - from: resources/mcp/uia-host.ps1
     to: uia-host.ps1
+  # 原生键盘输入层（SendInput 组合键 + 「不往青鸟自己窗口输入」守卫）。
+  # **必须与 uia-mcp.mjs / screen-mcp.mjs 平铺在同一目录**：前者 dot-source 它，后者按
+  # 相对路径 spawn 它；而且 screen-mcp 内的 win-input.ps1 走同一份实现，放子目录两边都找不到
+  - from: resources/mcp/win-input.ps1
+    to: win-input.ps1
   # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
   - from: resources/mcp/tts-mcp.mjs
     to: tts-mcp.mjs
