@@ -280,6 +280,15 @@ export const BROWSER_CTX_PREFIX = '␞␞浏览器上下文␞␞\n'
  */
 export const ATTACH_CTX_PREFIX = '␞␞附件路由␞␞\n'
 
+/**
+ * 桌面控制上下文注入标记：本轮要操作桌面时，发消息前把「只用 computer、别碰 panel_*」
+ * 这条边界以 noReply 注入。与上面同一机制——AI 可见、界面不渲染，ChatView 渲染时据此跳过。
+ *
+ * **必须带这个前缀**：isCtxOnly() 靠前缀判定「仅上下文」，漏了就会被当成普通用户消息
+ * 渲染出来（实测：桌面控制那几条规则直接显示在对话区里，看着像用户自己发的一段话）。
+ */
+export const DESKTOP_CTX_PREFIX = '␞␞桌面控制上下文␞␞\n'
+
 /** 内核 question 工具的提问请求（question.v2.asked 事件推送，阻塞等待用户应答） */
 export interface QuestionAsk {
   id: string

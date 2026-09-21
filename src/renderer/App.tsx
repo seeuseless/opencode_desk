@@ -607,6 +607,7 @@ export default function App() {
             onPickDir={addProject}
             access={access}
             onAccess={setAccess}
+            desktopControl={settings.desktopControl}
             onSwitchProject={(id) => {
               if (id === activeId) return
               setActiveId(id)

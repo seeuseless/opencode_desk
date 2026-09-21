@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, Monitor, Music, Paperclip, Pencil, Power, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, DESKTOP_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelCfg, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -43,6 +43,8 @@ interface Props {
   access: AccessLevel
   /** 拨权限档位；切到「完全控制」的二次确认由 App 负责 */
   onAccess: (level: AccessLevel) => void
+  /** 桌面控制（computer 工具）是否启用：桌面意图那一轮据此注入「别碰内置浏览器」的边界提示 */
+  desktopControl: boolean
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
@@ -58,9 +60,14 @@ function parseModel(key: string): ModelSel | undefined {
   return { providerID: key.slice(0, i), modelID: key.slice(i + 1) }
 }
 
-/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文）：AI 可见、界面不渲染 */
+/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文 / 桌面控制边界）：AI 可见、界面不渲染 */
 function isCtxOnly(txt: string): boolean {
-  return txt.startsWith(MEMORY_PREFIX) || txt.startsWith(BROWSER_CTX_PREFIX) || txt.startsWith(ATTACH_CTX_PREFIX)
+  return (
+    txt.startsWith(MEMORY_PREFIX) ||
+    txt.startsWith(BROWSER_CTX_PREFIX) ||
+    txt.startsWith(ATTACH_CTX_PREFIX) ||
+    txt.startsWith(DESKTOP_CTX_PREFIX)
+  )
 }
 
 /** 浏览器收藏条目：URL 去重；title 取页面标题，拿不到时用域名兜底 */
@@ -82,6 +89,11 @@ const TURN_DONE_MS = 3000
 const TURN_DONE_OUT_MS = 220
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
+/**
+ * 桌面控制「卡死」判定线：同一个 computer 调用 running 超过这么久就中止本轮。
+ * 内核侧给 computer-use 配的超时是 30s（见 config.ts），这里留足一点余量做最后兜底。
+ */
+const DESKTOP_STUCK_MS = 45000
 
 /** 会话中断的识别：助手消息自带错误（非用户主动中止），或回合结束时还残留 running/pending 的工具调用（半截截断）。
  *  running/pending 工具 = 任务没真正跑完（即便已有半截文本，工具还在排队/执行中，回合未结束）；
@@ -361,6 +373,8 @@ export function ChatView(p: Props) {
   const replyingRef = useRef<Set<string>>(new Set())
   // bash 类工具的起始计时：长跑超 30s 视为「终端运行中」，不算处理中
   const termStart = useRef<Record<string, number>>({})
+  // computer 类工具的起始计时：单次调用僵住这么久就判定卡死并中止本轮
+  const computerStart = useRef<Record<string, number>>({})
   // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
   const pollFingerprint = useRef('')
   // 各 busy 会话所属项目路径：多项目并行时停止/重试都要带 directory，否则内核找不到该会话
@@ -397,6 +411,8 @@ export function ChatView(p: Props) {
   const [marks, setMarks] = useState<Bookmark[]>(() => load<Bookmark[]>('qingniao.bookmarks', []))
   /** 已注入的浏览器上下文（会话 + URL）：没变过就不再重复注入，避免每条消息都塞一份 */
   const browserCtxRef = useRef<{ sid: string; url: string } | null>(null)
+  /** 已注入的桌面控制上下文（会话 + 本轮原话）：同上，同一轮不重复注入 */
+  const desktopCtxRef = useRef<{ sid: string; text: string } | null>(null)
   /** 浮动聊天卡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
   const [floatPos, setFloatPos] = useState<{ r: number; b: number } | null>(() => {
     const v = load<{ r: number; b: number } | null>('qingniao.floatPos', null)
@@ -723,6 +739,9 @@ export function ChatView(p: Props) {
   // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
   // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
   const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
+  /** 看门狗要读最新的消息与助手 id：渲染几乎每帧都在变，不好做 timer 依赖，这里留一份镜像供 effect 读取 */
+  const watchdogRef = useRef<{ msgs: MessageView[]; lastAid?: string }>({ msgs: [], lastAid: undefined })
+  watchdogRef.current = { msgs, lastAid }
   // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
   // 新消息发送将中止当前轮并接管
   let terminalBlocked = false
@@ -881,6 +900,7 @@ export function ChatView(p: Props) {
     } catch { /* 保留现状，由重发接续 */ }
     // 撤回可能带走了已注入的浏览器上下文消息：清掉记录，重发时按需重新注入
     browserCtxRef.current = null
+    desktopCtxRef.current = null
     void runPrompt(newText, sid, dir)
   }
 
@@ -999,6 +1019,39 @@ export function ChatView(p: Props) {
       askAlive = false
     }
   }, [p.sessionId, p.project?.path])
+
+  /**
+   * 桌面控制看门狗：单次 `computer` 调用僵住超过 45 秒就中止本轮、把键鼠还给用户。
+   *
+   * 正常链路上限是 30 秒——内核侧给 computer-use 这个 MCP 配了 timeout，
+   * screen-mcp 内部还有更紧的预算（一次调用 25s、等回包 20s、识图 10s）。
+   * 这里只防「工具状态流式更新漏了一拍」这种极端情况：没有它，界面会一直卡在
+   * 「AI 正在控制你的电脑」那句话上，输入框也被 desktopCtl 锁着，用户只能杀进程。
+   */
+  useEffect(() => {
+    if (!busy) {
+      computerStart.current = {}
+      return
+    }
+    const timer = window.setInterval(() => {
+      const last = watchdogRef.current.msgs.find((m) => m.info.id === watchdogRef.current.lastAid)
+      const running = (last?.parts ?? []).filter(
+        (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
+      )
+      const ids = new Set(running.map((x) => x.id))
+      for (const k of Object.keys(computerStart.current)) if (!ids.has(k)) delete computerStart.current[k]
+      for (const part of running) {
+        const t0 = computerStart.current[part.id] ?? (computerStart.current[part.id] = part.state?.time?.start ?? Date.now())
+        if (Date.now() - t0 < DESKTOP_STUCK_MS) continue
+        const sid = sidRef.current
+        if (sid) oc.abort(sid, busyDir.current[sid]).catch(() => { /* 已结束 */ })
+        setNotice('这一步桌面控制超过 45 秒没有回结果，已中止本轮（键鼠已交还给你）。可以点「重试」再试一次。')
+        computerStart.current = {}
+        break
+      }
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [busy])
 
   // 订阅内核事件：token 级增量 + part 快照 + 会话空闲
   useEffect(() => {
@@ -1437,15 +1490,19 @@ export function ChatView(p: Props) {
   }
 
   /** 发送前挑一个能胜任本轮的聊天模型，返回覆盖用的 ModelSel（不用换则 undefined）。
-   *  三种情况会换，且都只在**同提供商**内挑（跨提供商静默跳会让用户莫名换到别家）：
+   *  两种情况会换，且都只在**同提供商**内挑（跨提供商静默跳会让用户莫名换到别家）：
    *  1. 当前是纯生成模型（生图 / 生视频 / 语音，端点只收 /images｜/videos｜音频接口）——换到能聊天的模型，
    *     图生图、配音由聊天模型 + 对应工具完成，本来就不需要选生成模型当对话模型；
    *  2. 带了图片/视频附件但当前模型不支持该输入模态——换到同提供商支持该模态的聊天模型。
    *     否则模型只看到 [Attached image/png: 路径] 一行文本、看不到画面，识图答不上、
    *     「把背景换成海边」这类改图意图也容易判成普通问答。
-   *  3. 没附件但任务是操作本机桌面（打开某应用、点按钮、发消息）——computer 工具回的是截图，
-   *     收不了图的模型等于闭眼点鼠标，实测会弃用工具改去写脚本，所以照样换视觉模型。
-   *  换成功会在对话里留一句提示，不静默。 */
+   *  换成功会在对话里留一句提示，不静默。
+   *
+   * **「操作本机桌面」这一种坚决不换**：computer 工具回的是截图，早先为了让模型看得见图，
+   * 这里会把对话模型切成带视觉的那个，甚至在提供商之间跨家挑人——结果用户选的文本模型被顶掉
+   * （界面显示「已切到 deepseek-flash」），对话风格、额度、上下文全变了。
+   * 桌面控制本来就有代看方案：screen MCP 把截图交给**专门挑出来的视觉模型**读成文字附在工具回执里，
+   * 对话模型一个字都不用改。这条路的成本是「每次截屏多一轮识图」，换来的却是用户选定的模型不被夺走。 */
   function resolveChatModel(files: Attachment[], text: string): ModelSel | undefined {
     const i = p.model.indexOf('/')
     if (i <= 0) return undefined // 跟随内核默认，无法判定，不干预
@@ -1464,12 +1521,6 @@ export function ChatView(p: Props) {
     const need: Modality[] = []
     if (files.some((a) => a.mime.startsWith('image/'))) need.push('image')
     if (files.some((a) => a.mime.startsWith('video/'))) need.push('video')
-    /**
-     * 没带附件但任务是「操作本机桌面」也一样要收图：computer 工具回的就是屏幕截图，
-     * 纯文本模型收不到画面，只能瞎猜坐标——实测它会放弃工具改去写 PowerShell 模拟键鼠。
-     */
-    const desk = !need.includes('image') && !!text && isDesktopIntent(text)
-    if (desk) need.push('image')
     // 先保证能聊天：纯生成模型根本收不了对话
     if (curM && !chattable(curM)) {
       const cand = cur?.models.find(chattable)
@@ -1483,39 +1534,16 @@ export function ChatView(p: Props) {
     if (!lack.length) return undefined
     const cand = cur?.models.find((mm) => chattable(mm) && lack.every((n) => inputs(mm).includes(n)))
     if (!cand) {
-      if (desk) {
-        /**
-         * 桌面控制这一轮收不了图就是瞎点，所以允许跨提供商找人（附件那两种情况仍不跨，
-         * 免得用户发张图被静默送到别家）。切换必须写在提示里，不静默。
-         */
-        const away = p.settings
-          .filter((x) => x.enabled && x.id !== pid)
-          .flatMap((x) =>
-            x.models.filter((mm) => chattable(mm) && lack.every((n) => inputs(mm).includes(n))).map((mm) => ({ prov: x, m: mm }))
-          )
-        if (away.length) {
-          const { prov, m } = away[0]
-          p.onModelChange(`${prov.id}/${m.id}`)
-          setNotice(
-            `桌面控制要看屏幕截图，「${cur?.name || pid}」里没有支持图片输入的模型，已切到「${prov.name || prov.id} / ${m.name || m.id}」。`
-          )
-          return { providerID: prov.id, modelID: m.id }
-        }
-        setNotice(
-          '这个任务要看屏幕截图（桌面控制），而当前模型和已配置的提供商里没有支持图片输入的对话模型。请在 设置 → 模型 配一个视觉模型（如 mimo-v2.5）再发，否则 AI 只能瞎猜坐标。'
-        )
-      } else if (lack.includes('video')) {
+      if (lack.includes('video')) {
         // 图片收不到还有识图 MCP 代看，视频没有代看路径：换不到模型时只能提前讲明白
         setNotice('这条附件是视频，而当前提供商里没有支持视频输入的模型可换——AI 这轮只会看到文件路径，读不到画面。可在 设置 → 模型 给支持视频的模型勾上「输入 · 视频」再发。')
       }
-      return undefined // 原样发：路径照样能交给生图工具改图
+      return undefined // 原样发：路径照样能交给生图/识图工具处理
     }
     p.onModelChange(`${pid}/${cand.id}`)
     setNotice(
-      desk
-        ? `桌面控制要看屏幕截图，已切到支持图片输入的「${cand.name || cand.id}」。`
-        : `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
-          `已切到「${cand.name || cand.id}」以便看懂附件内容。`
+      `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
+        `已切到「${cand.name || cand.id}」以便看懂附件内容。`
     )
     return { providerID: pid, modelID: cand.id }
   }
@@ -1628,6 +1656,29 @@ export function ChatView(p: Props) {
           browserCtxRef.current = { sid, url: panelUrl }
         } catch {
           /* 注入失败不阻塞对话，AI 仍可自行用工具探页面 */
+        }
+      }
+    }
+    // 桌面控制场景：本轮要操作的是用户**真实的整个桌面**，与内置浏览器（应用内一块网页面板）
+    // 是两套互不替代的操作面。不点名的话模型容易串台——拿 panel_* 去开桌面应用（开不动），
+    // 或在控制桌面中途跑去开内置浏览器。这里把边界按死：只用 computer，不要碰 panel_*。
+    if (isDesktopIntent(text) && p.desktopControl) {
+      const dc = desktopCtxRef.current
+      if (!dc || dc.sid !== sid || dc.text !== text) {
+        try {
+          await oc.injectContext(
+            sid,
+            dir,
+            DESKTOP_CTX_PREFIX +
+              '这一轮的任务是**操作本机桌面 / 桌面应用**（不是浏览网页）。\n' +
+              '- 只用 `computer` 工具完成（截屏看画面 → left_click / type / key 动手 → 再截屏确认）。\n' +
+              '- **不要调用 `panel_*`**：内置浏览器是青鸟窗口里的网页面板，只能操作网页，' +
+              '打不开也控制不了桌面上的应用（微信、资源管理器、外部浏览器窗口等），调它只会白跑一趟。\n' +
+              '- 也不要为了「看看桌面长什么样」去 panel_navigate 开网页——要看桌面就 `computer` 的 get_screenshot。'
+          )
+          desktopCtxRef.current = { sid, text }
+        } catch {
+          /* 注入失败不阻塞对话，路由约定里也写了同一条边界 */
         }
       }
     }
