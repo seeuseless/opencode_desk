@@ -579,9 +579,12 @@ ipcMain.handle('settings:save', async (_e, s: Settings) => {
  * 重启正在跑的任务会被打断，但这是让权限即刻生效唯一可靠的办法。
  */
 ipcMain.handle('settings:setAccess', async (_e, req: { level: AccessLevel }) => {
-  setAccess(req?.level === 'full' ? 'full' : 'default')
+  // 返回落盘后的完整 Settings：渲染层 setSettings(await setAccess(level)) 靠它回读，
+  // 不 return 的话渲染层拿到 undefined，下一次渲染 settings.access 直接崩（白屏）。
+  const s = setAccess(req?.level === 'full' ? 'full' : 'default')
   await adapter.restart()
   relay.apply()
+  return s
 })
 
 /**
