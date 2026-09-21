@@ -305,7 +305,11 @@ async function runImageAttempt(t, att) {
   }
   let res
   try {
-    res = await fetch(att.url, { headers: { authorization: 'Bearer ' + t.apiKey }, ...init })
+    // **展开顺序有讲究**：`...init` 里带着上面刚设的 `headers`（content-type），
+    // 写在 authorization 后面会把它整块覆盖掉 → 请求不带令牌，服务端一律 401「未提供令牌」
+    // （实测 agnes 生图就是被这个坑到：工具挂得好好的，一调就是 401）。
+    // 所以先展开 init，再单独盖一层 headers，两边合并。
+    res = await fetch(att.url, { ...init, headers: { ...(init.headers ?? {}), authorization: 'Bearer ' + t.apiKey } })
   } catch (e) {
     return { error: `请求发不出去：${e?.message ?? e}` }
   }
