@@ -7,7 +7,6 @@ import {
   FolderOpen,
   FolderPlus,
   LoaderCircle,
-  Lock,
   LogIn,
   MessageSquarePlus,
   RefreshCw,
@@ -26,9 +25,10 @@ export interface Project {
   /** 添加时间，作为排序兜底 */
   added?: number
   /**
-   * 默认工作目录：内核自己的 workspace（`~/qingniaoai-workspace`）。
+   * 内置的「任务」目录：内核自己的 workspace（`~/qingniaoai-workspace`）。
    * 它由主进程创建、始终可用，所以**不提供移除**——列表被清空后只剩它一个落脚点，
    * 否则用户会把目录全删光、连「往哪放东西」都没了。
+   * 恒排在最前（渲染时单独摘出来先画，见下方 render 注释）。
    */
   builtin?: boolean
 }
@@ -126,7 +126,12 @@ export function Sidebar(p: Props) {
               </button>
             </div>
           )}
-          {p.projects.map((proj) => {
+          {/*
+            「任务」目录（builtin）恒居首位：渲染时先把它摘出来单独画，其余保持用户顺序。
+            排序放在渲染层而不是 setProjects 时——存档里它本来就在最前，但用户若手动改过
+            存档、或将来加了项目拖拽排序，渲染层这一句是唯一能保证「永远在最上面」的地方。
+          */}
+          {[...p.projects].sort((a, b) => Number(!!b.builtin) - Number(!!a.builtin)).map((proj) => {
             const isOpen = !!p.expanded[proj.id]
             const list = p.sessionsMap[proj.path] ?? []
             const count = shownCount[proj.id] ?? COLLAPSE_AT
@@ -135,13 +140,12 @@ export function Sidebar(p: Props) {
               <div key={proj.id}>
                 <div
                   className={'proj' + (proj.builtin ? ' builtin' : '')}
-                  title={proj.builtin ? `${proj.path}\n默认工作目录，不可移除` : `${proj.path}\n右键：打开文件夹`}
+                  title={proj.builtin ? `${proj.path}\n内置目录，不可移除` : `${proj.path}\n右键：打开文件夹`}
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
                 >
                   <Folder size={15} className="proj-ico" />
                   <span className="proj-name">{proj.name}</span>
-                  {proj.builtin && <Lock size={11} className="proj-lock" />}
                   {/* hover 只留「添加任务」一个：打开文件夹/从列表移除都归右键菜单，
                       图标堆在行右端反而容易点错 */}
                   <span className="proj-actions">
@@ -374,11 +378,11 @@ export function Sidebar(p: Props) {
               添加任务
             </button>
             <div className="ctx-sep" />
-            {/* 默认工作目录不给移除：置灰 + 说明，菜单里直接写清原因，不用弹窗 */}
+            {/* 「任务」目录不给移除：置灰 + 说明，菜单里直接写清原因，不用弹窗 */}
             <button
               className="ctx-item danger"
               disabled={!!menu.proj.builtin}
-              title={menu.proj.builtin ? '默认工作目录，不可移除' : undefined}
+              title={menu.proj.builtin ? '内置目录，不可移除' : undefined}
               onClick={() => {
                 if (menu.proj.builtin) return
                 setConfirmDel(menu.proj)
@@ -386,7 +390,7 @@ export function Sidebar(p: Props) {
               }}
             >
               <Trash2 size={14} />
-              {menu.proj.builtin ? '默认目录 · 不可移除' : '从列表移除'}
+              {menu.proj.builtin ? '内置目录 · 不可移除' : '从列表移除'}
             </button>
           </div>
         </div>
