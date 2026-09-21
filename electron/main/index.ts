@@ -35,7 +35,7 @@ function createWindow(): void {
   // dev 态读源码目录里的 resources/image/icon.png
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
-    : join(app.getAppPath(), 'resources', 'icon.png')
+    : join(app.getAppPath(), 'resources', 'image', 'icon.png')
   mainWin = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -461,52 +461,52 @@ function startPanelApi(): Promise<number> {
 function panelMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'panel-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'panel-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'panel-mcp.mjs')
 }
 
 /** 桌面辅助 MCP（app_running）脚本位置（随安装包分发） */
 function desktopMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'desktop-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'desktop-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'desktop-mcp.mjs')
 }
 
 /** 媒体生成 MCP（生图/生视频工具）脚本位置（随安装包分发） */
 function mediaMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'media-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'media-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'media-mcp.mjs')
 }
 
 /** 图片理解 MCP（describe_image 识图工具）脚本位置（随安装包分发） */
 function visionMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'vision-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'vision-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'vision-mcp.mjs')
 }
 
 /** 电脑控制视觉叠加 MCP（给收不了图的模型把截图读成文字）脚本位置（随安装包分发） */
 function screenMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'screen-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'screen-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'screen-mcp.mjs')
 }
 
 /** 语音合成 MCP（generate_speech 配音工具）脚本位置（随安装包分发） */
 function ttsMcpPath(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'tts-mcp.mjs') : join(app.getAppPath(), 'resources', 'tts-mcp.mjs')
+  return app.isPackaged ? join(process.resourcesPath, 'tts-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'tts-mcp.mjs')
 }
 
 /** 音乐生成 MCP（generate_music / check_music 工具）脚本位置（随安装包分发） */
 function musicMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'music-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'music-mcp.mjs')
+    : join(app.getAppPath(), 'resources', 'mcp', 'music-mcp.mjs')
 }
 
 /** 语音识别 MCP（transcribe_audio 听写工具）脚本位置（随安装包分发） */
 function asrMcpPath(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'asr-mcp.mjs') : join(app.getAppPath(), 'resources', 'asr-mcp.mjs')
+  return app.isPackaged ? join(process.resourcesPath, 'asr-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'asr-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -765,7 +765,7 @@ function createTray(): void {
   if (tray) return
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
-    : join(app.getAppPath(), 'resources', 'icon.png')
+    : join(app.getAppPath(), 'resources', 'image', 'icon.png')
   const image = existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty()
   tray = new Tray(image)
   tray.setToolTip('青鸟 QingNiao')

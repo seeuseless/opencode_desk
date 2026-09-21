@@ -13,7 +13,7 @@
   内核消费 mime 映射含 `video/*`（ProviderTransform 的 Gy 函数：image/audio/video/pdf）。
 - 会话历史里 file part 是一等公民：内核把用户 file part 摘要成 `[Attached image/png: 文件名]` 文本，模型天然可见。
 
-## media MCP 侧（resources/media-mcp.mjs）
+## media MCP 侧（resources/mcp/media-mcp.mjs）
 
 - `generate_image` 同时支持**文生图**（只传 `prompt`）与**图生图**（追加 `image` 数组）。请求体不写死一家：
   agnes 的 `extra_body.image`、OpenAI 兼容形态、`/images/edits` multipart 依次试，见下文「通用性」。
@@ -87,7 +87,7 @@
   （字段 `model/prompt/response_format/image`，多数家一次只吃一张）。
   问通的那种记在该目标上，后续直接用它，不再每次撞前两堵墙；三种全失败才把三家原因逐条回给模型。
   stepfun（`step-image-edit-2`）即靠 ②③ 跑通，不需要任何 stepfun 专属代码。
-- **配音同理**（`resources/tts-mcp.mjs` 的 `generate_speech`，记账在 `speechPicks`）：① OpenAI 标准 `POST /audio/speech`
+- **配音同理**（`resources/mcp/tts-mcp.mjs` 的 `generate_speech`，记账在 `speechPicks`）：① OpenAI 标准 `POST /audio/speech`
   （正文 `input`、风格 `instructions`、`response_format`，响应多为音频字节流，也可能是 `{data:{url}}`——同一条上两种都收）；
   ② `POST /chat/completions` + `audio:{voice,format}`，待合成文本在 assistant、风格指令在 user（MiMo `mimo-v2.5-tts` 那套）；
   ③ ② 再加 `modalities:['audio','text']`。找音频按**值**判（`data:audio…;base64,` / `http(s)` / 200+ 字符的纯 base64），
@@ -96,7 +96,7 @@
   `media:read-audio` 读字节转 blob URL 播放（`file://` 在渲染层放不了，与视频同一条路）。
 - 生视频的 `mode` / `audios` / `size: 720P` 等参数仍是 agnes 约定，非 agnes 家要真跑通得按家做参数适配表——目前没做。
 
-## 识图（vision MCP，resources/vision-mcp.mjs）
+## 识图（vision MCP，resources/mcp/vision-mcp.mjs）
 
 - **识图不是工具能力的正解，是兜底**：图片进上下文后模型天然看得见，只有「对话模型不支持 image 输入、
   内核把附件降级成 `[Attached image/png: 路径]` 一行」时才需要外包给视觉模型代看。

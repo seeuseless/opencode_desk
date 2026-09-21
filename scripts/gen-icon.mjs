@@ -1,4 +1,4 @@
-/* 生成应用图标：青鸟（lucide bird，ISC）+ 渐变蓝圆角底 → resources/icon.png / icon.ico */
+/* 生成应用图标：青鸟（lucide bird，ISC）+ 渐变蓝圆角底 → resources/image/icon.png / icon.ico */
 import sharp from 'sharp'
 import { writeFileSync, mkdirSync } from 'node:fs'
 
@@ -22,9 +22,9 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" vi
   <g transform="translate(64 64) scale(16)" fill="none" stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${PATHS}</g>
 </svg>`
 
-mkdirSync('resources', { recursive: true })
+mkdirSync('resources/image', { recursive: true })
 
-await sharp(Buffer.from(svg)).resize(512, 512).png().toFile('resources/icon.png')
+await sharp(Buffer.from(svg)).resize(512, 512).png().toFile('resources/image/icon.png')
 
 /** 组装 PNG-in-ICO（Windows Vista+ 支持），多尺寸 */
 function makeIco(entries) {
@@ -51,5 +51,5 @@ for (const size of [16, 32, 48, 256]) {
   const buf = await sharp(Buffer.from(svg)).resize(size, size).png().toBuffer()
   entries.push({ size, buf })
 }
-writeFileSync('resources/icon.ico', makeIco(entries))
+writeFileSync('resources/image/icon.ico', makeIco(entries))
 console.log('icon.png / icon.ico done')

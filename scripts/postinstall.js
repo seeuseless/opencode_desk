@@ -1,7 +1,7 @@
 /**
  * postinstall:
  * 1) 在 macOS 上把 opencode-ai 原生二进制加可执行位（npm optional dep 安装后常缺 x）
- * 2) 从 resources/icon.png 生成 resources/icon.icns（mac 打包需要；Windows 跳过）
+ * 2) 从 resources/image/icon.png 生成 resources/image/icon.icns（mac 打包需要；Windows 跳过）
  *
  * 任何一步失败都静默（不影响 Windows 安装）。
  */
@@ -28,7 +28,7 @@ if (platform === 'darwin') {
 }
 
 // 2) 生成 icns（仅当缺失且 icon.png 存在）
-const resources = path.join(__dirname, '..', 'resources')
+const resources = path.join(__dirname, '..', 'resources', 'image')
 const icns = path.join(resources, 'icon.icns')
 const png = path.join(resources, 'icon.png')
 if (fs.existsSync(icns)) {
@@ -46,7 +46,7 @@ if (fs.existsSync(icns)) {
     fs.rmSync(iconset, { recursive: true, force: true })
     ok('icon.icns 已生成（sips + iconutil）')
   } catch (e) {
-    ok('生成 icon.icns 失败：' + e.message + '（可手动: sips -z 1024 1024 resources/icon.png 后 iconutil 生成）')
+    ok('生成 icon.icns 失败：' + e.message + '（可手动: sips -z 1024 1024 resources/image/icon.png 后 iconutil 生成）')
   }
 } else if (!fs.existsSync(icns) && fs.existsSync(png)) {
   ok('icon.icns 缺失且当前非 macOS；mac 打包前请在 Mac 上先跑一次 npm install 自动生成')

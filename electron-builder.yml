@@ -9,7 +9,7 @@ directories:
   buildResources: resources
 files:
   - out/**
-  - resources/icon.png
+  - resources/image/icon.png
   # 主进程运行时要用的第三方包：二维码编码器（移动端面板把 {平台}/ide/device/{token} 画成码）。
   # files 一旦自定义就不再带默认的 node_modules，用到的必须显式列出来。
   - node_modules/qrcode-generator/**
@@ -17,40 +17,41 @@ extraResources:
   # OpenCode 内核原生二进制（主进程打包态从 resources/bin 读取）
   - from: node_modules/opencode-ai/bin
     to: bin
-  - from: resources/icon.png
+  # 应用图标：主进程 createWindow / createTray 都要读它，所以平铺到 resources 根
+  - from: resources/image/icon.png
     to: icon.png
   # 内置技能（主进程启动时同步到 ~/.qingniaoai/opencode/skills）
   - from: resources/builtin-skills
     to: builtin-skills
   # 面板浏览器 MCP 脚本（AI 操控右侧面板 webview 的工具端）
-  - from: resources/panel-mcp.mjs
+  - from: resources/mcp/panel-mcp.mjs
     to: panel-mcp.mjs
   # 桌面辅助 MCP 脚本（app_running 查进程，防桌面控制重复启动应用实例）
-  - from: resources/desktop-mcp.mjs
+  - from: resources/mcp/desktop-mcp.mjs
     to: desktop-mcp.mjs
   # 媒体生成 MCP 脚本（generate_image / create_video / check_video，让对话模型也能生图生视频）
-  - from: resources/media-mcp.mjs
+  - from: resources/mcp/media-mcp.mjs
     to: media-mcp.mjs
   # 图片理解 MCP 脚本（describe_image，非视觉模型发图时由视觉模型代看）
-  - from: resources/vision-mcp.mjs
+  - from: resources/mcp/vision-mcp.mjs
     to: vision-mcp.mjs
   # 电脑控制视觉叠加 MCP 脚本（代理 computer-use-mcp，把截图读成文字给收不了图的模型）
-  - from: resources/screen-mcp.mjs
+  - from: resources/mcp/screen-mcp.mjs
     to: screen-mcp.mjs
   # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
-  - from: resources/tts-mcp.mjs
+  - from: resources/mcp/tts-mcp.mjs
     to: tts-mcp.mjs
   # 音乐生成 MCP 脚本（generate_music / check_music，异步提交 + 轮询）
-  - from: resources/music-mcp.mjs
+  - from: resources/mcp/music-mcp.mjs
     to: music-mcp.mjs
   # 语音识别 MCP 脚本（transcribe_audio，音频转文字）
-  - from: resources/asr-mcp.mjs
+  - from: resources/mcp/asr-mcp.mjs
     to: asr-mcp.mjs
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"
 win:
-  icon: resources/icon.ico
+  icon: resources/image/icon.ico
   target:
     - nsis
 nsis:
@@ -58,7 +59,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
 mac:
-  icon: resources/icon.icns
+  icon: resources/image/icon.icns
   target:
     - dmg
     - zip
