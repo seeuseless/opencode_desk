@@ -359,6 +359,12 @@ const PROVIDER_PRESETS: {
 
 export function SettingsView(p: Props) {
   const providers = p.settings.providers
+  /**
+   * 访问权限档位：**完全控制是总权限闸**——主进程收到「能不能调用别的模型」的询问时直接放行，
+   * 不再弹授权卡（见 electron/main/gate.ts requestModelAuth）。所以这一档下本页的授权清单
+   * 只是历史记录，撤销它也拦不住；文案必须说清，否则用户会以为撤销失效了。
+   */
+  const fullAccess = p.settings.access === 'full'
   const [draft, setDraft] = useState<Draft | null>(null)
   const [mcpDraft, setMcpDraft] = useState<McpDraft | null>(null)
   const [fetching, setFetching] = useState(false)
@@ -1054,12 +1060,25 @@ export function SettingsView(p: Props) {
           </h3>
           <p className="sec-tip">
             除当前对话模型外，AI 在识图、生成图片/视频/音乐、配音、语音识别时会调用别的模型。
-            每次调用前都会弹一张授权卡，你选「永久允许」的目标会记在这里——想恢复成每次询问就撤销它。
-            <br />
-            撤销会同时清掉本次运行内的会话级授权：留着它会让「撤销了却还在调」看起来像没生效。
+            {fullAccess ? (
+              <>
+                当前是<strong>完全控制</strong>：这一档是总权限闸，这类调用<strong>一律直接放行、不再弹授权卡</strong>，
+                下面的清单只是历史记录（撤销它也拦不住）。想恢复成每次询问，把访问权限切回「默认权限」。
+              </>
+            ) : (
+              <>
+                每次调用前都会弹一张授权卡，你选「永久允许」的目标会记在这里——想恢复成每次询问就撤销它。
+                <br />
+                撤销会同时清掉本次运行内的会话级授权：留着它会让「撤销了却还在调」看起来像没生效。
+              </>
+            )}
           </p>
           {authGrants.length === 0 && (
-            <div className="plist-empty">还没有永久允许的目标，AI 每次调用其他模型都会先问你</div>
+            <div className="plist-empty">
+              {fullAccess
+                ? '还没有永久允许的目标；当前是完全控制，这类调用本来也不会再问你'
+                : '还没有永久允许的目标，AI 每次调用其他模型都会先问你'}
+            </div>
           )}
           {authGrants.length > 0 && (
             <div className="plist">

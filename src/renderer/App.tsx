@@ -532,7 +532,7 @@ export default function App() {
     setAccessAsk(null)
     if (!ask) return
     setSettings(await window.qingniao.setAccess(ask.level))
-    setNotice('已切换为「完全控制」：AI 读写文件、执行命令都不再询问（对所有文件夹生效）。')
+    setNotice('已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。')
   }
 
   // 展示顺序：最近有对话活动的文件夹排最前，但「任务」目录（builtin）永远钉在最上面
@@ -666,6 +666,10 @@ export default function App() {
           <p className="confirm-text">
             访问权限将改为<strong>完全控制</strong>：
             AI 之后读写文件、执行命令都<strong>不再先问你</strong>，直接动手。
+          </p>
+          <p className="confirm-text">
+            这一档也是<strong>总权限闸</strong>：识图、生图/视频、配音、语音识别这类「调用别的模型」
+            同样<strong>不再弹授权卡</strong>——你给的已经是全部权限了。
           </p>
           <p className="confirm-text hint">
             这条权限<strong>对所有文件夹生效</strong>，不是只对当前项目。如果只是想让它改一次，

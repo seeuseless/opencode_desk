@@ -13,8 +13,11 @@
  * 因为那是两种不同能力、不同费用；而「桌面截图代看」和「describe_image 识图」是同一件事，
  * 归一成同一个键，不必问两遍。
  *
- * **与访问权限档位完全无关**：access 管「能不能改文件/执行命令」，这里管「能不能多调一个模型」。
- * 完全控制档下照样会问——这是产品明确要求。
+ * **与访问权限档位的关系（2026-09-21 改）**：早前产品要求是「不管哪一档都要问」，现已改：
+ * access 是**总权限闸**，用户既然选了「完全控制」（改文件、执行命令一律放行），
+ * 再为「多调一个模型」单独弹一张卡就是噪音——他给的已经是全部权限了。
+ * 所以 `access === 'full'` 时这里**直接放行、不再询问**；「默认」档照旧逐次询问。
+ * 用量汇总（markUsed）不受影响，界面仍能看到这一轮用了哪些模型。
  */
 
 import { loadSettings, saveSettings } from './config'
@@ -128,6 +131,8 @@ export function requestModelAuth(req: ModelAuthReq): Promise<{ allowed: boolean;
   const role = normRole(String(req?.role ?? 'other'))
   const id = String(req?.id ?? '').trim()
   if (!id) return Promise.resolve({ allowed: true, scope: 'no-target' })
+  // 完全控制档：用户已把本机权限全给了 AI，不再为「多调一个模型」单独弹卡（见文件头）
+  if (loadSettings().access === 'full') return Promise.resolve({ allowed: true, scope: 'full-access' })
   if (isModelGranted(role, id)) return Promise.resolve({ allowed: true, scope: 'granted' })
 
   const key = grantKey(role, id)
