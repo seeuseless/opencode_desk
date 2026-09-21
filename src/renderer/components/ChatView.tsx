@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Music, Pencil, Paperclip, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
@@ -220,7 +220,11 @@ function continuationText(list: MessageView[]): string {
   const lastUser = [...list].reverse().find((m) => m.info.role === 'user')
   const lastAsst = [...list].reverse().find((m) => m.info.role === 'assistant')
   const text = lastUser
-    ? lastUser.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n').trim()
+    ? lastUser.parts
+        .filter((x) => x.type === 'text' && !x.synthetic)
+        .map((x) => x.text ?? '')
+        .join('\n')
+        .trim()
     : ''
   if (!text) return ''
   return lastAsst && lastAsst.parts.length ? RETRY_CONTINUE : text
@@ -1636,9 +1640,22 @@ export function ChatView(p: Props) {
     if (attFiles.length) {
       const hasImg = attFiles.some((a) => a.mime.startsWith('image/'))
       const hasVid = attFiles.some((a) => a.mime.startsWith('video/'))
+      const hasAud = attFiles.some((a) => a.mime.startsWith('audio/'))
+      const kindOf = (m: string) =>
+        m.startsWith('image/') ? '图片' : m.startsWith('video/') ? '视频' : m.startsWith('audio/') ? '音频' : '文件'
       const lines = ['用户这一轮发来了附件，下面是本机绝对路径（填工具参数时原样照抄，不要改成文件名）：']
-      for (const a of attFiles) lines.push(`- ${a.mime.startsWith('image/') ? '图片' : '视频'}：${a.path}`)
+      for (const a of attFiles) lines.push(`- ${kindOf(a.mime)}：${a.path}`)
+      // 音频最常见也最容易答错：模型常回「我听不了音频」或直接开始转述文件名，先把它按死
+      if (hasAud)
+        lines.push(
+          '⚠️ 有音频时**严禁**回答「我听不了音频 / 无法处理音频」，也**严禁**反问用户要文字版——' +
+            '你要做的就是调 transcribe_audio 把音频路径放进 audio（要指定语言传 language），拿到转写文本后再按用户意图处理。'
+        )
       lines.push('按用户意图选工具，不要回答「我看不了图片」，也不要只描述附件：')
+      if (hasAud) {
+        lines.push('- 要**语音转文字 / 听写 / 转写 / 总结录音内容 / 把这段会议记下来**→ 调 transcribe_audio，audio 填上面的音频路径。')
+        lines.push('- 音频要**改风格 / 变声 / 重新配音**→ 那是重新合成，调 generate_speech（transcribe_audio 只负责听，不改音频）。')
+      }
       if (hasImg) {
         lines.push('- 要**看懂图片内容**（识别画面、读图里文字、回答关于图的问题）→ 调 describe_image，images 填上面的图片路径。')
         lines.push('- 要**改图 / 按图出图**（换背景、换风格、去掉某物、做成某风格）→ 调 generate_image，把上面的图片路径放进 image，文字要求写进 prompt。')
@@ -1752,7 +1769,8 @@ export function ChatView(p: Props) {
   // 不能算进「有内容」，否则注入记忆后 msgs 非空、空态引导就不显示了
   const visibleMsgCount = msgs.filter((m) => {
     if (m.info.role !== 'user') return true
-    const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+    // 与气泡渲染同口径（滤掉 synthetic），否则只带内核过程文本的消息会被算成「有内容」
+    const txt = m.parts.filter((x) => x.type === 'text' && !x.synthetic).map((x) => x.text).join('')
     return !isCtxOnly(txt)
   }).length
 
@@ -1848,7 +1866,13 @@ export function ChatView(p: Props) {
             if (m.info.role === 'user') {
               // 自动续跑发的「继续」：隐藏气泡，重试进度走尾部状态条（第 x/10 次）
               if (autoContinueIds.current.has(m.info.id)) return null
-              const txt = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
+              // 内核给用户消息挂的 synthetic 过程文本要排除掉：read 工具会在同一个用户
+              // 消息里塞一条 `Called the Read tool with the following input: {...}`，
+              // 不滤掉就会被拼进用户气泡，看着像用户自己输入了一串 JSON（实测 mp3 附件会这样）
+              const txt = m.parts
+                .filter((x) => x.type === 'text' && !x.synthetic)
+                .map((x) => x.text)
+                .join('')
               // 「仅上下文」注入（项目记忆 / 浏览器页面上下文），AI 可见但界面不渲染，保持对话顶部干净
               if (isCtxOnly(txt)) return null
               const fatts = m.parts
@@ -2083,7 +2107,8 @@ export function ChatView(p: Props) {
                     <img src={a.url} alt={a.name} />
                   ) : (
                     <span className="catt-file" title={a.path}>
-                      <Film size={12} />
+                      {/* 音频给个音符图标：与视频区分开，用户一眼看出这条是「要转文字的」 */}
+                      {a.mime.startsWith('audio/') ? <Music size={12} /> : <Film size={12} />}
                       <span>{a.name}</span>
                     </span>
                   )}
@@ -2097,7 +2122,11 @@ export function ChatView(p: Props) {
           <div className="crow">
             <button
               className="icon-btn"
-              title={busy ? '处理中不能上传附件' : '上传图片或视频（配合生图/生视频模型可图生图、图生视频）'}
+              title={
+                busy
+                  ? '处理中不能上传附件'
+                  : '上传图片、视频或音频（图片配合生图模型可图生图；音频可让 AI 转文字）'
+              }
               disabled={busy}
               onClick={() => void pickAtt()}
             >
@@ -2469,19 +2498,29 @@ function mergePoll(
   }
   // 本地独有的保留；乐观插入的 tmp 用户消息在真实用户消息到达后按文本匹配丢弃，避免重复气泡
   const realUserTexts = new Set(
-    polled
-      .filter((m) => m.info.role === 'user')
-      .map((m) => m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n'))
+    polled.filter((m) => m.info.role === 'user').map((m) => userTextOf(m))
   )
   known.forEach((m) => {
-    if (
-      m.info.id.startsWith('tmp-') &&
-      realUserTexts.has(m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n'))
-    )
-      return
+    if (m.info.id.startsWith('tmp-') && realUserTexts.has(userTextOf(m))) return
     out.push(m)
   })
   return changed ? out : prev
+}
+
+/**
+ * 用户消息的正文（仅用户真正写的字，已滤掉内核塞的 synthetic 过程文本）。
+ *
+ * **必须是「只取用户自己写的字」**，不能简单 join 全部 text part：
+ * 内核会往同一条用户消息里追加 `Called the Read tool with the following input: {...}`，
+ * 于是真实消息的拼串变成「转文字\nCalled the Read tool...」，与乐观气泡的「转文字」
+ * 永远不相等 —— 文本去重失效、气泡顶不掉，界面上就冒出两个用户气泡
+ * （AI 回复后被全量刷新覆盖才恢复正常）。发音频附件必触发，因为 AI 一定会去 read 它。
+ */
+function userTextOf(m: MessageView): string {
+  return m.parts
+    .filter((x) => x.type === 'text' && !x.synthetic)
+    .map((x) => x.text ?? '')
+    .join('\n')
 }
 
 /** message.part.updated：parts 全量快照（登记全文，打字进度由 ticker 追） */
@@ -2515,13 +2554,21 @@ function upsertPart(
   let next = [...list]
   const mi = next.findIndex((m) => m.info.id === part.messageID)
   if (mi < 0) {
-    // 真实用户消息出现时，顶掉乐观插入的同文本 tmp 气泡，避免瞬间冒出两个重复气泡
-    if (roles.get(part.messageID) === 'user' && part.type === 'text') {
-      const text = part.text ?? ''
-      next = next.filter(
-        (m) =>
-          !(m.info.id.startsWith('tmp-') && m.parts.filter((x) => x.type === 'text').map((x) => x.text ?? '').join('\n') === text)
-      )
+    /*
+     * 真实用户消息的 part 陆续抵达时要顶掉乐观插入的 tmp 气泡，否则会短暂并排两个气泡。
+     *
+     * part 到达顺序不保证，所以 **任意** 用户 part（text / file）都试着认领一次，
+     * 命中条件看该 part 本身：
+     *  - 有非 synthetic 正文 → 按正文比对（userTextOf 已滤 synthetic）；
+     *  - 正文为空但带附件（纯附件发送）→ 认领「正文也为空且带附件」的 tmp。
+     * 否则会漏：只发附件时 text part 是空串，先到的是它，按纯文本比对永远匹配不上。
+     */
+    if (roles.get(part.messageID) === 'user' && (part.type === 'text' || part.type === 'file')) {
+      const own = part.type === 'text' && !part.synthetic ? (part.text ?? '') : ''
+      next = next.filter((m) => {
+        if (!m.info.id.startsWith('tmp-')) return true
+        return own ? userTextOf(m) !== own : !(userTextOf(m).trim() === '' && m.parts.some((x) => x.type === 'file'))
+      })
     }
     next.push({
       info: { id: part.messageID, role: roles.get(part.messageID) ?? 'assistant', sessionID: part.sessionID },
@@ -2658,9 +2705,11 @@ function UserBubble({
         {atts && atts.length > 0 && (
           <div className="uatts">
             {atts.map((a, i) =>
-              a.mime.startsWith('video/') ? (
+              a.mime.startsWith('video/') || a.mime.startsWith('audio/') ? (
+                // 音频与视频都不是图片：file:// 在渲染层放不了，只显名称条。
+                // （audio/ 必须单独判——漏了会掉进下面的 <img>，src 是 file:// 直接裂图）
                 <span key={i} className="uatt-video" title={a.name}>
-                  <Film size={11} />
+                  {a.mime.startsWith('audio/') ? <Music size={11} /> : <Film size={11} />}
                   <span className="uatt-name">{a.name}</span>
                 </span>
               ) : (
@@ -2979,6 +3028,11 @@ function relTarget(s: string, projPath?: string): string {
 }
 
 function PartView({ part, projectPath, preview, live, diffs }: { part: Part; projectPath?: string; preview?: string; live?: boolean; diffs?: FileDiff[] }) {
+  // 内核自己塞的过程说明文本（synthetic）不渲染：read 工具会先吐一条
+  //   Called the Read tool with the following input: {"filePath":"D:\...\xxx.mp3"}
+  // 再跟着文件内容。工具行本身已经写了「读取 + 路径」，这条纯属重复，
+  // 用户看到的就是一串不是自己输入的 JSON 糊在对话里。
+  if (part.synthetic && part.type === 'text') return null
   // 正文过长（代码大段粘贴/长回答）自动收起，点「展开全文」看全
   if (part.type === 'text' && part.text) {
     // 模型把工具调用吐成了正文文本（无效调用）：整段收进「无效调用」折叠行，不混进对话正文

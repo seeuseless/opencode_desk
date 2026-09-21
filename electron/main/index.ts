@@ -31,6 +31,8 @@ function opencodeBin(): string {
 }
 
 function createWindow(): void {
+  // 打包态图标由 extraResources 平铺到 resources 根（to: icon.png，不是 image/icon.png）；
+  // dev 态读源码目录里的 resources/image/icon.png
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
     : join(app.getAppPath(), 'resources', 'icon.png')
@@ -201,8 +203,12 @@ ipcMain.handle('media:read-audio', (_e, target: string): Uint8Array | null => {
   }
 })
 
-// ---------- 聊天附件上传（输入框回形针）：图片转 data URL + 落盘媒体目录，视频回 file:// ----------
+// ---------- 聊天附件上传（输入框回形针）：图片转 data URL + 落盘媒体目录，视频/音频回 file:// ----------
 // 落盘是为了让 AI 调 media MCP（图生图/图生视频）时能拿到一个稳定的本地路径引用，不受原文件移动删除影响
+//
+// 音频（mp3/wav/m4a…）与视频同一策略：**不读内容、不复制，直接回 file:// 原路径**。
+// 语音转文字（asr MCP 的 transcribe_audio）要的就是这个绝对路径，内核按 file:// 本机读；
+// 音频常常几 MB 起，转 data URL 塞进消息体只会白白撑大上下文。
 const VIDEO_MIME: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
@@ -216,13 +222,21 @@ function pickName(ext: string): string {
 ipcMain.handle('media:pick', async () => {
   const win = BrowserWindow.getFocusedWindow() ?? mainWin
   const opts = {
-    title: '上传图片或视频',
+    title: '上传图片、视频或音频',
     properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
     filters: [
       {
-        name: '图片与视频',
-        extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg', 'mp4', 'webm', 'mov']
-      }
+        name: '图片、视频与音频',
+        extensions: [
+          'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg',
+          'mp4', 'webm', 'mov',
+          'mp3', 'wav', 'flac', 'ogg', 'opus', 'm4a', 'aac'
+        ]
+      },
+      { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif', 'svg'] },
+      { name: '视频', extensions: ['mp4', 'webm', 'mov'] },
+      // 音频单列一档：用户要「语音转文字」时直接切这档，不用在一长串里找
+      { name: '音频', extensions: ['mp3', 'wav', 'flac', 'ogg', 'opus', 'm4a', 'aac'] }
     ]
   }
   const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
@@ -233,7 +247,7 @@ ipcMain.handle('media:pick', async () => {
     // 同上：[a-z]+ 会让 .mp4 这类带数字的扩展名匹配不上，视频就传不了
     const ext = p.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
     const imgMime = IMG_MIME[ext]
-    const mime = imgMime ?? VIDEO_MIME[ext]
+    const mime = imgMime ?? VIDEO_MIME[ext] ?? READ_AUDIO_MIME[ext]
     if (!mime || !existsSync(p)) continue
     if (imgMime) {
       mkdirSync(mediaDir, { recursive: true })
@@ -241,7 +255,7 @@ ipcMain.handle('media:pick', async () => {
       copyFileSync(p, file)
       out.push({ path: file, name: basename(p), mime, url: `data:${mime};base64,${readFileSync(p).toString('base64')}` })
     } else {
-      // 视频可能很大，不读内容不复制，内核进程在本机可直接按 file:// 读取
+      // 视频与音频都可能很大，不读内容不复制，内核进程在本机可直接按 file:// 读取
       out.push({ path: p, name: basename(p), mime, url: pathToFileURL(p).href })
     }
   }

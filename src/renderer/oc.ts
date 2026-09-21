@@ -215,6 +215,15 @@ export interface Part {
   text?: string
   tool?: string
   state?: ToolState
+  /**
+   * 内核自己生成的「过程说明」文本（不是模型写的、更不是用户输入）。
+   *
+   * 最典型的是 read 工具的结果：内核在真正读文件前后塞一条
+   * `Called the Read tool with the following input: {"filePath":"..."}`，
+   * 再跟上文件内容。这类文本呈现给用户毫无信息量（工具行本身已经写了「读取 + 路径」），
+   * 而且会把 mp3/图片这类附件路径当成正文糊在对话里。渲染层据此跳过。
+   */
+  synthetic?: boolean
   /** file part（用户上传的图片/视频附件）：历史渲染与预览用 */
   mime?: string
   filename?: string
@@ -324,8 +333,10 @@ export const oc = {
     call<Session>(`/session${dirQ(directory)}`, { method: 'POST', body: { title } }),
   messages: (id: string, directory?: string) => call<MessageView[]>(`/session/${id}/message${dirQ(directory)}`),
   /** 同步等待本轮对话完成；期间流式内容走事件推送。
-   *  附件（图片/视频）转成内核 file part：图片 data URL 供内核缩图，视频 file:// 由内核本机读取。
-   *  图片的 filename 带媒体目录完整路径——模型据此在图生图/图生视频时把路径传给 media MCP 工具。
+   *  附件（图片/视频/音频）转成内核 file part：图片 data URL 供内核缩图，视频与音频 file:// 由内核本机读取。
+   *  filename 一律填**媒体目录/本地完整路径**——模型据此把路径传给 MCP 工具：
+   *  图片用于图生图/图生视频，音频用于 transcribe_audio（语音转文字）。
+   *  之前只有图片带路径、其余填裸文件名，模型拿不到绝对路径就调不动工具（音频尤其明显）。
    *  variant 为思考档位（低/高/最高），非空时随请求顶层传给内核（见 docs/内核variant思考档位机制.md）。 */
   prompt: (id: string, directory: string | undefined, text: string, model?: ModelSel, atts?: Attachment[], variant?: string) =>
     call<MessageView>(`/session/${id}/message${dirQ(directory)}`, {
@@ -336,7 +347,8 @@ export const oc = {
           ...(atts ?? []).map((a) => ({
             type: 'file',
             mime: a.mime,
-            filename: a.mime.startsWith('image/') ? a.path : a.name,
+            // 图片文件名不能带扩展名以外的装饰（内核按扩展名判类型），但它必须是真路径
+            filename: a.path || a.name,
             url: a.url
           }))
         ],
