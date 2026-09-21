@@ -83,10 +83,6 @@ function hostOf(u: string): string {
 }
 
 /** 任务中断后的提示条：不自动重发消息，交还用户点「重试」手动续跑 */
-/** 「任务已完成」通报条的停留时长：秒级可扫一眼即可，久留会顶掉聊天区顶部空间 */
-const TURN_DONE_MS = 3000
-/** 通报条退场动画时长（与 CSS .notify.out 对齐）：动画走完才卸载节点，避免硬切 */
-const TURN_DONE_OUT_MS = 220
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
 /**
@@ -160,60 +156,6 @@ function metaDiffs(part: Part): FileDiff[] {
     }
   }
   return out
-}
-
-/**
- * 本轮成果的提供方：从生成类工具的回执里抠出「生图 / 生视频 / 配音 / 音乐 / 识别由 X 提供」。
- *
- * 生成模型是**跨提供商全库查找**的（生图可能落到 A 家、配音落到 B 家），光说「本轮由谁服务」
- * 交代不了成果是谁出的，所以各 MCP 脚本在回执开头固定写了归属短句，这里解析出来给状态条用。
- * 同轮多个成果（先出图再配音）按出现顺序去重，用「 · 」串起来。
- *
- * 归属句是**各 MCP 脚本自己写的**，正则要跟着脚本同步：
- * 加新工具时在对应脚本的回执里写上「<类型>由 <提供方> 提供」，再来这里加一条。
- */
-function toolSources(m: MessageView | undefined, visionWho?: string): string {
-  if (!m) return ''
-  const kinds: { re: RegExp; tag: string }[] = [
-    { re: /生图由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生图' },
-    { re: /生视频由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '生视频' },
-    { re: /配音由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '配音' },
-    { re: /音乐由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '音乐' },
-    { re: /识别由\s*([^（,，。;；)）]{1,40}?)\s*提供/, tag: '识别' }
-  ]
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const p of m.parts) {
-    if (p.type !== 'tool') continue
-    const raw = String(p.state?.output ?? '')
-    if (!raw) continue
-    for (const k of kinds) {
-      const hit = k.re.exec(raw)
-      if (!hit) continue
-      // 同轮同来源同类型只报一次：视频任务「创建 + 完成」两条回执不要重复刷屏
-      const key = `${k.tag}:${hit[1]}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      out.push(`${k.tag}由 ${hit[1]}`)
-    }
-  }
-  /**
-   * 视觉代看：不是「成果」，是真的换了个模型在干这轮的活，必须说清楚。
-   *
-   * 这条不走回执解析 —— screen MCP 的返回里只写"画面内容"，不提是谁看的，
-   * 代看人由主进程按三级优先挑（见 config.ts 的 pickVision），所以名字从
-   * 渲染层已算好的 visionWho 拿，跟顶部横幅点名的是同一个人。
-   *
-   * 只在本轮真的调过 computer 时才算：配了视觉模型但压根没用桌面控制，
-   * 报「视觉由 X 提供」会让人以为它干了活。
-   */
-  if (visionWho) {
-    const usedComputer = m.parts.some(
-      (p) => p.type === 'tool' && (p.tool ?? '').toLowerCase().includes('computer')
-    )
-    if (usedComputer) out.push(`视觉由 ${visionWho}`)
-  }
-  return out.join(' · ')
 }
 
 /** 助手消息 → 所属用户消息 id：内核把整轮差量挂在用户消息上，拉差量必须用用户消息 id */
@@ -394,15 +336,6 @@ export function ChatView(p: Props) {
   const [floatOpen, setFloatOpen] = useState(false)
   /** 全屏时彻底隐藏 AI 对话：浮动卡收起 + 右下角气泡一并消失（打游戏等完全不需要对话的场景） */
   const [chatHidden, setChatHidden] = useState(false)
-  /**
-   * 本轮结束提示（聊天区上方的状态条）：{ model: 服务的对话模型展示名, media: 成果来源说明, at: 结算时刻 }。
-   * 从 busy 变 false 那一刻由 effect 结算出来；at 用于让「每完成一轮就重新计 3 秒」——
-   * 连续两轮完成时对象引用会变、但 at 变化才是真正要重启定时器的信号。
-   * 提示亮 3 秒自动消失，不等用户手动关。
-   */
-  const [turnDone, setTurnDone] = useState<{ model: string; media: string; at: number } | null>(null)
-  /** 通报条是否已进入退场动画（播放中仍挂载，动画结束才连同节点一起卸载） */
-  const [turnDoneOut, setTurnDoneOut] = useState(false)
   /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
   const [manualBrowser, setManualBrowser] = useState(false)
   /** 面板当前页 URL（含用户手输导航，BrowserPanel 回传）：浏览器对话的上下文锚点 */
@@ -678,58 +611,19 @@ export function ChatView(p: Props) {
 
   /** 当前查看的会话是否在处理中——别的会话在跑时，这里必须是 false（不显示思考、不排队） */
   const busy = p.sessionId !== '' && !!busySet[p.sessionId]
-  /** 任意会话在处理中 → 显示停止按钮，可一键停掉所有并行任务（不只是当前会话） */
-  const anyBusy = Object.keys(busySet).some((s) => busySet[s])
   /** 当前会话的自动重试状态（pending=等待下一次重试；无定时器=次数耗尽等手动重试） */
   const retryState = p.sessionId ? retryView[p.sessionId] : undefined
 
   /**
    * 视觉代看人：当前对话模型看不到画面、但配置里有视觉模型 → 截图是由**另一个**模型看的。
    *
-   * 提前算（下面的结算 effect 要用）：它只依赖 props，与 msgs 无关，放前面没有副作用。
+   * 提前算（桌面控制横幅要用）：它只依赖 props，与 msgs 无关，放前面没有副作用。
    * 名字跟内核挑人同序（visionModelName 与主进程 pickVision 同口径），
-   * 顶部横幅和结束时的「视觉由 X 提供」点的是同一个人。
+   * 顶部横幅点名的代看人就是同一个人。
    */
   const modelSeesImage = modelSupportsImage(p.settings, p.model)
   const visionWho = !modelSeesImage ? visionModelName(p.settings) : ''
 
-  /**
-   * 本轮结束时结算「任务已完成 · 由 X 服务（生图由 Y 提供）」。
-   *
-   * 用上一帧的 busy 对比本帧：只有 true→false 且**当前会话**才结算（别的会话跑完不该在这里弹）。
-   * 结算时读 msgs 最新一轮的助手消息——服务方取当前对话模型展示名，成果提供方从工具回执里抠。
-   * busy 变 false 与 msgs 落盘不保证同一帧（session.idle 里先 markBusy 再拉历史），
-   * 所以这里等 msgs 里真的出现一条助手消息再结算，避免结算出空内容。
-   */
-  const wasBusy = useRef(false)
-  /** 上一帧「在处理中」时对应的会话（配合 wasBusy 判"真实跑完"）：
-   * 切会话时 wasBusy 会残留旧会话的 true，若不记归属，会把「旧会话在跑、切到已完成的新会话」
-   * 误判成「新会话本轮结束」而误弹完成条。必须校验这轮忙的是**当前会话**才结算。 */
-  const busySid = useRef('')
-  /** 已结算过「任务已完成」的（会话 + 最后助手消息）——同一轮只弹一次，防止 effect 因
-   * idle/落盘不同帧重跑时重复 setTurnDone（重复会重置 at、把 3 秒死线重算，看起来像弹了两遍）。 */
-  const doneSeen = useRef<{ sid: string; id: string }>({ sid: '', id: '' })
-  const lastAidId = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id ?? ''
-  useEffect(() => {
-    const now = busy
-    const ended = wasBusy.current && !now
-    if (busy) busySid.current = p.sessionId
-    wasBusy.current = now
-    // 忙的必须就是当前会话（切会话后 wasBusy 的残留不算）；否则旧会话的中断/完成会被错算到新会话上
-    if (!ended || busySid.current !== p.sessionId || !p.sessionId) return
-    const last = [...msgs].reverse().find((m) => m.info.role === 'assistant')
-    // 用户主动停止（MessageAbortedError）：不算完成，交给重试条与用户自己决定
-    const aborted = (last?.info as unknown as { error?: { name?: string } })?.error?.name === 'MessageAbortedError'
-    if (!last || aborted) return
-    // 同会话同一轮只弹一次：内容到位、effect 重跑也不会重复结算
-    if (doneSeen.current.sid === p.sessionId && doneSeen.current.id === last.info.id) return
-    doneSeen.current = { sid: p.sessionId, id: last.info.id }
-    const i = p.model.indexOf('/')
-    const prov = i > 0 ? p.settings.find((x) => x.id === p.model.slice(0, i)) : undefined
-    const mm = i > 0 ? prov?.models.find((x) => x.id === p.model.slice(i + 1)) : undefined
-    setTurnDone({ model: mm?.name || mm?.id || p.model, media: toolSources(last, visionWho), at: Date.now() })
-    // lastAidId 进依赖：idle 与 msgs 落盘不同帧时，等内容到位后这次 effect 会重跑并结算
-  }, [busy, p.sessionId, lastAidId, msgs, p.model, p.settings, visionWho])
   // 自动续跑发的「继续」不出用户气泡，统一由尾部「重试 x/10」状态条体现：
   // pending=本轮 runPrompt 是续跑发起的；ids=已确认属于续跑的真实用户消息 id（含别的会话，防止切会话漏隐藏）
   const autoContinuePending = useRef(false)
@@ -904,24 +798,29 @@ export function ChatView(p: Props) {
     void runPrompt(newText, sid, dir)
   }
 
-  /** 停止全部任务：先清本地状态让界面立刻回落到可输入（不等内核回执），再向内核逐个中止 */
-  async function stopAll() {
-    for (const sid of busySids()) {
-      const dir = busyDir.current[sid]
-      cancelRetry(sid)
-      markBusy(sid, false)
-      delete busyDir.current[sid]
-      oc.abort(sid, dir).catch((e) => {
-        const st = (e as Error & { status?: number }).status
-        // 502/503 是主进程代抛的传输层故障（内核仍在跑），不代表停止没送到
-        if (!st || st === 502 || st === 503) return
-        const msg = e instanceof Error ? e.message : String(e)
-        setError('停止失败：' + msg.slice(0, 120))
-      })
-    }
-    inflight.current = null
-    // 队列里的消息保留，当前任务停止后队列消费 effect（本会话空闲）会自动发出队首任务；
-    // 「停止」只对当前正在跑的任务生效，不打断用户排队的后续指令
+  /**
+   * 停止**当前这一个**会话的任务：先清本地状态让界面立刻回落到可输入（不等内核回执），再向内核发中止。
+   *
+   * 只停当前——别的会话是用户另开的并行任务，停自己的不该顺手把别人的也掐了。
+   * 队列里的消息保留：当前任务停止后队列消费 effect（本会话空闲）会自动发出队首任务，
+   * 「停止」只对正在跑的这一轮生效，不打断用户排好的后续指令。
+   */
+  async function stopCurrent() {
+    const sid = p.sessionId
+    if (!sid) return
+    const dir = busyDir.current[sid]
+    cancelRetry(sid)
+    markBusy(sid, false)
+    delete busyDir.current[sid]
+    // 只作废属于本会话的在途记录：别的会话那一条还活着，不能一起清
+    if (inflight.current?.sid === sid) inflight.current = null
+    oc.abort(sid, dir).catch((e) => {
+      const st = (e as Error & { status?: number }).status
+      // 502/503 是主进程代抛的传输层故障（内核仍在跑），不代表停止没送到
+      if (!st || st === 502 || st === 503) return
+      const msg = e instanceof Error ? e.message : String(e)
+      setError('停止失败：' + msg.slice(0, 120))
+    })
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
@@ -1594,9 +1493,6 @@ export function ChatView(p: Props) {
   async function runPrompt(text: string, sidOverride?: string, dirOverride?: string, modelOverride?: ModelSel, attsOverride?: Attachment[]) {
     // 新执行一律先清上一条错误：否则换话题/换模型续跑时，旧错误气泡会赖在对话尾部
     setError('')
-    // 新一轮开始：上一轮的「任务已完成」提示功成身退，不然它会一直挂在那儿骗人
-    setTurnDone(null)
-    doneSeen.current = { sid: '', id: '' }
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
     if (!sid) {
@@ -1842,24 +1738,6 @@ export function ChatView(p: Props) {
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
-  // 「任务已完成」是收尾通报，不是待办事项：亮 3 秒自己退场，别一直占着聊天窗口上方。
-  // 两段时间线：0~3000ms 亮着 → 3000ms 切成退场动画（notify-out，仍占位，只做淡出）
-  // → 3220ms 真正卸载节点、槽位高度收回。
-  // 只对 turnDone 生效——中断重试条要一直挂着，用户得能点「取消重试」。
-  const turnDoneAt = turnDone?.at ?? 0
-  useEffect(() => {
-    if (!turnDone) {
-      setTurnDoneOut(false)
-      return
-    }
-    const t1 = setTimeout(() => setTurnDoneOut(true), TURN_DONE_MS)
-    const t2 = setTimeout(() => setTurnDone(null), TURN_DONE_MS + TURN_DONE_OUT_MS)
-    return () => {
-      clearTimeout(t1)
-      clearTimeout(t2)
-    }
-  }, [turnDone, turnDoneAt])
-
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
@@ -2032,8 +1910,7 @@ export function ChatView(p: Props) {
         </div>
       )}
 
-      {/* 所有通知（任务完成 / 中断重试）统一在消息区上方的 .topnotify 里展示，
-          见顶部 .topnotify 块的实现；这里只负责任务队列。 */}
+      {/* 通知（中断重试）统一在输入窗上方的 .topnotify 里展示，这里只负责任务队列。 */}
       {curQueue.length > 0 && (
         <div className="qbar">
           <div className="col">
@@ -2097,18 +1974,6 @@ export function ChatView(p: Props) {
               <RotateCw size={13} /> 重试
             </button>
             <button className="icon-btn" title="关闭" onClick={() => cancelRetry(p.sessionId)}>
-              <X size={13} />
-            </button>
-          </div>
-        )}
-        {!retryState && turnDone && (
-          <div className={'notify done ' + (turnDoneOut ? 'out' : 'in')}>
-            <Check size={13} />
-            <span>
-              任务已完成 · 由 {turnDone.model} 服务
-              {turnDone.media && <em>（{turnDone.media}）</em>}
-            </span>
-            <button className="icon-btn" title="关闭" onClick={() => setTurnDone(null)}>
               <X size={13} />
             </button>
           </div>
@@ -2217,8 +2082,9 @@ export function ChatView(p: Props) {
               refreshingGroup={refreshingGroup}
             />
             <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />
-            {anyBusy ? (
-              <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopAll()}>
+            {/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
+            {busy ? (
+              <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopCurrent()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
             ) : (

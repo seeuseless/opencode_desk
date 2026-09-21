@@ -423,7 +423,7 @@ input, textarea { font: inherit; }
   padding: 6px 24px 8px;
   background: var(--content);
 }
-/* 通用通知胶囊：任务完成（绿）/ 任务中断（红）两态共用一套骨架 */
+/* 通用通知胶囊：目前只有「任务已中断」一态在用（完成通报条已去掉） */
 .notify {
   display: flex; align-items: center; justify-content: center; gap: 7px;
   max-width: min(560px, calc(100% - 32px));
@@ -437,25 +437,11 @@ input, textarea { font: inherit; }
 .notify span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notify em { color: var(--fg2); opacity: .8; font-style: normal; margin-left: 5px; }
 .notify .icon-btn { flex: none; width: 20px; height: 20px; }
-/* 任务已完成：绿意点缀（浅色主题下用低饱和的绿，不刺眼） */
-.notify.done { color: var(--fg); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
-.notify.done > svg { color: var(--ok); }
-.notify.done span { white-space: normal; text-align: center; }
 /* 任务已中断：红边 + 红字 + 手动重试——中断是要用户留意的异常，用预警色点出 */
 .notify.retry { color: var(--err); border-color: color-mix(in srgb, var(--err) 40%, var(--line)); }
 .notify.retry > svg { color: var(--err); }
-/* 生命周期动画：任务完成从上滑入、向上淡出（退场在动画结束后才由 JS 卸载）；中断从下方输入区滑入 */
-.notify.in { animation: notify-in .18s ease-out; }
-.notify.out { animation: notify-out .22s ease-in forwards; }
+/* 入场动画：从下方输入区滑入（完成通报条已去掉，不再需要退场动画） */
 .notify.retry { animation: retry-in .18s ease-out; }
-@keyframes notify-in {
-  from { opacity: 0; transform: translateY(-6px); }
-  to { opacity: 1; transform: none; }
-}
-@keyframes notify-out {
-  from { opacity: 1; transform: none; }
-  to { opacity: 0; transform: translateY(-6px); }
-}
 @keyframes retry-in {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
