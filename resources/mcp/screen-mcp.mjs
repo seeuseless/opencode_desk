@@ -66,7 +66,17 @@ const fail = (id, text) => send({ jsonrpc: '2.0', id, result: { content: [{ type
 // ---------- 上游 computer-use-mcp 子进程：JSON-RPC 行协议透传 ----------
 /** 上游初始化失败时用它把 upstreamReady 打下去（声明在前，error 回调里才不会踩 TDZ） */
 let upReadyReject
-const up = spawn(UPSTREAM_CMD, UPSTREAM_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
+/**
+ * 必须给上游带 `ELECTRON_RUN_AS_NODE=1`。
+ *
+ * 主进程注入的 UPSTREAM_CMD 就是 **Electron 二进制本身**（`process.execPath`，打包态靠它充当 node，
+ * 不依赖用户机器上有没有装 node）。但 Windows 上 Electron 以 **GUI app 模式**启动时 stdout 不接管道
+ * ——上游的 JSON-RPC 回包一个都收不到，每次 tools/call 都会等到 20 秒超时。用户看到的就是
+ * 「桌面控制这一步超时了（截屏连续两次没返回）」。置 1 后走纯 Node 模式，stdout 正常；
+ * 对真正的 node / npx 这一项会被忽略，无副作用。
+ */
+const upEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+const up = spawn(UPSTREAM_CMD, UPSTREAM_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: upEnv })
 up.stderr.on('data', (d) => process.stderr.write(d))
 up.on('error', (e) => {
   process.stderr.write(`[screen-mcp] 上游启动失败：${e?.message ?? e}\n`)
