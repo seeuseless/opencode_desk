@@ -58,16 +58,20 @@ const VISION_TIMEOUT_MS = 10000
 /**
  * 截图预算：**一段时间内最多截几次图**。超了直接熔断（isError 回执），不再往上游发。
  *
- * 为什么要有（用户明确反馈过两次）：上游 computer-use-mcp 的工具描述里写着
- * 「you may need to wait and take successive screenshots」「consult a screenshot to determine
- * the coordinates」，模型照做就成了「点一下 → 截一张 → 再点一下 → 再截一张」——
- * 每一张截图都要额外调一次视觉模型（10s 级、消耗额度），在用户眼里就是**反复截屏死循环**。
- * 提示词层面已经反复写「截屏是最后兜底」，但模型并不总听；这里落成硬约束，
- * 让它想转也转不动，只能改用 uia_* / 键盘，或者如实把卡点告诉用户。
+ * 为什么要有：早期版本没有预算，「点一下 → 截一张 → 再点一下 → 再截一张」在用户眼里就是
+ * **反复截屏死循环**——每张截图都要额外调一次视觉模型（10s 级、消耗额度）。
+ *
+ * **上限取多少取决于主通道是哪一条**（这里踩过一次坑，别再收紧回去了）：
+ * 桌面控制一度把「无障碍树 uia_*」当成首选、截图降为「最后兜底」，于是这里被压到 3 次/2 分钟。
+ * 但**无障碍树对自绘界面（微信 4.0 等）是空的**，而截图预算又只剩 3 次——两条路同时走不通，
+ * 任务直接卡死。实测「截图 + 识别图片」才是能用到底的那条路，它的正常节奏本来就是**每步一张**。
+ *
+ * 所以现在放回到「够跑完一个完整任务」的量级：允许每步一张，靠**动作间隔**而不是靠次数来防死循环
+ * （真正的死循环是「截 → 什么都没做 → 再截」，那由工具描述里的硬规则管，熔断只兜最后一道底）。
  *
  * 阈值可用环境变量调（QN_SCREEN_SHOT_MAX / QN_SCREEN_SHOT_WINDOW_MS）。
  */
-const SHOT_MAX = Number(process.env.QN_SCREEN_SHOT_MAX) > 0 ? Number(process.env.QN_SCREEN_SHOT_MAX) : 3
+const SHOT_MAX = Number(process.env.QN_SCREEN_SHOT_MAX) > 0 ? Number(process.env.QN_SCREEN_SHOT_MAX) : 20
 const SHOT_WINDOW_MS =
   Number(process.env.QN_SCREEN_SHOT_WINDOW_MS) > 0 ? Number(process.env.QN_SCREEN_SHOT_WINDOW_MS) : 120000
 const shotAt = []
@@ -232,21 +236,21 @@ const STATIC_TOOLS = [
       // ---- 青鸟前置约束（必须放在上游英文之前：模型对描述里靠前的硬规则更买账，
       //      而上游原文明确鼓励「多截几张看结果 / 看截图定坐标」，那正是截屏死循环的源头）----
       '【青鸟桌面控制 · 最高优先级，与下面通用说明冲突时以本段为准】\n' +
-      '操作本机桌面应用，**先看能不能走无障碍树**：`uia_windows` 找窗口 → `uia_tree` 读元素 → ' +
-      '`uia_click` / `uia_set_text` / `uia_focus` 操作。能用的应用（资源管理器、记事本、Office 等）' +
-      '一律走这一档：纯文本、几十毫秒、不需要看画面，也**不需要也不许**截图。\n' +
-      '自绘界面（微信 4.0 等把 UI 画在画布上的应用）`uia_tree` 会回「没有任何可操作元素」（实测只读得到标题栏三个按钮）——' +
-      '**看到空树就立刻转键盘流程**：按键一律用 `uia_keys {"keys":"ctrl+f","match":"微信"}`，' +
-      '粘贴一律用 `uia_paste {"match":"微信"}`（先把内容 set_clipboard 再粘贴）。两者带上 `match` 会先聚焦目标窗口并确认，' +
-      '切不过去就直接拒绝——所以键永远不会打进别的窗口。\n' +
-      '本工具的 `key` / `type` 动作**也走同一条原生通路**（不再用会丢修饰键的旧实现），但**青鸟自己的窗口永远不会被输入**：' +
-      '当前最前面是青鸟时，key/type 会被直接拒绝并提示你改用带 `match` 的 `uia_keys` / `uia_paste`。\n' +
-      '**中文/文件/图片一律走剪贴板 + `uia_paste`，不要用 `type` 直接打中文**（会被输入法拦掉）。这一整条链路是确定性的，**一条截图都不用**。\n' +
-      '**`get_screenshot` 是最后的兜底：同一轮最多用一次，而且只能用来做开局判断（先决定点哪儿）**。' +
-      '**严禁用截图去确认某一步成没成**——下面英文里「take successive screenshots to see the results of your actions」' +
-      '与「consult a screenshot to determine the coordinates of the element」这两条**在青鸟里一律不适用**：' +
-      '每次截图都要额外调用一次视觉模型，又慢又费额度，还会把任务钉在原地反复截图。' +
-      '截图次数超限会被直接熔断。\n\n' +
+      '**主通道是「截图 → 看画面 → 动作」**：`{"action":"get_screenshot"}` 拿画面 → ' +
+      '按画面里的位置 `{"action":"left_click","coordinate":[x,y]}` 点、或 `{"action":"key","text":"ctrl+f"}` 发键。\n' +
+      '每一步之前都可以截一张来判断「该点哪儿 / 上一步成没成」——**这是正常节奏，不要憋着不截**。\n' +
+      '**禁止的是空转截屏：两张截图之间必须夹一个真实动作**（点击 / 按键 / 输入 / 滚动）。' +
+      '「截一张 → 什么都没做 → 再截一张」才是死循环，会被熔断。\n' +
+      '看不到图也照样能定位：截图回执会附一段「【电脑画面（由 X 识别）】」的文字描述（视觉模型代看），以它为准；' +
+      '坐标按截图尺寸估，图上那个红色十字是当前鼠标位置，点偏了就按它的偏移量成比例修正（偏差往往比你想的大）。\n' +
+      '**中文 / 文件 / 图片一律走剪贴板**：`computer-use_set_clipboard` 放好内容 → ' +
+      '`{"action":"key","text":"ctrl+v"}` 粘贴；要指定窗口就改用 `uia_paste {"match":"微信"}`（先切前台再粘）。' +
+      '**`type` 直接打中文会被输入法拦掉**，不要走那条路。\n' +
+      '无障碍树（`uia_windows` / `uia_tree` / `uia_click`）只在**原生控件应用**（资源管理器、记事本、Office）上顺手一用；' +
+      '**读不到元素就立刻回到截图通道，不要反复试树**——自绘界面（微信 4.0 这类把 UI 画在画布上的应用）' +
+      '`uia_tree` 是空的，实测只剩标题栏三个按钮。\n' +
+      '**青鸟自己的窗口永远不会被输入**：当前最前面是青鸟（用户正在对话的这个窗口）时，key/type 会被**直接拒绝**——' +
+      '这是保护用户输入框的一道闸，不是故障；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n\n' +
       'Use a mouse and keyboard to interact with a computer, and take screenshots.\n' +
       '* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\n' +
       '* Always prefer using keyboard shortcuts rather than clicking, where possible.\n' +
@@ -932,12 +936,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   if (isComputerCall && callParams?.arguments?.action === 'get_screenshot' && !shootAllowed()) {
     fail(
       id,
-      `【截图已被熔断：这一轮别再截了】你在 ${Math.round(SHOT_WINDOW_MS / 1000)} 秒内已经截了 ${SHOT_MAX} 次图。` +
-        '反复截图不会让画面变清楚，每一步都截一张只会把任务钉在原地——每张截图都要额外调一次视觉模型，又慢又费额度。\n' +
-        '请改用：① `uia_windows` / `uia_tree` 读无障碍树（原生控件应用，纯文本、几十毫秒）；' +
-        '② 自绘界面（如微信）走纯键盘流程：`uia_window_focus "<窗口名>"` → ' +
-        '`{"action":"key","text":"ctrl+f"}` / `{"action":"key","text":"ctrl+v"}` / `{"action":"key","text":"return"}`；' +
-        '③ 真的要判断画面，就用你手上已有的那段「【电脑画面】」文字描述，不要再截新的。\n' +
+      `【截图已到上限：先做动作，别再空截了】你在 ${Math.round(SHOT_WINDOW_MS / 1000)} 秒内已经截了 ${SHOT_MAX} 次图。` +
+        '现在请**直接发出一个动作**（点击 / 按键 / 输入 / 滚动）再说：两张截图之间必须夹一个真实动作，' +
+        '连续空截既拿不到新信息，每张还要多调一次视觉模型。\n' +
+        '要判断画面就用你手上已有的那段「【电脑画面】」文字描述，不要再截新的。\n' +
         '如果确实卡住了，请如实告诉用户卡在哪一步、需要他做什么，不要再用截图试探。'
     )
     return
