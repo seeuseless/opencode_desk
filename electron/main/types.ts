@@ -374,6 +374,26 @@ export interface SkillItem {
   builtin?: boolean
 }
 
+/**
+ * 一个第三方依赖包（设置 → 依赖 展示用）。
+ *
+ * 数据来自**应用自己的 package.json**（声明的版本范围）+ **node_modules 里实际装的包**
+ * （真实版本号与协议），两者分开存：界面要显示用户问的「版本号」与「协议」，
+ * 但声明范围（^1.8.0）与实际装上的版本（1.8.2）不是一回事，混在一起会误导。
+ */
+export interface DepItem {
+  /** 包名 */
+  name: string
+  /** package.json 里声明的范围（如 ^1.8.0） */
+  declared: string
+  /** node_modules 里实际安装的版本；读不到时回落声明范围 */
+  version: string
+  /** 包的真实协议（MIT / Apache-2.0 …）；读不到时为 '未知' */
+  license: string
+  /** 开发依赖（devDependencies）：只参与构建，不随安装包分发 */
+  dev: boolean
+}
+
 export interface SkillDraft {
   scope: SkillScope
   /** project 作用域必填：技能所属项目的绝对路径 */

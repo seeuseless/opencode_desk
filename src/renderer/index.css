@@ -204,6 +204,19 @@ input, textarea { font: inherit; }
   display: flex; flex-direction: column; padding: 8px 12px 10px;
 }
 
+/* 左栏顶部常驻的「新建任务」：长得跟下面一行行的目录**同一款**（左对齐、同字号、同字色），
+   只是多个「+」图标，hover 底色也跟目录行一样——它是列表里的一项，不是一块独立按钮；
+   不做实心底、不掺主色，深浅主题都靠 --side-fg / --side-hover 自动跟着走。 */
+.side-newtask {
+  display: flex; align-items: center; justify-content: flex-start; gap: 8px;
+  width: 100%; margin-bottom: 4px; padding: 9px 8px;
+  background: transparent; color: var(--side-fg);
+  border: none; border-radius: 8px; font-size: 13px;
+}
+.side-newtask:hover { background: var(--side-hover); }
+.side-newtask > svg { color: var(--side-fg2); flex-shrink: 0; }
+.side-newtask:hover > svg { color: var(--side-fg); }
+
 .projlist { flex: 1; overflow-y: auto; }
 
 /* 左栏无项目时的引导 */
@@ -1706,3 +1719,39 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .acct-manual input.mono { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; }
 .acct-manual .lab-tip { display: block; font-size: 11.5px; color: var(--fg2); margin-top: 3px; }
 .acct-manual > button { align-self: flex-start; }
+
+/* ================= 设置 → 依赖（第三方包清单） ================= */
+/* 一行一包：包名（等宽，好对齐）+ 版本号 + 协议。协议用 chip 的颜色分"常见/未知"两档 */
+.dep-group { margin-top: 16px; }
+.dep-gtitle {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600; color: var(--fg); margin-bottom: 8px;
+}
+.dep-list {
+  display: flex; flex-direction: column;
+  border-radius: 12px; overflow: hidden; background: var(--bg3);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.dep-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; font-size: 13px;
+}
+.dep-row + .dep-row { box-shadow: inset 0 1px 0 var(--line); }
+.dep-row:hover { background: var(--bg2); }
+.dep-name {
+  flex: 1; min-width: 0;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dep-ver {
+  flex-shrink: 0; color: var(--fg2); font-size: 12px;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+}
+.dep-lic {
+  flex-shrink: 0; min-width: 84px; text-align: center;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  border-radius: 6px; padding: 1px 7px; font-size: 11px;
+}
+/* 读不到协议的包：灰一档，别装作已经知道 */
+.dep-lic.unk { background: var(--bg2); color: var(--fg2); }
+.dep-tip { font-size: 11.5px; color: var(--fg2); line-height: 1.6; margin-top: 6px; }

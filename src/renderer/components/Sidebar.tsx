@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   LogIn,
   MessageSquarePlus,
+  Plus,
   RefreshCw,
   Settings,
   Smartphone,
@@ -52,6 +53,14 @@ interface Props {
   onToggleProject: (id: string) => void
   onRemoveProject: (id: string) => void
   onNewSession: (id: string) => void
+  /**
+   * 顶部「新建任务」：在**默认的「任务」目录**里开一个新任务。
+   *
+   * 单独一个入口而不是复用 onNewSession：用户点顶部这个按钮时脑子里想的是
+   * 「我要开个活」，而不是「我要在某个具体文件夹里开」——落到内置的任务目录，
+   * 不确定放哪儿的东西就有了统一去处（真要放到别的目录，点那个目录行上的「添加任务」）。
+   */
+  onNewTask: () => void
   onAddProject: () => void
   onPickSession: (proj: Project, sid: string) => void
   onDeleteSession: (proj: Project, sid: string) => void
@@ -119,6 +128,16 @@ export function Sidebar(p: Props) {
   return (
     <>
       <aside className="side">
+        {/* 顶部常驻的「新建任务」：落在内置的「任务」目录（默认落脚点）。
+            放在列表上方而不是塞进某一行里——它是全局动作，不属于任何单个文件夹。 */}
+        <button
+          className="side-newtask"
+          title="在「任务」目录里新建一个任务"
+          onClick={p.onNewTask}
+        >
+          <Plus size={15} />
+          新建任务
+        </button>
         <div className="projlist">
           {p.projects.length === 0 && (
             <div className="proj-empty">

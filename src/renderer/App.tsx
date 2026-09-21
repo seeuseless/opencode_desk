@@ -13,7 +13,7 @@ import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './t
 type View = 'chat' | 'settings'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account'
+export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'deps'
 
 /**
  * 外部（对话框里的「配置模型」等）请求打开设置页时带的目标页。
@@ -273,6 +273,16 @@ export default function App() {
       setSessionId('')
       toChat()
     }
+  }
+
+  /**
+   * 左栏顶部「新建任务」：固定落在内置的「任务」目录。
+   *
+   * 它跟项目行的「添加任务」是同一个动作（进草稿态，真正的内核会话等第一条消息才创建），
+   * 只是目标目录恒为默认那个——用户点顶上的按钮时并没有挑目录。
+   */
+  function newTask() {
+    newSessionFor(projects.find((x) => x.builtin)?.id ?? 'builtin')
   }
 
   /** 项目行「新会话」：进草稿态（不创建内核会话），右侧开聊 */
@@ -564,6 +574,7 @@ export default function App() {
           onToggleProject={toggleProject}
           onRemoveProject={removeProject}
           onNewSession={newSessionFor}
+          onNewTask={newTask}
           onAddProject={addProject}
           onPickSession={pickSessionFor}
           onDeleteSession={deleteSessionOf}

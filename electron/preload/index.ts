@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   AccessLevel,
+  DepItem,
   DeskStatus,
   ModelAuthAsk,
   ModelAuthScope,
@@ -31,6 +32,8 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */
   kernelHealth: (): Promise<boolean> => ipcRenderer.invoke('kernel:health'),
+  /** 第三方依赖清单（设置 → 依赖）：包名 + 真实版本号 + 真实协议，来自 package.json 与已安装的包 */
+  depsList: (): Promise<DepItem[]> => ipcRenderer.invoke('deps:list'),
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),
   /**
    * 改**全局**访问权限档位（'default' = 写操作要确认 / 'full' = 完全控制），对所有文件夹生效。

@@ -6,7 +6,7 @@ import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setSelfRefs, setUiaMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
-import type { AccessLevel } from './types.ts'
+import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
@@ -822,6 +822,104 @@ ipcMain.handle('memory:append', (_e, req: { projectPath: string; content: string
   mkdirSync(d, { recursive: true })
   const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
   appendFileSync(memTodayFile(req.projectPath), `\n## ${stamp}\n\n${req.content}\n`, 'utf8')
+})
+
+// ---------- 第三方依赖清单（设置 → 依赖）----------
+// 清单来自应用自己的 package.json（声明范围），版本号与协议优先到 node_modules 里读**真实值**；
+// 打包后包里只留了运行时必需的几个 node_modules，其余靠构建时拍的快照 resources/deps.json 兜底，
+// 所以在装好的应用里看到的协议同样是包自己声明的那一个，不是猜的。
+function readJsonFile(p: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as Record<string, unknown>
+  } catch {
+    return null
+  }
+}
+
+/** 取包声明的协议：license 可能是字符串、{ type } 对象，或旧式的 licenses 数组 */
+function pkgLicenseField(j: Record<string, unknown>): string {
+  const raw = j['license']
+  if (typeof raw === 'string' && raw.trim()) return raw.trim()
+  if (raw && typeof raw === 'object' && typeof (raw as { type?: unknown }).type === 'string')
+    return ((raw as { type: string }).type ?? '').trim()
+  const arr = j['licenses']
+  if (Array.isArray(arr)) {
+    for (const one of arr) {
+      if (typeof one === 'string' && one.trim()) return one.trim()
+      if (one && typeof one === 'object' && typeof (one as { type?: unknown }).type === 'string')
+        return ((one as { type: string }).type ?? '').trim()
+    }
+  }
+  return ''
+}
+
+/**
+ * 包没在 package.json 写 license 时（如 exif-parser），读包里的 LICENSE 文件首段认 SPDX。
+ * 只认最前面 4000 字符——协议正文都在开头，且避免把整份 LICENSE 读进来比对。
+ */
+const SPDX_RULES: [RegExp, string][] = [
+  [/Apache License/i, 'Apache-2.0'],
+  [/Mozilla Public License/i, 'MPL-2.0'],
+  [/\bISC\b/i, 'ISC'],
+  [/\bMIT\b/i, 'MIT'],
+  [/BSD[- ]?3|BSD 3-Clause/i, 'BSD-3-Clause'],
+  [/BSD[- ]?2|BSD 2-Clause/i, 'BSD-2-Clause'],
+  [/0BSD/i, '0BSD'],
+  [/The Unlicense/i, 'Unlicense']
+]
+function sniffLicense(dir: string): string {
+  try {
+    if (!existsSync(dir)) return ''
+    const hit = readdirSync(dir).find((n) => /^licen[cs]e(\.|$)/i.test(n))
+    if (!hit) return ''
+    const head = readFileSync(join(dir, hit), 'utf8').slice(0, 4000)
+    // GPL/LGPL 要细分版本（2 / 3 差一个数字，义务完全不同），所以单独判一次再走通用表
+    if (/General Public License/i.test(head))
+      return /Version\s*2\b/i.test(head) ? 'GPL-2.0' : 'GPL-3.0'
+    if (/Lesser General Public License/i.test(head))
+      return /Version\s*2(\.1)?\b/i.test(head) ? 'LGPL-2.1' : 'LGPL-3.0'
+    for (const [re, spdx] of SPDX_RULES) if (re.test(head)) return spdx
+  } catch {
+    /* 读不到就当未知 */
+  }
+  return ''
+}
+
+/** 构建时拍的快照（scripts/gen-deps.mjs 生成）：按包名索引，兜底用 */
+function depsSnapshot(): Record<string, { version?: string; license?: string }> {
+  const file = app.isPackaged
+    ? join(process.resourcesPath, 'deps.json')
+    : join(app.getAppPath(), 'resources', 'deps.json')
+  const j = readJsonFile(file)
+  const items = (j?.['items'] as { name?: string; version?: string; license?: string }[] | undefined) ?? []
+  const map: Record<string, { version?: string; license?: string }> = {}
+  for (const it of items) if (it?.name) map[it.name] = { version: it.version, license: it.license }
+  return map
+}
+
+ipcMain.handle('deps:list', (): DepItem[] => {
+  const root = app.getAppPath()
+  const pkg = readJsonFile(join(root, 'package.json'))
+  if (!pkg) return []
+  const snap = depsSnapshot()
+  const out: DepItem[] = []
+  const collect = (m: unknown, dev: boolean): void => {
+    if (!m || typeof m !== 'object') return
+    for (const [name, range] of Object.entries(m as Record<string, unknown>)) {
+      const declared = typeof range === 'string' ? range : ''
+      const dir = join(root, 'node_modules', name)
+      const inst = readJsonFile(join(dir, 'package.json'))
+      let version = typeof inst?.['version'] === 'string' ? (inst['version'] as string) : ''
+      let license = inst ? pkgLicenseField(inst) : ''
+      if (!license) license = sniffLicense(dir)
+      if (!version) version = snap[name]?.version ?? declared.replace(/^[\^~>=<v ]+/, '')
+      if (!license) license = snap[name]?.license ?? '未知'
+      out.push({ name, declared, version, license, dev })
+    }
+  }
+  collect(pkg['dependencies'], false)
+  collect(pkg['devDependencies'], true)
+  return out.sort((a, b) => a.name.localeCompare(b.name))
 })
 
 // ---------- 技能（Skills）----------
