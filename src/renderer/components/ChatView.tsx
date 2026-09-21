@@ -777,6 +777,86 @@ export function ChatView(p: Props) {
   }
 
   /**
+   * 工具失败熔断 —— 任务层面的**机械刹车**。
+   *
+   * 为什么必须有（2026-09-21 实测）：生视频被限流后，模型收到 `HTTP 429 您已达到…速率限制`
+   * 并没有停，而是在 7 分钟里换提示词、换参数、换模型连续创建了 **100+ 次**，每一发都真打到服务端。
+   * 工具回执写得再清楚也拦不住模型「再试一次」的惯性，所以这里在回合层面记账并直接中止本轮。
+   *
+   * 判据分两档（只针对「重试也没用」的失败，正常的调试循环不受影响）：
+   *   配额 / 限流 / 鉴权类 —— 与请求内容无关，**第 1 次**即停；
+   *   其他失败 —— 必须**同一工具 + 同一错误**连续到 3 次才停
+   *   （避免误伤「命令报错 → 改代码 → 再跑」这种正常循环：报错内容一变，计数就归 1）。
+   */
+  const toolFails = useRef<Map<string, { n: number; sig: string }>>(new Map())
+  /** 已被熔断停下的会话：抑制自动重试提示，直到用户重新发消息 */
+  const halted = useRef<Set<string>>(new Set())
+  /** onRefreshSessions 的最新引用（事件回调只注册一次，闭包里的 props 会过期） */
+  const onRefreshRef = useRef(p.onRefreshSessions)
+  onRefreshRef.current = p.onRefreshSessions
+
+  /**
+   * 硬失败特征：与请求内容无关、重试必然再失败的错误。
+   *
+   * 配额类写得具体（额度**不足**、配额**超出**…）而不是只匹配「额度 / 余额 / 配额」两个字：
+   * 后者会把「命令输出里恰好提到额度」这种正常内容也判成硬失败，误伤面太大。
+   */
+  const HARD_FAIL_RE =
+    /HTTP\s*429|HTTP\s*40[123]|速率限制|限流|rate ?limit|too many requests|额度不足|余额不足|配额不足|超出配额|额度已用完|insufficient_quota|quota exceeded|已自动熔断|已停止查询/
+
+  /** 错误签名：抹掉数字与长 hex（request id / 时间戳每次都变，不归一就认不出「同一个错误」） */
+  function failSignature(tool: string, text: string): string {
+    const norm = text
+      .replace(/\b[0-9a-f]{8,}\b/gi, '#')
+      .replace(/\d+/g, '#')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 90)
+    return tool + '｜' + norm
+  }
+
+  /** 中止本轮并让用户看见原因（幂等：同一会话只停一次） */
+  function haltTurn(sid: string, tool: string, text: string, n: number) {
+    if (!sid || halted.current.has(sid)) return
+    // 手机端发起的回合不归本端管：用户在那边驱动，替他叫停反而莫名其妙
+    if (foreignSids.current.has(sid)) return
+    halted.current.add(sid)
+    toolFails.current.delete(sid)
+    cancelRetry(sid)
+    retries.current.delete(sid)
+    syncRetryView()
+    markBusy(sid, false)
+    oc.abort(sid, busyDir.current[sid] ?? dirRef.current).catch(() => { /* 已结束 */ })
+    const why = text.replace(/\s+/g, ' ').trim().slice(0, 160)
+    setError(
+      `已自动停止：工具「${tool || '未知'}」连续失败 ${n} 次` +
+        (why ? `（${why}）` : '') +
+        '。这类错误重试不会改变结果，所以替你叫停了——原因处理完后再发一句话即可继续。'
+    )
+    onRefreshRef.current()
+  }
+
+  /** 观察一次工具结果；判定卡死就中止本轮（返回 true = 已熔断） */
+  function noteToolOutcome(sid: string, part: Part): boolean {
+    if (!sid) return false
+    const st = part.state ?? {}
+    const text = String(st.error ?? st.output ?? '')
+    const hard = HARD_FAIL_RE.test(text)
+    if (st.status !== 'error' && !hard) {
+      toolFails.current.delete(sid)
+      return false
+    }
+    const tool = String(part.tool ?? '').toLowerCase()
+    const sig = failSignature(tool, text)
+    const prev = toolFails.current.get(sid)
+    const n = prev && prev.sig === sig ? prev.n + 1 : 1
+    toolFails.current.set(sid, { n, sig })
+    if (n < (hard ? 1 : 3)) return false
+    haltTurn(sid, tool, text, n)
+    return true
+  }
+
+  /**
    * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后登记一个「中断」状态：
    * 顶部通知条显示「任务已中断」，**不自动重发消息**——续跑由用户点「重试」按钮触发。
    * 自动重试会替用户重复发一条消息（或追加「继续」），既可能打乱对话、又未必是用户想要的，
@@ -786,6 +866,8 @@ export function ChatView(p: Props) {
     if (!sid || navigator.onLine === false) return
     // 手机发起的回合：本端不是发起者，续跑只会重复发
     if (foreignSids.current.has(sid)) return
+    // 已因失败熔断停下：再挂「重试」提示等于鼓励用户去撞同一堵墙
+    if (halted.current.has(sid)) return
     if (retries.current.has(sid)) return
     retries.current.set(sid, { count: 1, timer: undefined })
     syncRetryView()
@@ -1035,6 +1117,10 @@ export function ChatView(p: Props) {
         }
       } else if (e.type === 'message.part.updated') {
         const part = e.properties.part as Part
+        // 失败熔断放在会话过滤**之前**：别的会话在跑（切走之后）同样要能被刹住
+        if (part.type === 'tool' && part.state && part.state.status !== 'running' && part.state.status !== 'pending') {
+          if (noteToolOutcome(part.sessionID, part)) return
+        }
         if (part.sessionID !== sidRef.current) return
         if (part.type === 'tool' && part.state?.status !== 'running') {
           setPreviews((prev) => {
@@ -1556,6 +1642,12 @@ export function ChatView(p: Props) {
     setError('')
     const dir = dirOverride ?? p.project?.path
     let sid = sidOverride ?? p.sessionId
+    // 用户重新发消息 = 从头再来：解除上一轮的熔断停止。
+    // （服务端那边是否恢复不归我们判断——若仍不可用，下一次调用会被工具重新熔断。）
+    if (sid) {
+      halted.current.delete(sid)
+      toolFails.current.delete(sid)
+    }
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
       const title = (text.length > 30 ? text.slice(0, 30) + '…' : text) || '发送了附件'
@@ -1616,6 +1708,10 @@ export function ChatView(p: Props) {
               '也不要建议用户这么做，除非用户明确要求。\n' +
               '读取或操作页面用 panel_* 浏览器工具（panel_navigate / panel_snapshot / panel_click / panel_type）：' +
               '看页面内容就再调一次 panel_snapshot（文本元素清单），**不要用桌面控制去截屏看网页**——截屏又慢又要求模型支持图片输入，而面板页面本来就能读到结构。\n' +
+              // 用户实测过的事故：模型看不到「地址不存在」的反馈，连猜十几个 URL 把任务耗光。
+              '**要进站点的某个页面时不要猜地址**：panel_snapshot 清单里 a 标签后 `→ /path` 就是真实地址，点它的 ref 进去；' +
+              'panel_navigate 回执说「导航没有生效」「页面上没有任何可交互元素」= 这个地址不存在，**不要换个近似地址接着试**，' +
+              '页面上确实找不到入口就**停下来如实告诉用户「没找到 XX 入口」**，并说明试过哪些地址。\n' +
               '不要读写项目文件或执行终端命令，除非用户明确要求；回答优先基于当前页面的实际内容。'
           )
           browserCtxRef.current = { sid, url: panelUrl, max: browserFullscreen }
@@ -1703,6 +1799,10 @@ export function ChatView(p: Props) {
       }
       if (hasVid)
         lines.push('- 要**按视频出片**（续写、换风格、配音乐）→ 调 create_video，把上面的视频路径放进 videos（配音乐用 audios）。')
+      lines.push(
+        '- **生成类工具失败就停手**：generate_image / create_video / check_video 返回失败（429 限流、额度不足、' +
+          '鉴权失败等）时不要换参数重试，把错误如实转告用户——重复调用会被熔断拒绝，连续失败还会自动中止本轮。'
+      )
       try {
         await oc.injectContext(sid, dir, ATTACH_CTX_PREFIX + lines.join('\n'))
       } catch {

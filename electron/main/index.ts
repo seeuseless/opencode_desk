@@ -388,11 +388,13 @@ app.on('web-contents-created', (_e, wc) => {
 async function ensurePanel(): Promise<WebContents> {
   if (panelWc && !panelWc.isDestroyed()) return panelWc
   mainWin?.webContents.send('opencode:event', { type: 'qingniao.browser.open' })
-  for (let i = 0; i < 10; i++) {
+  // 等待窗口足够久（渲染层要挂载 webview、分区会话要就绪）。太短会让模型拿到
+  // 「面板浏览器未打开」后反复重试同一个调用——用户看到的就是「一直在找」。
+  for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 300))
     if (panelWc && !panelWc.isDestroyed()) return panelWc
   }
-  throw new Error('面板浏览器未打开')
+  throw new Error('面板浏览器未能打开：已通知界面打开右侧浏览面板，但 6 秒内没等到它就绪。请让用户手动点一下右侧的浏览器面板，然后重试。')
 }
 
 /** 页面可交互元素采集：给可见元素打 data-qref 编号，输出 AI 可读的清单 */
@@ -411,10 +413,79 @@ const SNAP_JS = `(() => {
     el.setAttribute('data-qref', String(ref))
     const label = (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 60)
     const val = 'value' in el && el.value && el.value !== label ? ' 值:' + String(el.value).slice(0, 40) : ''
-    out.push('[' + ref + '] ' + el.tagName.toLowerCase() + (label ? ' 「' + label + '」' : '') + val)
+    // 链接一定要带上真实 href：这是模型「找到入口」的唯一可靠依据。
+    // 不带 href 时模型只能靠猜地址（实测会连猜十几个 /account/xxx、/my/xxx），
+    // 而清单里的 href 就是站点自己给出的正确路径——点它的 ref 即可。
+    let href = ''
+    if (el.tagName === 'A') {
+      const h = el.getAttribute('href') || ''
+      if (h && !/^javascript:/i.test(h)) href = '  → ' + h.slice(0, 90)
+    }
+    out.push('[' + ref + '] ' + el.tagName.toLowerCase() + (label ? ' 「' + label + '」' : '') + val + href)
   }
+  if (!out.length) return '(当前页面没有可交互元素 —— 页面可能还在加载，或内容由 canvas/图片渲染，读不出结构)'
   return out.join('\\n')
 })()`
+
+/** URL 是否同一地址（忽略末尾斜杠与 #hash） */
+function sameUrl(a: string, b: string): boolean {
+  const norm = (s: string): string => s.replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase()
+  return norm(a) === norm(b)
+}
+
+/**
+ * 导航并**如实回报结果**。
+ *
+ * 旧实现是 `await wc.loadURL(u).catch(() => undefined)` 然后回 `{url: wc.getURL()}`——
+ * 失败被静默吞掉，回执里给的是**上一个页面**的地址和标题，模型看到的跟成功一模一样，
+ * 于是不断换地址猜（真实案例：一条「打开我的邀请」的任务里连猜 /account/referral、
+ * /my/invite、/account/friend、/account/promotion… 十几个地址，53 次工具调用打不完）。
+ */
+async function navigateAndVerify(wc: WebContents, url: string, timeoutMs = 20000): Promise<{ ok: boolean; timedOut?: boolean; error?: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const outcome = await Promise.race([
+    wc.loadURL(url).then(
+      () => ({ kind: 'loaded' as const }),
+      (e: { code?: string; errno?: number }) => {
+        const code = String(e?.code ?? (e?.errno ? 'ERR_' + e.errno : 'LOAD_FAILED'))
+        // ERR_ABORTED 多由重定向或更新的导航取代，页面本身往往已在加载，不算硬失败
+        return code === 'ERR_ABORTED' ? { kind: 'loaded' as const } : { kind: 'failed' as const, code }
+      }
+    ),
+    new Promise<{ kind: 'timeout' }>((r) => {
+      timer = setTimeout(() => r({ kind: 'timeout' }), timeoutMs)
+    })
+  ])
+  if (timer) clearTimeout(timer)
+  if (outcome.kind === 'timeout') {
+    // 停掉半截加载，避免后续 snapshot 读到残缺 DOM
+    try {
+      wc.stop()
+    } catch {
+      /* 已经停了 */
+    }
+    return { ok: true, timedOut: true }
+  }
+  if (outcome.kind === 'failed') return { ok: false, error: outcome.code }
+  return { ok: true }
+}
+
+/**
+ * 数一下当前页面有多少可交互元素。
+ *
+ * navigate 回执带上它，模型就能识别「这个地址根本不存在」：站点把未知路径兜成一个
+ * 空壳错误页（标题「页面不存在」、只剩一个「返回首页」），此前回执只有 url+title，
+ * 模型看不出异常就继续换地址猜。
+ */
+async function countInteractive(wc: WebContents): Promise<number | null> {
+  try {
+    const s = await wc.executeJavaScript(SNAP_JS, true)
+    if (typeof s !== 'string') return null
+    return s.startsWith('(') ? 0 : s.split('\n').filter(Boolean).length
+  } catch {
+    return null // 页面还在加载/已跳走：不猜，交给模型自己 snapshot
+  }
+}
 
 async function panelOp(action: string, body: Record<string, unknown>): Promise<unknown> {
   if (action === 'state') {
@@ -425,8 +496,27 @@ async function panelOp(action: string, body: Record<string, unknown>): Promise<u
   if (action === 'navigate') {
     const u = String(body.url ?? '').trim()
     if (!/^https?:\/\//i.test(u)) throw new Error('只支持 http/https 网址')
-    await wc.loadURL(u).catch(() => undefined) // ERR_ABORTED 等中断不影响已开始加载
-    return { url: wc.getURL(), title: wc.getTitle() }
+    const before = wc.getURL()
+    const nav = await navigateAndVerify(wc, u)
+    const after = wc.getURL()
+    // 「导航前后地址一模一样、又不是要去的那个」= 这次导航根本没发生。
+    // 这是旧实现骗过模型的地方：请求 /account/promotion，页面还停在 /account/invite-friend，
+    // 回执却照样回 url+title，模型以为打开成功了，继续换地址猜。
+    const stuck = sameUrl(after, before) && !sameUrl(after, u)
+    const effective = nav.ok && !stuck
+    return {
+      requested: u,
+      url: after,
+      title: wc.getTitle(),
+      ok: effective,
+      error: !nav.ok
+        ? '加载失败 ' + (nav.error ?? '')
+        : stuck
+          ? '导航未生效：页面仍停在原地址，请求的地址没有打开'
+          : undefined,
+      timedOut: nav.timedOut,
+      elements: nav.ok ? await countInteractive(wc) : null
+    }
   }
   if (action === 'snapshot') {
     return { url: wc.getURL(), title: wc.getTitle(), snapshot: await wc.executeJavaScript(SNAP_JS, true) }

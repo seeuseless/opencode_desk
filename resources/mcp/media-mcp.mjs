@@ -21,8 +21,81 @@ const IMAGE_TARGETS = parse(process.env.QN_IMAGE_TARGETS)
 const VIDEO_TARGETS = parse(process.env.QN_VIDEO_TARGETS)
 const OUT_DIR = process.env.QN_MEDIA_DIR || join(homedir(), '.qingniaoai', 'media')
 
-const imgResult = (t) => ({ content: [{ type: 'text', text: t }] })
+/**
+ * 失败回执：打成 isError，内核据此把这一步标成「工具失败」。
+ *
+ * 为什么要区分：一直用普通文本回错误时，模型把「创建视频任务失败」当成一次普通结果，
+ * 接着换参数再试——实测就是这么连着试了 100+ 次。isError 是内核与模型都能看见的硬信号。
+ */
+const errResult = (t) => ({ __err: true, text: t })
+const resOf = (v) =>
+  v && typeof v === 'object' && v.__err
+    ? { content: [{ type: 'text', text: v.text }], isError: true }
+    : { content: [{ type: 'text', text: String(v) }] }
 const send = (msg) => process.stdout.write(JSON.stringify(msg) + '\n')
+
+/**
+ * 生成任务熔断 —— 机械刹车，不指望模型自觉。
+ *
+ * 为什么必须有（2026-09-21 实测）：视频创建被限流后，模型收到
+ * `HTTP 429 您已达到免费用户的 API 速率限制` 并没有停，而是在 **7 分钟里换提示词、
+ * 换 mode、换模型连续重试了 100+ 次**（10:30:21 → 10:37:44），每一发都真打到了服务端。
+ * 回执里就算写「请勿重试」也拦不住——所以这里按生成目标记账：一旦判定为不可恢复的失败，
+ * 后续调用直接拒绝，连请求都不发。
+ *
+ * 分档（越不可恢复，熔断越久）：
+ *   quota —— 429 限流 / 402 欠费 / 401·403 鉴权：重试毫无意义，长熔断并要求立刻停手；
+ *   net   —— 连接层失败（fetch failed）：短熔断，等网络缓过来；
+ *   other —— 其他 4xx/5xx：中熔断，避免无脑刷。
+ */
+const BREAK_RULES = [
+  {
+    kind: 'quota',
+    ms: 10 * 60_000,
+    label: '配额 / 限流',
+    re: /HTTP\s*429|HTTP\s*402|HTTP\s*401|HTTP\s*403|速率限制|限流|rate ?limit|too many requests|额度|余额|欠费|配额|quota|unauthorized|invalid api key|鉴权/i
+  },
+  { kind: 'net', ms: 30_000, label: '网络不通', re: /fetch failed|ECONNRESET|ETIMEDOUT|socket hang up|network/i },
+  { kind: 'other', ms: 60_000, label: '服务端拒绝', re: /HTTP\s*\d{3}/ }
+]
+/** targetId -> { until, kind, label, msg } */
+const breakers = new Map()
+
+function breakerOf(id) {
+  const b = breakers.get(id)
+  if (!b) return null
+  if (Date.now() >= b.until) {
+    breakers.delete(id)
+    return null
+  }
+  return b
+}
+
+/** 记录一次失败；命中规则表才熔断（参数类错误照样让模型改参数重来，那是它能修的） */
+function tripBreaker(id, text) {
+  const rule = BREAK_RULES.find((r) => r.re.test(String(text ?? '')))
+  if (!rule) return
+  breakers.set(id, {
+    until: Date.now() + rule.ms,
+    kind: rule.kind,
+    label: rule.label,
+    msg: String(text ?? '').slice(0, 300)
+  })
+}
+
+/** 熔断回执：必须让模型一眼看出「再试也没用」，并给出要转告用户的话 */
+function breakerText(what, t, b) {
+  const mins = Math.max(1, Math.round((b.until - Date.now()) / 60000))
+  return errResult(
+    `⛔ 已停止：${what}没有发出——生成服务「${t.label || t.id}」刚刚返回了不可恢复的错误（${b.label}），` +
+      `本工具已熔断，未来 ${mins} 分钟内不会再向它发任何请求。\n\n` +
+      `原始错误：${b.msg}\n\n` +
+      '**立刻停手**：不要再调用本工具，也不要换提示词 / 换参数 / 换模型重试——' +
+      '配额、限流、鉴权这类错误与你的请求内容无关，重试只会继续失败。\n' +
+      `请把情况如实告诉用户（例如：「${t.label || t.id} 当前不可用：${b.msg.slice(0, 120)}」），` +
+      '并说明稍后或恢复额度后再试。'
+  )
+}
 
 const TOOLS = [
   {
@@ -35,7 +108,9 @@ const TOOLS = [
       '纯提问（「这是什么」「好看吗」）才按图片理解回答，不必出图。' +
       '成功后结果里有图片 URL 和本地文件路径，两者都要原样告诉用户：本地路径用反引号包起来（防止 Markdown 吞掉转义），' +
       '展示图片直接用 ![图片](本地路径) 的形式内嵌——客户端优先显示本地文件，远程 URL 可能过期，不要把 URL 当图片地址贴出来。' +
-      '一次出图约需几十秒，属正常，不要中途放弃。',
+      '一次出图约需几十秒，属正常，不要中途放弃。' +
+      '**但失败就立刻停手**：返回失败（尤其 429 限流、额度不足、鉴权失败）时，不要换提示词 / 换参数 / 换模型重试，' +
+      '把错误原样转告用户并说明稍后可再试；本工具已对这类错误做机械熔断，重复调用会直接被拒。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -75,7 +150,10 @@ const TOOLS = [
       '每次查询内部已静默等约 12 秒，返回"还在生成中"就立即再查即可，两次之间用一句话向用户播报进度（让用户看到事情在推进，不会手误点停止）。' +
       '完成或失败都要把结果原样转达，视频 URL 与本地文件路径两者都要告诉用户：本地路径用反引号包起来（防止 Markdown 吞掉转义），' +
       '展示视频直接用 ![视频](本地路径) 的形式内嵌——客户端优先播放本地文件，远程 URL 可能过期，不要把 URL 当视频地址贴出来。' +
-      '同一 video_id 不要重复 create。',
+      '同一 video_id 不要重复 create。' +
+      '**创建失败就立刻停手**：返回失败（尤其 429 限流、额度不足、鉴权失败）时，不要换提示词 / 换参数 / 换模型重试，' +
+      '也不要"再试一次看看"——这类错误与请求内容无关，重试只会继续失败。正确做法是把错误原样转告用户并说明稍后可再试。' +
+      '本工具已对这类错误做机械熔断，重复调用会直接被拒。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -116,6 +194,7 @@ const TOOLS = [
     description:
       '查询 create_video 任务的进度。返回 生成中 / 已完成（含视频 URL 与本地文件路径）/ 失败（含原因）。' +
       '每次调用内部已静默等待约 12 秒；返回"还在生成中"时先给用户播报一句进度，然后立即再调本工具，直到完成或失败。' +
+      '**失败或"已停止查询"就停下**：不要重查、不要重新创建同一个任务，把原因如实告诉用户。' +
       '完成时把结果原样转达，并直接用 ![视频](本地路径) 的形式内嵌本地文件路径展示（路径用反引号包住另一行给出）——客户端优先播放本地文件，远程 URL 可能过期。',
     inputSchema: {
       type: 'object',
@@ -331,20 +410,23 @@ async function runImageAttempt(t, att) {
 const imgShapePicks = new Map()
 
 async function generateImage(args) {
-  if (!IMAGE_TARGETS.length) return '未配置任何生图模型。请在 设置 → 模型 添加/启用一个带生图模型（如 agnes-image-*）的提供商，保存并重启内核后重试。'
+  if (!IMAGE_TARGETS.length) return errResult('未配置任何生图模型。请在 设置 → 模型 添加/启用一个带生图模型（如 agnes-image-*）的提供商，保存并重启内核后重试。')
   const prompt = String(args.prompt ?? '').trim()
-  if (!prompt) return 'prompt 不能为空：请传入画面描述'
+  if (!prompt) return errResult('prompt 不能为空：请传入画面描述')
   const t = pickTarget(IMAGE_TARGETS, args.model)
-  if (!t) return '找不到生图模型「' + args.model + '」。可用：' + IMAGE_TARGETS.map((x) => x.id).join('、')
+  if (!t) return errResult('找不到生图模型「' + args.model + '」。可用：' + IMAGE_TARGETS.map((x) => x.id).join('、'))
+  // 熔断检查先于授权：注定要被拒的调用不该再弹一次确认卡片
+  const tripped = breakerOf(t.id)
+  if (tripped) return breakerText('生图任务', t, tripped)
   // 出图要调用**另一个模型**（往往还是另一家、另一份计费），先问过用户
   const who = { role: 'image', id: t.id, label: t.label || t.id, provider: t.provider }
   const grant = await authorize(who)
-  if (!grant.allowed) return deniedText(who, grant)
+  if (!grant.allowed) return errResult(deniedText(who, grant))
 
   const refs = normalizeWithReport(args.image)
   // 素材全丢了还照样出图的话，模型以为改图成功，用户拿到的却是另一回事——必须拦下来
   if (Array.isArray(args.image) && args.image.length && !refs.ok.length)
-    return (
+    return errResult(
       '参考图全部处理失败，无法改图：\n' + refs.dropped.join('\n') +
       '\n请确认附件路径原样填在这里（用户消息里 [Attached image/png: 路径] 的那段路径），或改用公开可访问的 URL。'
     )
@@ -358,6 +440,10 @@ async function generateImage(args) {
     const r = await runImageAttempt(t, att)
     if (r.error) {
       errs.push(`〔${att.name}〕${r.error}`)
+      // 限流 / 欠费 / 鉴权这类错误跟「用哪种请求形态」无关，换形态再试同样会被拒——
+      // 熔断后立刻跳出循环，别再一个形态一个形态地撞。
+      tripBreaker(t.id, r.error)
+      if (breakerOf(t.id)) break
       continue
     }
     let ext = 'png'
@@ -398,11 +484,15 @@ async function generateImage(args) {
       )
     return parts.join('\n')
   }
-  return (
-    `生图失败（${t.id}）：\n${errs.join('\n')}\n` +
-    '已依次试过 agnes 形态、OpenAI 兼容形态' +
-    (imgs.length ? '与图片编辑（/images/edits）三种接口' : '两种接口') +
-    '。请检查 Base URL、API Key 与该模型的生图接口文档。'
+  const trippedNow = breakerOf(t.id)
+  return errResult(
+    `生图失败（${t.label || t.id}）：\n${errs.join('\n')}\n` +
+      (trippedNow
+        ? `\n⛔ 已自动熔断（${trippedNow.label}）：${Math.max(1, Math.round((trippedNow.until - Date.now()) / 60000))} 分钟内不再尝试生图。` +
+          '**不要重试**——换提示词、换参数、换模型都不会改变结果。请把错误如实转告用户，说明稍后或恢复额度后再试。'
+        : '已依次试过 agnes 形态、OpenAI 兼容形态' +
+          (imgs.length ? '与图片编辑（/images/edits）三种接口' : '两种接口') +
+          '。请检查 Base URL、API Key 与该模型的生图接口文档，并如实告知用户，不要连续重复调用。')
   )
 }
 
@@ -490,12 +580,44 @@ async function saveVideoContent(t, videoId) {
   }
 }
 
+/**
+ * mode 取值各家不统一：agnes-video-2.5-* 认 text / reference / keyframe，
+ * 而 agnes-video-v2.0 只认 ti2vid / keyframes / multi_reference——
+ * 填错直接 400（实测就是这个把任务挡在门外的：`Input should be 'ti2vid', 'keyframes' or 'multi_reference'`）。
+ *
+ * 这里按语义做候选映射，并且**从服务端的 400 文案里学一次合法值**（它把枚举原样列了出来），
+ * 学到的按模型记下来，后续同模型直接命中，不再撞第二遍。
+ */
+const MODE_ALIAS = {
+  text: ['text', 'ti2vid', 'txt2vid', 'text2video', 't2v'],
+  reference: ['reference', 'multi_reference', 'multireference', 'image2video', 'ref'],
+  keyframe: ['keyframe', 'keyframes', 'first_last_frame', 'keyframe2video']
+}
+/** model -> { text, reference, keyframe } */
+const modePicks = new Map()
+
+/** 从「Input should be 'a', 'b' or 'c'」里学出合法枚举，回映射成我们的三种语义 */
+function learnModes(model, text) {
+  const m = String(text ?? '').match(/Input should be\s+(.+)/i)
+  if (!m) return null
+  const allowed = [...m[1].matchAll(/'([a-z0-9_]+)'/gi)].map((x) => x[1].toLowerCase())
+  if (!allowed.length) return null
+  const map = {}
+  for (const [sem, cands] of Object.entries(MODE_ALIAS)) map[sem] = cands.find((c) => allowed.includes(c)) ?? ''
+  modePicks.set(model, map)
+  return map
+}
+
+function modeFor(model, semantic) {
+  return modePicks.get(model)?.[semantic] || semantic
+}
+
 async function createVideo(args) {
-  if (!VIDEO_TARGETS.length) return '未配置任何生视频模型。请在 设置 → 模型 添加/启用一个带生视频模型（如 agnes-video-*）的提供商，保存并重启内核后重试。'
+  if (!VIDEO_TARGETS.length) return errResult('未配置任何生视频模型。请在 设置 → 模型 添加/启用一个带生视频模型（如 agnes-video-*）的提供商，保存并重启内核后重试。')
   const prompt = String(args.prompt ?? '').trim()
-  if (!prompt) return 'prompt 不能为空：请传入视频内容描述'
+  if (!prompt) return errResult('prompt 不能为空：请传入视频内容描述')
   const t = pickTarget(VIDEO_TARGETS, args.model)
-  if (!t) return '找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、')
+  if (!t) return errResult('找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、'))
 
   // 出片同样是调另一个模型、另一份计费，先问过用户。
   // 注意**只在创建时问**：check_video 只是轮询同一个任务的进度（同一模型、同一次消费），
@@ -503,6 +625,10 @@ async function createVideo(args) {
   const who = { role: 'video', id: t.id, label: t.label || t.id, provider: t.provider }
   const grant = await authorize(who)
   if (!grant.allowed) return deniedText(who, grant)
+
+  // 熔断检查放在最前面（连授权都不问：注定要拒的调用不该再弹一次确认卡片打扰用户）
+  const tripped = breakerOf(t.id)
+  if (tripped) return breakerText('创建视频任务', t, tripped)
 
   const body = { model: t.model, prompt, size: '720P', seconds: '5', mode: 'text' }
   if (args.seconds) body.seconds = String(args.seconds)
@@ -517,27 +643,53 @@ async function createVideo(args) {
   const dropped = [...im.dropped, ...au.dropped, ...vi.dropped]
   // 素材全废却不报错的话，请求会静默退化成纯文字生视频，出片和用户预期完全不同——必须拦下
   if (wanted.length && !im.ok.length && !au.ok.length && !vi.ok.length && !ff && !lf)
-    return '参考素材全部处理失败，无法按素材生成：\n' + dropped.join('\n') + '\n请改用公开可访问的 URL，或先确认文件在本地存在。'
+    return errResult('参考素材全部处理失败，无法按素材生成：\n' + dropped.join('\n') + '\n请改用公开可访问的 URL，或先确认文件在本地存在。')
   // 三种模式互斥：首尾帧（keyframe）优先，否则只要带了任一参考素材就走 reference
+  let semantic = 'text'
   if (ff || lf) {
-    body.mode = 'keyframe'
+    semantic = 'keyframe'
     if (ff) body.first_frame = ff
     if (lf) body.last_frame = lf
   } else if (im.ok.length || au.ok.length || vi.ok.length) {
-    body.mode = 'reference'
+    semantic = 'reference'
     if (im.ok.length) body.images = im.ok.slice(0, 5)
     if (au.ok.length) body.audios = au.ok.slice(0, 3)
     if (vi.ok.length) body.videos = vi.ok.slice(0, 5)
   }
+  body.mode = modeFor(t.model, semantic)
 
-  const r = await apiFetch(t, t.baseURL.replace(/\/+$/, '') + '/videos', {
-    method: 'POST',
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000)
-  })
-  if (!r.ok) return `创建视频任务失败（${t.id}，HTTP ${r.status}）：${r.j?.error?.message ?? r.j?.detail ?? r.j?.message ?? r.text.slice(0, 300)}`
+  const post = () =>
+    apiFetch(t, t.baseURL.replace(/\/+$/, '') + '/videos', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000)
+    })
+  let r = await post()
+  // 400 且服务端把合法枚举列了出来 = 只是 mode 用词不同（各家各叫各的）。
+  // 学到正确取值后**只重发一次**——这是参数适配，不是盲目重试。
+  if (!r.ok && r.status === 400) {
+    const raw = String(r.j?.error?.message ?? r.j?.message ?? r.text ?? '')
+    const learned = learnModes(t.model, raw)
+    if (learned && learned[semantic] && learned[semantic] !== body.mode) {
+      body.mode = learned[semantic]
+      r = await post()
+    }
+  }
+  if (!r.ok) {
+    const detail = String(r.j?.error?.message ?? r.j?.detail ?? r.j?.message ?? r.text ?? '').slice(0, 300)
+    const msg = `创建视频任务失败（${t.label || t.id}，HTTP ${r.status}）：${detail}`
+    tripBreaker(t.id, `HTTP ${r.status} ${detail}`)
+    const trippedNow = breakerOf(t.id)
+    return errResult(
+      msg +
+        (trippedNow
+          ? `\n\n⛔ 已自动熔断（${trippedNow.label}）：现在起 ${Math.max(1, Math.round((trippedNow.until - Date.now()) / 60000))} 分钟内不再尝试创建视频。\n` +
+            '**不要重试**（换提示词 / 换参数 / 换模型都没用），把上面这句错误如实转告用户，说明稍后或恢复额度后再试。'
+          : '\n\n请先检查传参（提示词、时长、画幅）后如实告知用户，不要连续重复调用。')
+    )
+  }
   const videoId = r.j?.video_id ?? r.j?.id ?? r.j?.data?.video_id ?? r.j?.data?.id ?? r.j?.task_id
-  if (!videoId) return '创建视频任务返回异常：响应里没有 video_id。原始返回：' + r.text.slice(0, 300)
+  if (!videoId) return errResult('创建视频任务返回异常：响应里没有 video_id。原始返回：' + r.text.slice(0, 300))
   const warn = dropped.length ? `\n注意：以下素材没能用上（已按其余素材生成）：${dropped.join('；')}` : ''
   await markUsed(who)
   return (
@@ -568,27 +720,41 @@ function findVideoUrl(node, depth = 0) {
   return ''
 }
 
+/** videoId -> 连续查询失败次数。查询端点不通时模型会一直重查，这里兜住（3 次即停） */
+const pollFails = new Map()
+
 async function checkVideo(args) {
-  if (!VIDEO_TARGETS.length) return '未配置任何生视频模型，无法查询。'
+  if (!VIDEO_TARGETS.length) return errResult('未配置任何生视频模型，无法查询。')
   const videoId = String(args.video_id ?? '').trim()
-  if (!videoId) return 'video_id 不能为空'
+  if (!videoId) return errResult('video_id 不能为空')
   const t = pickTarget(VIDEO_TARGETS, args.model)
-  if (!t) return '找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、')
+  if (!t) return errResult('找不到生视频模型「' + args.model + '」。可用：' + VIDEO_TARGETS.map((x) => x.id).join('、'))
 
   // 单次查询内部最多等 ~12 秒（4 次 × 3s）就返回"还在生成中"——短轮询让模型能在两次调用之间
   // 给用户播报进度，挂 50 秒没反馈反而诱导用户点停止把回合打断
   let last = null
   for (let i = 0; i < 4; i++) {
     const r = await pollJob(t, videoId)
-    if (r.error)
-      return (
-        `查询失败：${r.error}。已按默认识别的两种形态依次问过（{origin}/agnesapi、{baseURL}/videos/{{video_id}}）；` +
-        '若该提供商的查询端点不长这样，请在 设置 → 模型 的提供商表单里填「生视频任务查询地址」。'
+    if (r.error) {
+      const n = (pollFails.get(videoId) ?? 0) + 1
+      pollFails.set(videoId, n)
+      if (n >= 3)
+        return errResult(
+          `⛔ 已停止查询：video_id=${videoId} 连续 ${n} 次查询都失败，再查下去不会有新结果。\n` +
+            `最后一次原因：${r.error}\n` +
+            '请停手，如实告诉用户「任务已提交但查询失败，请稍后在生成服务的后台或稍后再试」，不要继续轮询。'
+        )
+      return errResult(
+        `查询失败（第 ${n}/3 次）：${r.error}。已按默认识别的两种形态依次问过（{origin}/agnesapi、{baseURL}/videos/{{video_id}}）；` +
+          '若该提供商的查询端点不长这样，请在 设置 → 模型 的提供商表单里填「生视频任务查询地址」。' +
+          '**不要连续重查**：先把这个情况告诉用户。'
       )
+    }
+    pollFails.delete(videoId)
     last = r.job
     const status = String(last.status ?? last.state ?? '').toLowerCase()
     if (status === 'failed' || status === 'error')
-      return `视频生成失败：${last.error ?? last.message ?? last.detail ?? JSON.stringify(last).slice(0, 400)}`
+      return errResult(`视频生成失败：${last.error ?? last.message ?? last.detail ?? JSON.stringify(last).slice(0, 400)}\n\n请把原因如实转告用户，不要重新创建同一个任务。`)
     const file = findVideoUrl(last)
     if (status === 'completed' || (status !== 'queued' && status !== 'processing' && file)) {
       // 直链可能压根没有（各家约定不同），也可能已经过期；两种情况都退到 content 端点把成品拉回来
@@ -633,9 +799,9 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     try {
       const fn = { generate_image: generateImage, create_video: createVideo, check_video: checkVideo }[name]
       if (!fn) throw new Error('未知工具：' + name)
-      send({ jsonrpc: '2.0', id, result: imgResult(await fn(args)) })
+      send({ jsonrpc: '2.0', id, result: resOf(await fn(args)) })
     } catch (e) {
-      send({ jsonrpc: '2.0', id, result: imgResult('调用失败：' + (e?.message ?? e)) })
+      send({ jsonrpc: '2.0', id, result: resOf(errResult('调用失败：' + (e?.message ?? e))) })
     }
   } else if (id !== undefined) {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } })
