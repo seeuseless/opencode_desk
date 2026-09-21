@@ -171,8 +171,9 @@ async function generateMusic(args) {
     )
   const caption = String(args.prompt ?? '').trim()
   if (!caption) return 'prompt 不能为空：请传入曲风等风格描述'
-  const t = pickTarget(MUSIC_TARGETS, args.model)
-  if (!t) return '找不到音乐模型「' + args.model + '」。可用：' + MUSIC_TARGETS.map((x) => x.id).join('、')
+  // 多目标时挨个试到提交成为止：一家提交不了（Base URL 不对 / 没额度）不该拖死整次生成
+  const order = args.model ? [pickTarget(MUSIC_TARGETS, args.model)].filter(Boolean) : MUSIC_TARGETS
+  if (!order.length) return '找不到音乐模型「' + args.model + '」。可用：' + MUSIC_TARGETS.map((x) => x.id).join('、')
 
   const { task, instrumental } = taskOf(args.mode)
   const lyrics = String(args.lyrics ?? '').trim()
@@ -187,7 +188,7 @@ async function generateMusic(args) {
 
   const body = {
     task,
-    model_id: t.model,
+    model_id: '',
     caption,
     ...(lyrics ? { lyrics } : {}),
     ...(instrumental ? { instrumental: true } : {}),
@@ -210,6 +211,23 @@ async function generateMusic(args) {
       return 'mode=vocal_to_music 必须提供 reference（无伴奏干声的本地路径或 URL），请先补上再调用。'
   }
 
+  const errs = []
+  for (const t of order) {
+    body.model_id = t.model
+    const r = await submitMusic(t, body, task)
+    if (r.ok) return r.text
+    errs.push(`〔${t.provider || t.id} / ${t.label || t.id}〕${r.error}`)
+    if (order.length === 1) break
+  }
+  return (
+    `提交音乐任务失败，已试过 ${errs.length} 个音乐模型：\n${errs.join('\n')}\n` +
+    '常见原因：Base URL 不对（阶跃要 https://api.stepfun.com/v1，不能是计划端点）、模型 ID 不对、' +
+    '账号没开该模型权限、Credit 不足、参数组合不合法。'
+  )
+}
+
+/** 用单个目标提交一次音乐任务，返回文本回执 */
+async function submitMusic(t, body, task) {
   const base = t.baseURL.replace(/\/+$/, '')
   let res
   try {
@@ -220,7 +238,7 @@ async function generateMusic(args) {
       signal: AbortSignal.timeout(180000)
     })
   } catch (e) {
-    return `提交失败（请求发不出去）：${e?.message ?? e}`
+    return { ok: false, error: `请求发不出去：${e?.message ?? e}` }
   }
   const raw = await res.text().catch(() => '')
   let j = null
@@ -231,21 +249,19 @@ async function generateMusic(args) {
   }
   if (!res.ok) {
     const why = j?.error?.message ?? j?.error?.type ?? j?.message ?? raw.slice(0, 300)
-    return (
-      `提交音乐任务失败（HTTP ${res.status}）：${why}\n` +
-      '常见原因：模型 ID 不对、账号没开该模型权限、Credit 不足、参数组合不合法。' +
-      `（提交端点：${base}/audio/music/submit，model_id=${t.model}，task=${task}）`
-    )
+    return { ok: false, error: `HTTP ${res.status}：${why}（端点 ${base}/audio/music/submit，model_id=${t.model}，task=${task}）` }
   }
   const taskId = j?.task_id ?? j?.id ?? j?.data?.task_id
-  if (!taskId) return `提交返回里没有 task_id，无法查询。原始返回：${raw.slice(0, 400)}`
+  if (!taskId) return { ok: false, error: `提交返回里没有 task_id，无法查询。原始返回：${raw.slice(0, 400)}` }
 
-  return (
-    `音乐任务已创建（音乐由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，task=${task}）：\n` +
-    `task_id：${taskId}\n` +
-    `请告知用户"音乐生成中"（一首歌通常要数十秒到几分钟），` +
-    `然后用一句话播报进度并调用 check_music（task_id=${taskId}）继续查，不要停。`
-  )
+  return {
+    ok: true,
+    text:
+      `音乐任务已创建（音乐由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，task=${task}）：\n` +
+      `task_id：${taskId}\n` +
+      `请告知用户"音乐生成中"（一首歌通常要数十秒到几分钟），` +
+      `然后用一句话播报进度并调用 check_music（task_id=${taskId}）继续查，不要停。`
+  }
 }
 
 /** 从 SUCCESS 响应里取音频：base64 优先，也兼容外链（不同部署可能给 URL） */

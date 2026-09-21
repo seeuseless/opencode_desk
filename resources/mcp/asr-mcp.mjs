@@ -94,6 +94,36 @@ function pickTarget(list, model) {
   return list.find((t) => ((t.id ?? '') + ' ' + (t.label ?? '')).toLowerCase().includes(q))
 }
 
+/**
+ * 候选顺序：用户显式点了 model 就只试它；否则按清单顺序依次试**全部**目标。
+ *
+ * 与 media / tts / music 同一个道理：清单里的「第一个」只是主进程按提供商顺序挑的，
+ * 不代表它可用。阶跃就是活例子——同一个 Key 在通用端点 /v1 上认 stepaudio-3-asr-max，
+ * 在计划端点 /step_plan/v1 上只放 10 个模型、压根没有 3 系的 ASR（3-max 与 3-music
+ * 都在通用端点）。用户把 Base URL 留成计划端点时，第一家必报 404；若这里只认第一个
+ * 目标，明明配了可用的第二家（如 mimo）也用不上，用户看到的却是「语音识别失败」。
+ */
+function targetOrder(list, model) {
+  if (!list.length) return []
+  const one = pickTarget(list, model)
+  if (model) return one ? [one] : []
+  return list
+}
+
+/**
+ * 这个错误说明「整个目标不可用」（换下个目标）还是「只是这次请求的问题」。
+ *
+ * 识别接口只有 /audio/asr/sse 一种形态，没有 media/tts 那种「换个路径再试」的余地，
+ * 所以判定要宽：任何 4xx 都说明这家没法替我们干活了，交给下个目标；
+ * 超时、连接失败之类的 5xx 与网络错也一并换。只有「识别成功但无文本」这种
+ * 业务结果不算目标死——那是音频本身的问题，换了别家也一样。
+ */
+function isTargetDead(msg) {
+  if (/HTTP (4\d\d|5\d\d)/.test(msg)) return true
+  if (/请求失败|超时|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(msg)) return true
+  return false
+}
+
 /** 扩展名（含 query 的 URL 也认）→ 接口格式名 */
 function fmtFromName(name) {
   const clean = String(name).split(/[?#]/)[0]
@@ -225,14 +255,54 @@ async function transcribe(args) {
       '未配置任何语音识别模型。请在 设置 → 模型 添加/启用一个识别模型（如阶跃 stepaudio-3-asr-max），' +
       '并把它的生成角色设为「识别」，保存并重启内核后重试。'
     )
-  const t = pickTarget(ASR_TARGETS, args.model)
-  if (!t) return '找不到语音识别模型「' + args.model + '」。可用：' + ASR_TARGETS.map((x) => x.id).join('、')
+  const targets = targetOrder(ASR_TARGETS, args.model)
+  if (!targets.length)
+    return '找不到语音识别模型「' + args.model + '」。可用：' + ASR_TARGETS.map((x) => x.id).join('、')
 
   const fmtOverride = String(args.format ?? '').trim().toLowerCase()
   const got = await readAudio(args.audio, FORMATS.includes(fmtOverride) ? fmtOverride : '')
   if (got.error) return '音频处理失败：' + got.error
 
   const fmt = FORMATS.includes(fmtOverride) ? fmtOverride : got.fmt || 'mp3'
+
+  // 多目标时挨个试到通为止：一家不可用不该拖死整次识别
+  const failed = []
+  for (const t of targets) {
+    const r = await transcribeWith(t, got.b64, fmt, args)
+    if (r.text !== undefined) return r.text
+    failed.push({ t, errs: r.errs, dead: r.dead })
+    // 用户点名要的那个也失败时不用找别人了（本来就只有它）
+    if (targets.length === 1) break
+  }
+
+  const detail = failed
+    .map((f) => `〔${f.t.provider || f.t.id} / ${f.t.label || f.t.id}〕${f.t.baseURL}\n  ${f.errs.join('\n  ')}`)
+    .join('\n')
+  // 命中「模型不存在」时给出最可能的真因：Base URL 指到了不含该模型端点的计划端点
+  const modelMissing = failed.some((f) => f.errs.some((e) => /model_invalid|does not exist|no access|无权限/i.test(e)))
+  return (
+    `语音识别失败，已试过 ${failed.length} 个识别模型：\n${detail}\n` +
+    (modelMissing
+      ? '\n最可能的原因是 Base URL 指到了不含该模型的端点——阶跃的计划端点 https://api.stepfun.com/step_plan/v1 ' +
+        '只放通用对话与 2.5 系音频模型，stepaudio-3-asr-max 挂在通用端点，请把 Base URL 改成 https://api.stepfun.com/v1。\n'
+      : '') +
+    '若音频本来就没人说话（纯音乐 / 纯静音），也会识别不出文本。'
+  )
+}
+
+/**
+ * 用单个目标识别一次。
+ *
+ * 返回 { text } 成功；返回 { errs, dead } 失败（dead=目标不可用，可换下个）。
+ * 识别端点只有一个形态，所以不做 media/tts 那种「多形态依次试」——
+ * 但 baseURL 末尾多写了 /audio 之类的常见手误顺手兜一手。
+ */
+async function transcribeWith(t, b64, fmt, args) {
+  const base = String(t.baseURL ?? '').replace(/\/+$/, '')
+  // 用户可能把 Base URL 填到了具体端点（…/v1/audio/asr/sse），去掉尾巴避免拼成双层路径
+  const root = base.replace(/\/audio\/asr\/sse$/i, '').replace(/\/audio$/i, '')
+  const urls = [...new Set([root + '/audio/asr/sse'])]
+
   const transcription = {
     model: t.model,
     ...(String(args.language ?? '').trim() ? { language: String(args.language).trim() } : {}),
@@ -252,21 +322,19 @@ async function transcribe(args) {
     if (Number(args.channels) > 0) format.channel = Number(args.channels)
   }
 
-  const base = t.baseURL.replace(/\/+$/, '')
-  const body = { audio: { data: got.b64, input: { transcription, format } } }
-  const r = await streamTranscribe(base + '/audio/asr/sse', t.apiKey, body, 600000)
-  if (r.error) {
-    return (
-      `语音识别失败（${t.label || t.id}）：${r.error}\n` +
-      `（识别端点：${base}/audio/asr/sse，模型 ${t.model}，格式 ${fmt}）\n` +
-      '请核对 Base URL、API Key、模型 ID 与音频格式；若这家提供商的识别接口不长这样，告诉我接口路径我再补。'
-    )
+  const body = { audio: { data: b64, input: { transcription, format } } }
+  const errs = []
+  for (const url of urls) {
+    const r = await streamTranscribe(url, t.apiKey, body, 600000)
+    if (!r.error) {
+      return {
+        text: `语音识别完成（识别由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}）：\n--- 以下是识别出的正文 ---\n${r.text}`
+      }
+    }
+    errs.push(`${url} → ${r.error}`)
+    if (!isTargetDead(r.error)) break
   }
-  return (
-    `语音识别完成（识别由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}）：\n` +
-    '--- 以下是识别出的正文 ---\n' +
-    r.text
-  )
+  return { errs, dead: errs.some(isTargetDead) }
 }
 
 createInterface({ input: process.stdin }).on('line', async (line) => {

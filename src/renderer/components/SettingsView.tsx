@@ -279,6 +279,29 @@ function presetModelPatch(id: string, input?: Modality[], gen?: GenKind): Pick<M
   return { gen: role, input: genInput }
 }
 
+/**
+ * 已知的「旧存档 Base URL 已过时」修正表。
+ *
+ * 模板里改对地址救不了老用户——applyPreset 优先带出 cur.baseURL（用户自己的存档），
+ * 于是写错的地址会一直留着。而有些地址不是「用户随手写错」，是**这家的端点分层变了**：
+ * 阶跃的 step_plan/v1 是计划端点，只放通用对话与 2.5 系音频模型；
+ * stepaudio-3-asr-max / stepaudio-3-tts / stepaudio-3-music-preview 全挂在通用端点 /v1，
+ * 老存档停在计划端点就会一路 404「模型不存在」，用户只会看到「模型配错了」。
+ *
+ * 只在本家暂存地址恰好等于旧值时改写，用户手填的其他地址一律不动。
+ */
+const STALE_BASE_URL: Record<string, Record<string, string>> = {
+  stepfun: { 'https://api.stepfun.com/step_plan/v1': 'https://api.stepfun.com/v1' }
+}
+
+/** 已存地址若命中修正表则返回新地址，否则原样返回 */
+function freshBaseURL(pid: string, saved: string | undefined): string | undefined {
+  if (!saved) return saved
+  const fix = STALE_BASE_URL[pid]
+  if (!fix) return saved
+  return fix[saved.replace(/\/+$/, '')] ?? saved
+}
+
 /** 常用提供商快速模板；本机已有同 ID 提供商时优先带出现有配置（apiKey 永不模板化） */
 const PROVIDER_PRESETS: {
   id: string
@@ -459,6 +482,8 @@ export function SettingsView(p: Props) {
     setModelForm(null)
     setModelDel(null)
     const cur = providers.find((x) => x.id === t.id)
+    // 老存档里过时的端点顺手纠回来（见 STALE_BASE_URL），否则用户永远停在写死的错地址上
+    const savedBase = freshBaseURL(t.id, cur?.baseURL)
     const ids = cur?.models.length ? cur.models.map((m) => m.id) : t.models
     const known = cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
     const cfgs: Record<string, ModelCfg> = {}
@@ -472,7 +497,7 @@ export function SettingsView(p: Props) {
       index: -1,
       name: cur?.name ?? t.name,
       id: t.id,
-      baseURL: cur?.baseURL ?? t.baseURL,
+      baseURL: savedBase ?? t.baseURL,
       apiKey: '',
       modelsText: ids.join('\n'),
       // 已存过的配置带出现有值；全新填写时用模板预填的查询地址（agnes 这类非标准端点省得用户去查文档）

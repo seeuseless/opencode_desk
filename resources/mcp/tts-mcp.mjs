@@ -65,6 +65,38 @@ function pickTarget(list, model) {
   return list.find((t) => ((t.id ?? '') + ' ' + (t.label ?? '')).toLowerCase().includes(q))
 }
 
+/**
+ * 候选顺序：用户显式点了 model 就只试它；否则按清单顺序依次试**全部**目标。
+ *
+ * 原来只挑第一个目标，撞 404 就整单失败——但「第一个」只是主进程按提供商顺序挑的，
+ * 不代表它可用：同一个中转账号配了 Base URL 与语音端点不匹配（如阶跃的 step_plan
+ * 计划端点里没有语音模型，得换 /v1），或某家额度用尽，都会让明明配了可用的第二家
+ * （如 MiMo）却报「语音合成失败」。多个目标时挨个试到通为止，才是「配置里有的都能用」。
+ */
+function targetOrder(list, model) {
+  if (!list.length) return []
+  const one = pickTarget(list, model)
+  if (model) return one ? [one] : []
+  return list
+}
+
+/**
+ * 这个错误说明「整个目标不可用」还是「只是这条请求形态不对」。
+ *
+ * 关键是 404 要分两种情况看：
+ *  - 错误体里有服务端的业务文案（`model_invalid` / `does not exist` / `no access`）→
+ *    模型或凭证有问题，换形态也是同样的错，放弃整个目标；
+ *  - 只有一张 HTML 404 或没有可辨认文案 → 多半是**路径不存在**（如 MiMo 就没有
+ *    /audio/speech，它的语音在 /chat/completions 上），必须继续试下一种形态，
+ *    否则会把明明可用的目标误判为不可用。
+ * 401/403 是凭证问题，与形态无关，直接放弃目标。
+ */
+function isTargetDead(msg) {
+  if (/HTTP (401|403)/.test(msg)) return true
+  if (!/HTTP 404/.test(msg)) return false
+  return /model_invalid|does not exist|no access|无权限|not have access/i.test(msg)
+}
+
 function outName(ext) {
   const d = new Date()
   const p = (n) => String(n).padStart(2, '0')
@@ -288,14 +320,52 @@ async function generateSpeech(args) {
     body = readFileSync(p, 'utf8').trim()
   }
   if (!body) return 'text 不能为空：请传入要合成的正文'
-  const t = pickTarget(TTS_TARGETS, args.model)
-  if (!t) return '找不到语音模型「' + args.model + '」。可用：' + TTS_TARGETS.map((x) => x.id).join('、')
+  const targets = targetOrder(TTS_TARGETS, args.model)
+  if (!targets.length) return '找不到语音模型「' + args.model + '」。可用：' + TTS_TARGETS.map((x) => x.id).join('、')
 
   const fmt = String(args.format ?? '').trim().toLowerCase()
   const voice = String(args.voice ?? '').trim()
   const style = String(args.style ?? '').trim()
   // 必须在函数作用域里先取出来：stepfunAttempts 与下面的请求体都要用
   const speed = typeof args.speed === 'number' ? args.speed : undefined
+
+  // 多目标时挨个试到通为止（见 targetOrder 注释）：一家不可用不该拖死整次合成
+  const failed = []
+  for (const t of targets) {
+    const r = await synthWith(t, body, fmt, voice, style, speed)
+    if (r.ok) return r.text
+    failed.push({ t, errs: r.errs })
+    // 目标只有一个时不用再往下试（也没得试），保留完整报错
+    if (targets.length === 1) break
+  }
+
+  const detail = failed
+    .map((f) => `〔${f.t.provider || f.t.id} / ${f.t.label || f.t.id}〕\n  ${f.errs.join('\n  ')}`)
+    .join('\n')
+  const nextOne = TTS_TARGETS.find((x) => !failed.some((f) => f.t.id === x.id))
+  // 命中「模型不存在」时给出最可能的真因：Base URL 指到了没有语音模型的计划端点
+  const modelMissing = failed.some((f) => f.errs.some((e) => /model_invalid|does not exist/i.test(e)))
+  const host = failed[0]?.t?.baseURL ?? ''
+  return (
+    `语音合成失败，已试过 ${failed.length} 个语音模型：\n${detail}\n` +
+    (nextOne ? `\n还有未试用的目标：${nextOne.id}，可在调用时用 model 参数指定。\n` : '\n') +
+    '排查：' +
+    (modelMissing
+      ? `① 报「模型不存在」多半是 Base URL 不对——确认它指到的是通用接口（如阶跃是 https://api.stepfun.com/v1），` +
+        `而不是某个不含语音模型的计划端点（如 /step_plan/v1）。当前用的是 ${host}。`
+      : '① Base URL 是否与该家的语音接口匹配；') +
+    '② API Key 有没有该模型的权限；③ 音色名是否该模型支持。' +
+    '若这家提供商的语音接口不长这样，告诉我接口路径我再补。'
+  )
+}
+
+/**
+ * 用单个目标合成一次：三种请求形态依次试，成功返回文本回执。
+ *
+ * 被判定为 targetDead 时**立刻放弃这个目标**——模型不存在或凭证无效，
+ * 再换 chat/completions 形态也是同样的错，白等三轮。
+ */
+async function synthWith(t, body, fmt, voice, style, speed) {
   let attempts = speechAttempts(
     t,
     {
@@ -321,10 +391,15 @@ async function generateSpeech(args) {
   if (hit) attempts = [attempts.find((a) => a.name === hit), ...attempts.filter((a) => a.name !== hit)].filter(Boolean)
 
   const errs = []
+  let dead = false
   for (const att of attempts) {
     const r = await runAttempt(t, att)
     if (r.error) {
       errs.push(`〔${att.name}〕${r.error}`)
+      if (isTargetDead(r.error)) {
+        dead = true
+        break
+      }
       continue
     }
     speechPicks.set(t.id, att.name)
@@ -336,13 +411,9 @@ async function generateSpeech(args) {
       else parts.push('（音频已在内存里但落盘失败）')
     } else if (r.url) parts.push(`音频 URL：${r.url}（本地下载失败，注意它可能过期）`)
     parts.push('请把上面的本地路径原样转达，并用 ![音频](本地路径) 内嵌给用户试听。')
-    return parts.join('\n')
+    return { ok: true, text: parts.join('\n') }
   }
-  return (
-    `语音合成失败（${t.id}）：\n${errs.join('\n')}\n` +
-    '已依次试过 /audio/speech、/chat/completions+audio 两种接口三种形态。' +
-    '请核对 Base URL、API Key、音色名与该模型的语音接口文档；若这家提供商的语音接口不长这样，告诉我接口路径我再补。'
-  )
+  return { ok: false, errs, dead }
 }
 
 createInterface({ input: process.stdin }).on('line', async (line) => {
