@@ -280,18 +280,27 @@ export default function App() {
    *
    * 它跟项目行的「添加任务」是同一个动作（进草稿态，真正的内核会话等第一条消息才创建），
    * 只是目标目录恒为默认那个——用户点顶上的按钮时并没有挑目录。
+   * 另外它**不展开**目录：手已经落在输入框上了，摊开一长串历史会话只是挡视线。
    */
   function newTask() {
-    newSessionFor(projects.find((x) => x.builtin)?.id ?? 'builtin')
+    newSessionFor(projects.find((x) => x.builtin)?.id ?? 'builtin', false)
   }
 
-  /** 项目行「新会话」：进草稿态（不创建内核会话），右侧开聊 */
-  function newSessionFor(id: string) {
+  /**
+   * 项目行「新会话」：进草稿态（不创建内核会话），右侧开聊。
+   *
+   * @param expand 是否顺手展开该目录。**两种入口不一样**：
+   *   项目行上的「添加任务」要展开——用户正盯着这个目录，摊开列表才能看见刚建的活；
+   *   顶部「新建任务」不展开——他只是说"我要开个活"，被摊开的一长串历史会话反而占视线，
+   *   要看列表时自己点一下「任务」那一行即可。
+   */
+  function newSessionFor(id: string, expand = true) {
     const proj = projects.find((x) => x.id === id)
     if (!proj) return
     setActiveId(id)
     save('qingniao.activeProject', id)
-    setExpanded((e) => ({ ...e, [id]: true }))
+    // 不展开时连 setExpanded 都不调用：给个同值新对象也会触发一次存档写入，没意义
+    if (expand) setExpanded((e) => ({ ...e, [id]: true }))
     setSessionId('')
     toChat()
     setFocusTick((t) => t + 1)
