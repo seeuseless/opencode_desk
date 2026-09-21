@@ -503,6 +503,35 @@ function visionMcpPath(): string {
     : join(app.getAppPath(), 'resources', 'mcp', 'vision-mcp.mjs')
 }
 
+/**
+ * 桌面控制的底层依赖 computer-use-mcp（截屏 + 键鼠）在**哪里**。
+ *
+ * 为什么必须有一份可直接跑的本地副本：screen-mcp 底下要 spawn 它，若靠
+ * `npx -y computer-use-mcp` 现场拉包，实测**即便命中缓存也要 ~8 秒**才吐第一行，
+ * 内核启动时的 MCP 握手等不了这么久 → computer-use 被判失败，桌面控制就只剩
+ * app_running（用户看到的就是「开了却没有截屏/点击/输入」）。直连本地入口约 2.4 秒且不联网。
+ *
+ * 三级查找，取第一个命中的：
+ *  1. **随包内置**（resources/mcp/cu-mcp，electron-builder extraResources 带进安装包）——
+ *     开箱即用、完全离线，这是正常路径；
+ *  2. 老版本装到用户数据目录的那份（~/.qingniaoai/opencode/node_modules）——平滑过渡；
+ *  3. 都没有 → 返回空串，配置里回落 npx（仍可用，只是慢且依赖网络）。
+ */
+function builtinComputerUseMcp(): string {
+  const rel = join('node_modules', 'computer-use-mcp', 'dist', 'main.js')
+  const candidates = [
+    // 打包态：extraResources 平铺到 resources 根
+    join(process.resourcesPath, 'cu-mcp', rel),
+    // dev：项目根 package.json 已把它列为依赖，装完直接就在根 node_modules
+    join(app.getAppPath(), rel),
+    // dev：跑过 prepare:cu-mcp 生成的自包含副本
+    join(app.getAppPath(), 'resources', 'mcp', 'cu-mcp', rel),
+    // 老版本预装到用户数据目录的那份
+    join(opencodeConfigDir(), rel)
+  ]
+  return candidates.find((p) => existsSync(p)) ?? ''
+}
+
 /** 电脑控制视觉叠加 MCP（给收不了图的模型把截图读成文字）脚本位置（随安装包分发） */
 function screenMcpPath(): string {
   return app.isPackaged
@@ -881,7 +910,7 @@ app.whenReady().then(async () => {
   setDesktopMcp({ path: desktopMcpPath() })
   setMediaMcp({ path: mediaMcpPath() })
   setVisionMcp({ path: visionMcpPath() })
-  setScreenMcp({ path: screenMcpPath() })
+  setScreenMcp({ path: screenMcpPath(), upstreamBin: builtinComputerUseMcp() })
   setTtsMcp({ path: ttsMcpPath() })
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })

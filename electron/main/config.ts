@@ -346,9 +346,13 @@ let visionMcp: { path: string } | undefined
 export function setVisionMcp(v: { path: string }): void {
   visionMcp = v
 }
-/** 电脑控制视觉叠加 MCP（给收不了图的对话模型把截图读成文字）脚本路径 */
-let screenMcp: { path: string } | undefined
-export function setScreenMcp(v: { path: string }): void {
+/**
+ * 电脑控制视觉叠加 MCP（给收不了图的对话模型把截图读成文字）脚本路径。
+ * `upstreamBin` 是它底下要 spawn 的 computer-use-mcp 的**本地入口**（随包内置的那份）：
+ * 有它就直连（~2.4s、离线），没有才回落 npx 现场拉包（~8s、要联网）。
+ */
+let screenMcp: { path: string; upstreamBin?: string } | undefined
+export function setScreenMcp(v: { path: string; upstreamBin?: string }): void {
   screenMcp = v
 }
 /** 语音合成 MCP（generate_speech 配音工具）脚本路径 */
@@ -583,26 +587,40 @@ export function writeOpencodeConfig(s: Settings): void {
   // 电脑控制的视觉叠加：把 computer-use-mcp 包一层。截图原样透传，另外附一段视觉模型写的
   // 画面文字描述——收不了图的模型（deepseek 等）被内核丢掉 image 后，靠这段文字照样看得见屏幕。
   // 「文本 + 图片 + 视频」之外再叠一层视觉，桌面控制不再闭眼点鼠标。
+  /**
+   * 上游 computer-use-mcp 的启动方式：**优先用本地已装的包，不走 npx**。
+   *
+   * 为什么必须装本地：实测 `npx -y computer-use-mcp` 即便命中缓存也要 **~8 秒**才吐第一行，
+   * 首次联网更久。内核启动后立刻跟所有 MCP 握手，这个耗时足以让 computer-use 被判启动失败——
+   * 结果就是「桌面控制已开启，但只剩 app_running、没有截屏/点击/输入」（desktop-helper 是纯
+   * 本地脚本秒起，所以只有它活着）。直连本地入口约 2.4 秒且不依赖网络，握手稳。
+   * 本地没装（首次）才回落到 npx。
+   */
+  // 优先用主进程查到的那份（随包内置 > 老版本预装到数据目录的）；都没有才回落 npx
+  const upstreamBin =
+    screenMcp?.upstreamBin || join(opencodeConfigDir(), 'node_modules', 'computer-use-mcp', 'dist', 'main.js')
+  const upstreamLocal = existsSync(upstreamBin)
   if (desktopOn && screenMcp) {
     mcp['computer-use'] = {
       type: 'local',
       command: ['node', screenMcp.path],
       environment: {
         QN_VISION_TARGETS: JSON.stringify(visionTargets),
-        QN_SCREEN_UPSTREAM_CMD: 'npx',
-        QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(['-y', 'computer-use-mcp'])
+        QN_SCREEN_UPSTREAM_CMD: upstreamLocal ? process.execPath : 'npx',
+        QN_SCREEN_UPSTREAM_ARGS: JSON.stringify(upstreamLocal ? [upstreamBin] : ['-y', 'computer-use-mcp'])
       },
-      // 截图 + 转文字（识图本身可到几十秒），默认 5s 超时必被掐
-      timeout: 180000,
+      // 桌面控制的每一步都必须在几十秒内出结果——拖着不回比做错更糟：界面会一直卡在
+      // 「AI 正在控制你的电脑」，且对话输入一直被锁着。
+      // screen-mcp 内部已经层层设限（一次调用总预算 25s、等上游回包 20s、单次识图 10s），
+      // 这里是最后一道兜底：30s 没回就判失败。**不要再往大调**——要的是快速失败 + 重试。
+      timeout: 30000,
       enabled: true
     }
   } else if (desktopOn) {
     // 兜底（screen 脚本缺失）：退回直接挂原始的 computer-use-mcp
-    mcp['computer-use'] = {
-      type: 'local',
-      command: ['npx', '-y', 'computer-use-mcp'],
-      enabled: true
-    }
+    mcp['computer-use'] = upstreamLocal
+      ? { type: 'local', command: [process.execPath, upstreamBin], enabled: true }
+      : { type: 'local', command: ['npx', '-y', 'computer-use-mcp'], enabled: true }
   }
   for (const m of s.mcps) {
     if (m.type === 'remote') {
