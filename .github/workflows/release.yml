@@ -30,9 +30,13 @@
 #      修法：删掉该字段，让 electron-builder 自己从 package.json 取 version。
 #      教训：extraMetadata 的值不做占位符展开（只有 artifactName 那类模板字段才展开）；
 #            排查时**先看构建步骤日志里真正的 ⨯ 那一行**，别被前置步骤的"成功"带偏。
-#   3) electron-builder 的**隐式发布**：它检测到「在 CI + tag」就自动去发布 Release，
-#      没配 GH_TOKEN 直接退出，把已经打好的包丢掉。
-#      修法：构建命令统一带 `--publish never`（见「构建 Windows 安装包」那一步的注释）。
+#   3) GH_TOKEN 报错（`GitHub Personal Access Token is not set`）：发生在签名、blockmap 都
+#      成功之后，看着像发布失败。其实有两层原因，**两层都要治**：
+#        a. electron-builder 在「CI + tag」下隐式开启发布 → 用 `--publish never` 关掉；
+#        b. 更隐蔽的一层：没写 publish 配置时它从 package.json 的 repository 推断出
+#           provider=github，写 app-update.yml 那步就构造 GitHubPublisher 要 token。
+#           → 在 electron-builder.yml 里写 `publish: generic` 短路掉（本项目用不上 app-update.yml）。
+#      只做 a 不做 b，报错一模一样 —— 别以为是没生效。
 
 name: release
 
@@ -92,13 +96,15 @@ jobs:
       # dist 里已经串了 gen-update-meta → electron-vite build → electron-builder --win
       # ⚠️ `--publish never` 不能省（脚本里已带，这里再显式写一遍防绕过）：
       #   electron-builder 一旦发现「在 CI 里 + 当前是 tag」，就会**隐式开启发布**，
-      #   去要 GH_TOKEN 自己上传 Release，没配就直接退出：
-      #     • signing with signtool.exe  path=dist\青鸟-Setup.exe
-      #     • building block map  blockMapFile=dist\青鸟-Setup.exe.blockmap
-      #     ⨯ GitHub Personal Access Token is not set, neither programmatically, nor using env "GH_TOKEN"
-      #   而本流程的上传由下面的 softprops/action-gh-release 负责，两套机制会打架。
-      #   加上它 = 只构建、不发布，产物交给下一段上传步骤。
-      #   （日志里那句 "Implicit publishing triggered by git tag" 就是它触发的信号）
+      # ⚠️ 这里曾误以为 `--publish never` 能解决 GH_TOKEN 报错，实际不能，两点都要做：
+      #   1) electron-builder 检测到「CI + git tag」会隐式开启发布（日志里那句
+      #      "Implicit publishing triggered by git tag"），加上 --publish never 关掉它。
+      #   2) 但 token 报错的真正来源**不是发布策略**：只要 electron-builder.yml 里没显式写
+      #      publish 配置，它就从 package.json 的 repository 推断出 provider=github，
+      #      并在写 app-update.yml 时构造 GitHubPublisher → 没 token 直接抛错。
+      #      对策是 electron-builder.yml 里的 `publish: generic`（见该文件注释），
+      #      与 --publish never 无关，缺哪个都还是失败。
+      #   （本流程上传由下面的 softprops/action-gh-release 负责，electron-builder 不参与发布）
       - name: 构建 Windows 安装包
         run: yarn dist --publish never
         env:

@@ -13,6 +13,19 @@ productName: 青鸟
 #         at AppInfo.getVersionInWeirdWindowsForm (app-builder-lib/src/appInfo.ts:93:13)
 #    去掉后 electron-builder 会自己从 package.json 取 version，行为完全一致。
 #    记住：extraMetadata 的值不做占位符展开，只有 artifactName 那类模板字段才展开。
+#
+# ⚠️ publish: generic 是**必需**的，不是可选项（2026-09-22 CI 实测踩到）：
+#   不写它时，electron-builder 会从 package.json 的 repository 字段（github.com/...）
+#   推断出 provider=github，然后**无论有没有 --publish never** 都会构造 GitHubPublisher，
+#   而它的构造函数第一件事就是要 token，没有就抛：
+#      ⨯ GitHub Personal Access Token is not set, neither programmatically, nor using env "GH_TOKEN"
+#   （报错发生在 sign/blockmap 之后，看着像"发布失败"，其实是 app-update.yml 那步构造 publisher 时炸的；
+#     调用点在 app-builder-lib/out/publish/PublishManager.js 的 getAppUpdatePublishConfiguration，
+#     它由 packager.on 触发，跟 publishPolicy 无关）
+#   写成 generic 后，scheduleUpload 会直接 return、不构造任何 publisher（provider === "generic" 短路）。
+#   对本项目**无副作用**：应用内更新读的是 resources/update.json + GitHub Releases 的
+#   /releases/latest/download/青鸟-Setup.exe 固定地址，从不使用 electron-builder 生成的 app-update.yml。
+publish: generic
 directories:
   output: dist
   buildResources: resources
