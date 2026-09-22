@@ -2,8 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-seeuseless%2Fopencode__desk-181717?logo=github)](https://github.com/seeuseless/opencode_desk)
+[![Release](https://img.shields.io/github/v/release/seeuseless/opencode_desk?label=release&color=blue)](https://github.com/seeuseless/opencode_desk/releases/latest)
 
 **代码地址：<https://github.com/seeuseless/opencode_desk>**
+
+**当前版本：v1.0.0**（首个正式版本）— 安装包见 [Releases](https://github.com/seeuseless/opencode_desk/releases/latest)，
+更新记录见 [CHANGELOG.md](./CHANGELOG.md)。下载地址固定为
+`releases/latest/download/青鸟-Setup.exe`（Windows）与 `青鸟-Setup-arm64.dmg`（macOS），
+**每次发版由 GitHub Actions 自动构建并覆盖上传**，无需从源码编译。
 
 ![screenshot](screenshot/1.png)
 
@@ -27,19 +33,74 @@
 ```bash
 git clone https://github.com/seeuseless/opencode_desk.git
 cd opencode_desk
-npm install        # 首次会下载 Electron 与 OpenCode 原生二进制
-npm run dev        # 开发模式（桌面窗口）
-npm run build      # 编译 main/preload/renderer
-npm run typecheck  # 类型检查
-npm run dist       # electron-builder 打 Windows 安装包
-npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm install 自动生成）
+yarn install       # 首次会下载 Electron 与 OpenCode 原生二进制
+yarn dev           # 开发模式（桌面窗口）
+yarn build         # 编译 main/preload/renderer
+yarn typecheck     # 类型检查
+yarn dist          # electron-builder 打 Windows 安装包
+yarn dist:mac      # electron-builder 打 macOS dmg/zip
 ```
 
-> **macOS 支持**
-> - 内核二进制：`opencode-ai` 通过 npm optional 依赖自动拉取对应架构（`opencode-darwin-arm64` / `opencode-darwin-x64`），`npm install` 后无需额外下载。
-> - 可执行位：`postinstall` 自动 `chmod +x node_modules/opencode-ai/bin/*`（mac 上 npm 装的二进制常缺 x）。
-> - 图标：`postinstall` 用 `sips` + `iconutil` 从 `resources/image/icon.png` 生成 `resources/image/icon.icns`。
-> - 签名：有 Apple Developer 账号直接 `npm run dist:mac`；个人自用/无账号用 `npm run dist:mac:unsigned` 跳过签名（Gatekeeper 会拦截，需右键打开）。
+> 用 `npm install` / `npm run xxx` 亦可；仓库内 `yarn.lock` 锁定版本，**推荐 yarn**。
+> 换源请在 `.npmrc` 里配，不要改 `yarn.lock` 里的 `resolved`（commit 上去会影响 CI 拉包）。
+
+> **下载安装（普通用户不必自己编译）**
+>
+> 到 [Releases](https://github.com/seeuseless/opencode_desk/releases/latest) 直接下载
+> 已构建好的安装包；也可以在应用内「设置 → 关于」里检查更新并一键下载安装。
+>
+> | 平台 | 安装包 |
+> | --- | --- |
+> | Windows | `青鸟-Setup.exe`（文件名固定不含版本号） |
+> | macOS | `青鸟-Setup-arm64.dmg`（另有 `.zip`） |
+>
+> - Windows 未做代码签名，SmartScreen 首次运行可能提示"未知发布者"，选「更多信息 → 仍要运行」。
+> - macOS 未做签名与公证，首次打开需**右键 →「打开」**绕过 Gatekeeper（直接双击会被拦下）。
+
+## 发版（改 version → 打 tag，其余交给 GitHub）
+
+本项目的安装包**全部由 GitHub Actions 自动构建**，本地不需要（也不应该）手动出包再上传。
+只需改版本号、打一个 `v*` tag 推上去，剩下的交给 CI：
+
+```
+改 package.json 的 version（如 1.0.1，**必须与 tag 一致**）
+  → 在 CHANGELOG.md 顶部落一条同版本号的条目
+  → commit && push
+  → 打 tag 并推送  ← 这一步触发 CI
+```
+
+```bash
+# 1. 改版本号 + 写更新日志（两者版本号要一致）
+vim package.json          # "version": "1.0.1"
+vim CHANGELOG.md          # 顶部落一条 ## v1.0.1
+
+# 2. 提交推送
+git commit -am "release: v1.0.1" && git push
+
+# 3. 打 tag 推送 —— CI 从此处开始自动干活
+git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
+```
+
+推完 tag 后 **GitHub Actions 自动**（`.github/workflows/release.yml`）：
+
+1. 在 `windows-latest` 与 `macos-latest` 上**并行**构建
+2. 校验产物（安装包名、内核二进制是否为真、dmg 是否可执行）
+3. 把安装包挂到该 tag 对应的 Release 附件上
+
+Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例如无签名证书、runner 环境波动）
+也不会拦下 Windows 的发版，Release 里仍会正常出现 `青鸟-Setup.exe`。
+
+用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**。
+
+> ⚠️ **附件名是固定的，每次发版覆盖上传同名附件**（不带版本号）。
+> 这是应用内"一键下载"能自动找到地址的前提：它走
+> `releases/latest/download/青鸟-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
+> 历史版本靠 git tag 与各自的 Release 页面追溯。
+
+发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
+`workflow_dispatch` 填入要补建的 tag 即可。
+
+详见 [docs/发版与更新提示.md](./docs/发版与更新提示.md)。
 
 ## 功能
 
@@ -56,21 +117,6 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
 12. 技能（Skills）：设置页可视化管理 `SKILL.md`，按**全局 / 项目**两组展示，支持新建、编辑、改名、删除与打开目录，保存前按内核规则校验 frontmatter（名称规范、描述必填、描述长度）；模型平时只看到「名称 + 描述」，判断需要才读全文，不占常驻上下文
 13. 更新提示：设置 → 关于里检查新版本（对着 GitHub Releases 比版本号），有新版本就显示更新说明并支持**一键下载 → 立即安装重启**，全程不用去浏览器翻 Release 页；下载走 `releases/latest/download/青鸟-Setup.exe` 固定地址，不经 `api.github.com`，国内可直连
-
-## 发版
-
-改 `package.json` 的 `version` + 在 [CHANGELOG.md](./CHANGELOG.md) 顶部落新版本条目
-→ 提交 → 打 `v*` tag 推送，GitHub Actions 会自动构建 Windows 安装包并挂到对应 Release，
-用户端随即能在「设置 → 关于」看到更新提示。
-
-```bash
-vim package.json                    # version: 1.0.1（必须与 tag 一致）
-vim CHANGELOG.md                    # 顶部落一条 v1.0.1
-git commit -am "release: v1.0.1" && git push
-git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
-```
-
-详见 [docs/发版与更新提示.md](./docs/发版与更新提示.md)。
 
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 
@@ -110,8 +156,16 @@ git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 ```
 electron/main/adapter.ts   内核生命周期：spawn opencode serve、SSE 事件桥、REST 透传
 electron/main/config.ts    settings.json ↔ opencode.json 生成、XDG 目录隔离、密钥 env 注入
+electron/main/updater.ts   应用内更新：查 GitHub Releases → 下载 → 交给安装包升级
 src/renderer/              React 界面（oc.ts 门面 API、Markdown、步骤动画、任务清单、队列）
-scripts/                   gen-icon 图标生成、smoke 内核冒烟
+scripts/
+  gen-icon.mjs             从 SVG 生成 icon.png / icon.ico / icon.icns（改图标后手动跑一次）
+  gen-deps.mjs             拍依赖快照 deps.json（设置 → 依赖 页的数据源）
+  gen-update-meta.mjs      生成 update.json（仓库坐标 + tag 前缀，换仓库只改它）
+  check-kernel.mjs         打包前校验内核二进制是真货而非占位脚本（装完打不开的护栏）
+  smoke.mjs                内核冒烟测试
+electron-builder.yml       打包配置（产物名、files 白名单、mac/win 目标）
+.github/workflows/release.yml  tag → 构建 → 上传 Release 附件
 ```
 
 ## 第三方组件
