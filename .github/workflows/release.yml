@@ -225,9 +225,12 @@ jobs:
           echo "lockfile 腾讯源数量：改前 $before → 改后 $after（应为 0）"
           yarn install --frozen-lockfile --network-timeout 600000
 
-      # mac 上这步同样不能省：opencode-ai 的 bin/opencode 预置文件是占位脚本，
-      # 真二进制（darwin-arm64 / darwin-x64）要靠 postinstall 从平台包链接过来。
-      # 注意文件名在 mac 上是 `opencode`（无 .exe），check-kernel.mjs 已按平台区分。
+      # mac 上这步同样不能省，理由与 Windows 完全一致（见上面 build-win 里的长注释）。
+      # ⚠️ 注意文件名在 mac 上**仍然是 opencode.exe**（无平台差异）：
+      #   opencode-ai 的 postinstall.mjs 把目标路径写死成了 bin/opencode.exe，
+      #   内容是 Mach-O、靠 chmod 0o755 变可执行，后缀只是个名字。
+      #   scripts/check-kernel.mjs 已改为按存在性探测（优先 .exe、回落无后缀），
+      #   不再按平台猜文件名——这里若还写"mac 上是 opencode"，会误导后来人。
       - name: 补跑 opencode-ai postinstall
         shell: bash
         run: node node_modules/opencode-ai/postinstall.mjs
@@ -240,6 +243,47 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
+
+      # ⚠️ mac 专属断言，**Windows 上测不出来**（Windows 不看可执行位）：
+      #   打包进 app 的内核二进制必须带 x 位，否则主进程 spawn 它时会被系统拒绝
+      #   （表现同样是启动失败，但报错形式与 spawn UNKNOWN 不同，更难联想）。
+      #   源头是后置的 postinstall 会 chmod 0o755；这里验的是**最终产物**，
+      #   防止 electron-builder 拷贝 extraResources 时把权限位丢掉。
+      #   同时验一下大小，排除"把占位脚本打进去"的老问题（与 Windows 那步等价）。
+      - name: 校验内核二进制已打进安装包且可执行
+        shell: bash
+        run: |
+          BIN="dist/mac-arm64/青鸟.app/Contents/Resources/bin/opencode.exe"
+          # 兼容不同 electron-builder 版本的输出目录命名（mac-arm64 / mac / mac-universal）
+          if [ ! -f "$BIN" ]; then
+            BIN=$(find dist -path '*/Contents/Resources/bin/opencode.exe' -type f 2>/dev/null | head -1)
+          fi
+          if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
+            echo "::error::.app 包内找不到内核二进制（Contents/Resources/bin/opencode.exe）"
+            echo "::error::检查 electron-builder.yml 的 extraResources 与 asarUnpack 配置"
+            find dist -name 'opencode*' -type f 2>/dev/null | head -10
+            exit 1
+          fi
+          SIZE=$(stat -f%z "$BIN")
+          echo "内核二进制：$BIN"
+          echo "  大小：$SIZE 字节（预期 >100MB）"
+          if [ "$SIZE" -lt 100000000 ]; then
+            echo "::error::只有 $SIZE 字节，是未替换的占位脚本而非真二进制——检查 postinstall 是否生效"
+            exit 1
+          fi
+          # 文件头应是 Mach-O（cffaedfe 小端 / cafebabe fat），不是 PE
+          HEAD=$(xxd -p -l 4 "$BIN")
+          echo "  文件头：0x$HEAD"
+          case "$HEAD" in
+            cffaedfe*|cafebabe*|feedface*) echo "  ✓ 是 Mach-O" ;;
+            *) echo "::error::文件头 0x$HEAD 不是 Mach-O——可能打进了错误平台的二进制"; exit 1 ;;
+          esac
+          if [ ! -x "$BIN" ]; then
+            echo "::error::内核二进制没有可执行权限（-x 未通过）——mac 上主进程会无法 spawn 它"
+            echo "::error::该文件权限：$(ls -l "$BIN")"
+            exit 1
+          fi
+          echo "✓ 内核二进制正常且可执行"
 
       - name: 校验产物
         shell: bash
