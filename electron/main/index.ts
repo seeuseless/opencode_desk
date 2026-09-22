@@ -10,6 +10,7 @@ import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
+import { cancelDownload, checkUpdate, downloadUpdate, installUpdate, openReleasePage, setUpdateSink, updateState } from './updater.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 
 /**
@@ -761,6 +762,16 @@ setModelAuthSink((channel, payload) => {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send(channel, payload)
 })
 
+/**
+ * 更新状态的变化（检查完成、下载进度、下载结束/失败）推给界面。
+ *
+ * 走事件而不是让界面轮询：下载时进度是每 300ms 一跳的，轮询要么太密（无谓 IPC）、
+ * 要么太疏（进度条一顿一顿）；而"检查完成"这种一次性结果用轮询还得额外判重。
+ */
+setUpdateSink((s) => {
+  if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('update:changed', s)
+})
+
 ipcMain.handle(
   'modelauth:reply',
   (_e, req: { reqId: string; scope: 'once' | 'session' | 'always' | 'reject' }) => {
@@ -823,6 +834,16 @@ ipcMain.handle('memory:append', (_e, req: { projectPath: string; content: string
   const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
   appendFileSync(memTodayFile(req.projectPath), `\n## ${stamp}\n\n${req.content}\n`, 'utf8')
 })
+
+// ---------- 更新（设置 → 关于）----------
+// 对着 GitHub Releases 查最新版；有新版就下载安装包、由安装包自己完成升级（见 updater.ts）。
+// 每次都是现查现用，不落盘缓存版本信息——"三天前查到有新版本"不该被当成事实摆给用户看。
+ipcMain.handle('update:get', () => updateState())
+ipcMain.handle('update:check', () => checkUpdate())
+ipcMain.handle('update:download', () => downloadUpdate())
+ipcMain.handle('update:cancel', () => cancelDownload())
+ipcMain.handle('update:install', () => installUpdate())
+ipcMain.handle('update:openRelease', (_e, tag?: string) => openReleasePage(typeof tag === 'string' ? tag : undefined))
 
 // ---------- 第三方依赖清单（设置 → 依赖）----------
 // 清单来自应用自己的 package.json（声明范围），版本号与协议优先到 node_modules 里读**真实值**；

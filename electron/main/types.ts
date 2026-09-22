@@ -519,6 +519,62 @@ export interface UsageRecord {
   created_at: string
 }
 
+/**
+ * 更新状态（设置 → 关于）。
+ *
+ * 数据源是 GitHub Releases：`https://github.com/{repo}/releases`。
+ * 这里只描述「当前对比结果」，不缓存到磁盘——每次打开设置页/点检查都现查一次，
+ * 免得把"三天前查到的有新版本"当成事实摆给用户看。
+ */
+export interface UpdateState {
+  /** 开发模式（未打包）：没有"升级"这回事，界面显示说明而不是检查按钮 */
+  dev: boolean
+  /** 当前版本号（来自 package.json / 安装包） */
+  current: string
+  /** 仓库坐标，如 seeuseless/opencode_desk（界面上「在浏览器里查看发布页」用） */
+  repo: string
+  /** 正在向 GitHub 查询 */
+  checking: boolean
+  /** 上次检查完成的时间戳（0 = 本次会话从未查过） */
+  checkedAt: number
+  /** 检查失败原因（网络不通、被限流、仓库还没有发布）；有新版本时为 undefined */
+  error?: string
+  /** 查到的新版本（已是最新或无结果时为 undefined） */
+  latest?: UpdateInfo
+  /** 下载进度（下载中才有） */
+  progress?: UpdateProgress
+  /** 已下载完成的安装包路径（有值即"可以安装了"） */
+  file?: string
+  /** 安装包确实在磁盘上（防止用户中途把它删了，界面还显示能装） */
+  canInstall: boolean
+}
+
+/** 查到的新版本信息 */
+export interface UpdateInfo {
+  /** 去掉 tag 前缀后的版本号，如 0.1.0 */
+  version: string
+  /** 原始 tag，如 v0.1.0 */
+  tag: string
+  /** Release 说明正文（Markdown 原文，界面自己简单排版） */
+  notes: string
+  /** 发布页地址（在浏览器打开看完整说明） */
+  pageUrl: string
+  /** 发布时间（ISO 字符串） */
+  publishedAt: string
+  /** 安装包直链（GitHub 附件地址；链接会 302 跳转到 objects.githubusercontent.com） */
+  downloadUrl?: string
+  /** 附件文件名（界面显示"正在下载 xxx"） */
+  downloadName?: string
+  /** 附件字节数（0 = GitHub 没给，此时进度只显示已下载量、不算百分比） */
+  size: number
+}
+
+/** 下载进度（总长为 0 时界面只显示已下载量） */
+export interface UpdateProgress {
+  received: number
+  total: number
+}
+
 /** 账号信息（设置 → 账号），来自平台 /api/ide/me */
 export interface PlatformAccount {
   user: { id: number; name: string; email?: string }

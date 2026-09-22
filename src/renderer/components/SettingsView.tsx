@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Package, Palette, Pencil, Plus, RefreshCw, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Package, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { DepsPanel } from './DepsPanel'
+import { UpdatePanel } from './UpdatePanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
@@ -159,7 +160,7 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'sideBg', label: '左侧面板底色' },
 ]
 
-/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 */
+/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
@@ -170,7 +171,9 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'mcp', label: 'MCP', icon: Globe },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
   { id: 'usage', label: '使用量', icon: BarChart3 },
-  // 依赖放最后：它只是"这个软件用了哪些开源包"的清单，不属于要配置的东西
+  // 关于（版本 + 更新）放倒数第二：是"这个软件本身"的信息，不属于要配置的东西
+  { id: 'about', label: '关于', icon: Rocket },
+  // 依赖放最后：它只是"这个软件用了哪些开源包"的清单
   { id: 'deps', label: '依赖', icon: Package }
 ]
 
@@ -1193,6 +1196,8 @@ export function SettingsView(p: Props) {
         )}
 
         {tab === 'deps' && <DepsPanel />}
+
+        {tab === 'about' && <UpdatePanel />}
 
         {tab === 'account' && (
           <AccountPanel

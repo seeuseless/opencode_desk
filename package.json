@@ -27,10 +27,11 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "gen:deps": "node scripts/gen-deps.mjs",
-    "postinstall": "node scripts/gen-deps.mjs",
-    "dist": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac",
-    "dist:mac:unsigned": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac"
+    "gen:update": "node scripts/gen-update-meta.mjs",
+    "postinstall": "node scripts/gen-deps.mjs && node scripts/gen-update-meta.mjs",
+    "dist": "node scripts/gen-update-meta.mjs && electron-vite build && electron-builder --win",
+    "dist:mac": "node scripts/gen-update-meta.mjs && electron-vite build && electron-builder --mac",
+    "dist:mac:unsigned": "node scripts/gen-update-meta.mjs && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac"
   },
   "dependencies": {
     "any-base": "^1.1.0",

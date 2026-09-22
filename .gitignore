@@ -6,6 +6,10 @@ dist
  #schema/  
 /schema/ 
 
+# electron-builder 生成的更新元数据：只在"构建产物"里出现（dist/latest.yml），
+# 由 CI 上传到 Release 附件，不入源码库；resources/update.json 是构建时生成的仓库坐标，要入库
+/latest.yml
+
 # 工作区记忆：只跟踪长期笔记，日期日志不入库
 .workbuddy/memory/*
 !.workbuddy/memory/MEMORY.md

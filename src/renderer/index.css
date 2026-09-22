@@ -1776,3 +1776,74 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 /* 读不到协议的包：灰一档，别装作已经知道 */
 .dep-lic.unk { background: var(--bg2); color: var(--fg2); }
 .dep-tip { font-size: 11.5px; color: var(--fg2); line-height: 1.6; margin-top: 6px; }
+
+/* ================= 设置 → 关于（版本 + 更新） ================= */
+/* 版本卡片：当前版本 → 最新版本，右侧是「检查更新」。做成一行三格是为了让
+   "我现在是哪个版本、最新是哪个"这两个数一眼可比，不用在两段文字里找 */
+.ud-card {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  margin-top: 16px; padding: 16px 18px;
+  border-radius: 12px; background: var(--bg3);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.ud-ver { display: flex; flex-direction: column; gap: 3px; }
+.ud-lab { font-size: 11.5px; color: var(--fg2); }
+.ud-num {
+  font-size: 19px; font-weight: 600; line-height: 1.1;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+}
+/* 最新版本号在"确实更新"时才染主色，其余（已是最新 / 未知）保持正文色 */
+.ud-num.new { color: var(--accent); }
+.ud-arrow { color: var(--fg2); font-size: 15px; margin-top: 14px; }
+
+/* 说明性条/失败条：左侧图标 + 文字 + 右侧可选按钮 */
+.ud-note {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 14px; border-radius: 10px;
+  background: var(--bg3); color: var(--fg2); font-size: 12.5px; line-height: 1.55;
+}
+.ud-note > svg { flex-shrink: 0; }
+.ud-note.err { background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--err); }
+.ud-note.ok { background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--ok); }
+
+/* 新版本区块：说明正文 + 进度 + 操作按钮，三层叠起来 */
+.ud-upd {
+  margin-top: 14px; padding: 16px 18px; border-radius: 12px;
+  background: var(--bg3); box-shadow: 0 0 0 1px var(--line);
+}
+.ud-upd-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ud-upd-head > svg { color: var(--accent); flex-shrink: 0; }
+.ud-time { font-size: 11.5px; color: var(--fg2); }
+/* Release 说明是 Markdown 原文：等宽 + 保留换行，比硬渲染成 HTML 更诚实（不吞掉用户写的格式） */
+.ud-notes {
+  margin-top: 12px; padding: 12px 14px; max-height: 260px; overflow: auto;
+  border-radius: 10px; background: var(--field-bg); color: var(--fg2);
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+  font-size: 12px; line-height: 1.7; white-space: pre-wrap; word-break: break-word;
+}
+.ud-prog { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.ud-prog-bar {
+  flex: 1; height: 6px; border-radius: 3px; overflow: hidden;
+  background: color-mix(in srgb, var(--line) 70%, transparent);
+}
+.ud-prog-bar > i { display: block; height: 100%; background: var(--accent); transition: width 0.25s linear; }
+/* 拿不到总长度时（GitHub 偶发不给 content-length）走不确定态：条子来回扫，别装作知道百分比 */
+.ud-prog-bar > i.indet { animation: ud-indet 1.2s ease-in-out infinite; }
+@keyframes ud-indet {
+  0% { margin-left: 0; }
+  50% { margin-left: 55%; }
+  100% { margin-left: 0; }
+}
+.ud-prog-txt { flex-shrink: 0; font-size: 11.5px; color: var(--fg2); font-variant-numeric: tabular-nums; }
+.ud-acts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.ud-hint { font-size: 11.5px; color: var(--fg2); line-height: 1.5; }
+
+.ud-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 18px; padding-top: 12px; font-size: 11.5px; color: var(--fg2);
+  border-top: 1px solid var(--line);
+}
+.ud-meta code {
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+  background: var(--bg3); border-radius: 5px; padding: 1px 6px;
+}

@@ -15,7 +15,8 @@ import type {
   UsageLog,
   UsagePage,
   UsageRecord,
-  UsageSummary
+  UsageSummary,
+  UpdateState
 } from '../main/types'
 
 /** 暴露给渲染进程的最小桥：REST 代理 + 事件订阅 + 应用级能力 */
@@ -162,6 +163,28 @@ const api = {
     const handler = (_: unknown, s: PlatformStatus): void => cb(s)
     ipcRenderer.on('platform:changed', handler)
     return () => ipcRenderer.off('platform:changed', handler)
+  },
+  /**
+   * 更新（设置 → 关于）：对着 GitHub Releases 查最新版 → 下载安装包 → 交给安装包自己升级。
+   * 版本信息每次都现查（不落盘），所以 getUpdateState 在没检查过时只有当前版本号。
+   */
+  getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:get'),
+  /** 检查最新版本；失败不改动已有结果，状态里的 error 说明原因（网络不通 / 被限流 / 仓库还没发版） */
+  checkUpdate: (): Promise<UpdateState> => ipcRenderer.invoke('update:check'),
+  /** 下载最新版安装包到 ~/.qingniaoai/updates/；进度靠 onUpdateChanged 推送 */
+  downloadUpdate: (): Promise<UpdateState> => ipcRenderer.invoke('update:download'),
+  /** 取消下载（把半截文件删掉） */
+  cancelUpdate: (): Promise<UpdateState> => ipcRenderer.invoke('update:cancel'),
+  /** 立即安装：Windows 拉起安装包后本应用自动退出（安装器会重新启动它）；返回 manual 表示需要用户手动完成 */
+  installUpdate: (): Promise<{ ok: boolean; manual?: boolean; error?: string }> =>
+    ipcRenderer.invoke('update:install'),
+  /** 在系统浏览器里打开发布页（检查失败时的出口；传 tag 则打开那一版的页面） */
+  openRelease: (tag?: string): Promise<void> => ipcRenderer.invoke('update:openRelease', tag),
+  /** 更新状态变化：检查完成 / 下载进度 / 下载结束 / 失败 */
+  onUpdateChanged: (cb: (s: UpdateState) => void): (() => void) => {
+    const handler = (_: unknown, s: UpdateState): void => cb(s)
+    ipcRenderer.on('update:changed', handler)
+    return () => ipcRenderer.removeListener('update:changed', handler)
   },
   winMin: () => ipcRenderer.send('win:min'),
   winMax: () => ipcRenderer.send('win:max'),

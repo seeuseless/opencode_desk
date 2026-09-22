@@ -4,9 +4,18 @@
 # - extraResources 把 OpenCode 内核二进制拷进 resources/bin（主进程打包态从该处读取）
 appId: com.qingniao.desktop
 productName: 青鸟
+# 版本号唯一事实来源就是 package.json（发版时改它、并打同名 tag）。显式重述一遍，
+# 避免将来 package.json 里出现 version 之外的同义字段时被打包器取到别的值。
+extraMetadata:
+  version: ${version}
 directories:
   output: dist
   buildResources: resources
+# 安装包文件名**写死不含版本号**，这是"应用内检查更新"能自动找到下载地址的前提：
+# 地址规则固定为 https://github.com/{repo}/releases/latest/download/青鸟-Setup.exe，
+# 不用先查 GitHub API（国内对 api.github.com 常不通）就能直接下最新版。
+# 因此**每次发版都必须覆盖上传同名附件**，历史版本靠 git tag 与 Release 说明追溯。
+artifactName: ${productName}-Setup.${ext}
 files:
   - out/**
   - resources/image/icon.png
@@ -15,6 +24,9 @@ files:
   - node_modules/qrcode-generator/**
   # 第三方依赖快照（scripts/gen-deps.mjs 生成）：设置 → 依赖 页在打包态读不到 node_modules，靠它显示真实版本号与协议
   - resources/deps.json
+  # 更新元数据（scripts/gen-update-meta.mjs 生成）：仓库坐标 + tag 前缀，主进程 updater.ts 读它，
+  # 换仓库/换 tag 命名只改这一个文件，不用动源码
+  - resources/update.json
 extraResources:
   # OpenCode 内核原生二进制（主进程打包态从 resources/bin 读取）
   - from: node_modules/opencode-ai/bin
@@ -72,6 +84,8 @@ win:
   icon: resources/image/icon.ico
   target:
     - nsis
+  # 与顶层同名（显式写一遍，避免将来顶层被改时这里悄悄跟着变）
+  artifactName: ${productName}-Setup.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -82,6 +96,8 @@ mac:
     - dmg
     - zip
   category: public.app-category.productivity
+  # mac 上多架构产物同名会互相覆盖，故单独带 arch（与主进程 updater.ts 的 MAC_DMG_NAME 对应）
+  artifactName: ${productName}-Setup-${arch}.${ext}
   # 个人自用 / 无 Apple Developer 账号时，可在调用 dist:mac 脚本前导出：
   #   export CSC_IDENTITY_AUTO_DISCOVERY=false
   # 否则 electron-builder 会要求签名（公证另需 Apple 公证服务）。

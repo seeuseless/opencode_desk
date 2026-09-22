@@ -1,0 +1,79 @@
+# 发版（打 tag 自动出安装包并挂到 Release）
+#
+# 用法：
+#   1. 改 package.json 的 version（如 0.0.2）——**必须先改再打 tag**，两者要对得上：
+#      应用内的"当前版本"读的就是安装包里的这个值，对不上会导致它一直提示有新版本。
+#   2. git commit && git push
+#   3. git tag -a v0.0.2 -m "release v0.0.2" && git push origin v0.0.2
+#      → 本工作流自动跑：Windows 上构建安装包、上传到对应 Release 的附件。
+#
+# 为什么附件名必须固定成「青鸟-Setup.exe」：
+#   应用内"一键下载"用的地址是
+#     https://github.com/seeuseless/opencode_desk/releases/latest/download/青鸟-Setup.exe
+#   这条路**不经过 api.github.com**，是国内能直连的下载方式；代价是附件名不能带版本号，
+#   每次发版覆盖同名附件。历史版本靠 git tag 与各自的 Release 页面追溯。
+#   （名字由 electron-builder.yml 的 artifactName 决定，本工作流只负责上传，不再改名）
+#
+# 顺带生成 latest.yml 一起传上去：应用侧的检查更新走的是 GitHub Releases API，
+# 不需要它；留着是为了将来若改用 electron-updater，元数据已经就位（不影响现在的流程）。
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # 允许手动跑一次（补传、或某个 tag 的构建失败了要重跑）
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要补建的 tag（如 v0.0.2）'
+        required: true
+
+# 上传附件到 Release 需要写权限（默认 token 只有读权限）
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      # 项目用 yarn（yarn.lock 在库），--frozen-lockfile 保证 CI 装的版本与本地一致
+      - name: 安装依赖
+        run: yarn install --frozen-lockfile
+
+      # dist 里已经串了 gen-update-meta → electron-vite build → electron-builder --win
+      - name: 构建 Windows 安装包
+        run: yarn dist
+        env:
+          # 这几个包会在 install 阶段下 Electron 二进制，走默认源即可；
+          # 若 CI 上偶发超时，可改用镜像（不在配置里写死，避免影响本地开发）
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
+
+      # 备份并上传安装包（filename= 显式指定：GitHub 会把中文名转义，用固定名最稳）
+      - name: 上传安装包到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/青鸟-Setup.exe
+            dist/latest.yml
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
+          # 没有手写说明时自动用提交信息生成；有 Release 说明就先建好 Release 再跑本流程
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 构建日志里留一份产物清单：发版后想确认"到底传上去了什么"时不用翻 UI
+      - name: 列出产物
+        run: ls -l dist
+        shell: bash

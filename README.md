@@ -55,6 +55,20 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 10. 自绘标题栏与全部控件（无原生菜单/下拉/弹窗），图标库 lucide，无手写 SVG
 11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
 12. 技能（Skills）：设置页可视化管理 `SKILL.md`，按**全局 / 项目**两组展示，支持新建、编辑、改名、删除与打开目录，保存前按内核规则校验 frontmatter（名称规范、描述必填、描述长度）；模型平时只看到「名称 + 描述」，判断需要才读全文，不占常驻上下文
+13. 更新提示：设置 → 关于里检查新版本（对着 GitHub Releases 比版本号），有新版本就显示更新说明并支持**一键下载 → 立即安装重启**，全程不用去浏览器翻 Release 页；下载走 `releases/latest/download/青鸟-Setup.exe` 固定地址，不经 `api.github.com`，国内可直连
+
+## 发版
+
+改 `package.json` 的 `version` → 提交 → 打 `v*` tag 推送，GitHub Actions 会自动构建
+Windows 安装包并挂到对应 Release，用户端随即能在「设置 → 关于」看到更新提示。
+
+```bash
+vim package.json                    # version: 0.0.2（必须与 tag 一致）
+git commit -am "release: v0.0.2" && git push
+git tag -a v0.0.2 -m "release v0.0.2" && git push origin v0.0.2
+```
+
+详见 [docs/发版与更新提示.md](./docs/发版与更新提示.md)。
 
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 
@@ -63,6 +77,7 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 ~/.qingniaoai/opencode/          XDG_CONFIG_HOME：生成的 opencode.json + 内核数据
 ~/.qingniaoai/data/              XDG_DATA_HOME：OpenCode 会话存储
 ~/.qingniaoai/state/             XDG_STATE_HOME
+~/.qingniaoai/updates/           更新包下载目录（设置 → 关于里下载的安装包，点「立即安装」时执行它）
 ~/qingniaoai-workspace/          默认"工作台"项目目录
 ```
 
