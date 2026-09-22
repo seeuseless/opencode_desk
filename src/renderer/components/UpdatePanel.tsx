@@ -109,15 +109,14 @@ export function UpdatePanel() {
         )}
       </div>
 
-      {/* 检查失败：如实说原因，并给一个"自己去发布页看"的出口，而不是编个假版本号 */}
+      {/* 检查失败：只如实说原因（如 GitHub 接口限流），**不给"打开发布页"的出口**——
+          那是把排查责任推给用户：他知道有新版、却打不开、还得自己去翻仓库，
+          不如直接告诉他"稍后再试"，重试的成本比他手动去发布页低得多。
+          真要发布页，应用内本就有正式入口（「查看发布页」只在新版本区块里出现） */}
       {st.error && (
         <div className="ud-note err">
           <AlertCircle size={14} />
           <span>{st.error}</span>
-          <span className="spacer" />
-          <button className="ghost sm" onClick={() => void window.qingniao.openRelease()}>
-            <ExternalLink size={13} /> 打开发布页
-          </button>
         </div>
       )}
 

@@ -1054,7 +1054,13 @@ input, textarea { font: inherit; }
 /* 小号 ghost：列表行内操作按钮用（「编辑」这类），比常规按钮矮一档才不撑高行。
    圆角跟 .model-row 的 12px 差一档取 9px，视觉上贴合行内缩进 */
 .ghost.sm { padding: 4px 9px; font-size: 12px; border-radius: 9px; }
+/* ⚠️ 必须与 .ghost 一样用 inline-flex + align-items:center：
+   按钮里普遍是「icon + 文字」两个子元素，默认的 inline 布局会按 baseline 对齐，
+   SVG 的基线在它底部，视觉上就会比文字**偏低**（用户反馈「检查更新」前的图标没对齐）。
+   之前只有 .ghost 加了 flex，.primary 漏了，所以恰好是 primary 按钮（检查更新 /
+   下载更新 / 立即安装并重启）出现错位，而 ghost 按钮（打开发布页）是好的 */
 .primary {
+  display: inline-flex; align-items: center; gap: 5px;
   background: var(--accent); color: var(--on-accent); border: none;
   border-radius: 8px; padding: 8px 16px; font-size: 13px;
 }

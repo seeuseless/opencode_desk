@@ -57,6 +57,35 @@ files:
   # 更新元数据（scripts/gen-update-meta.mjs 生成）：仓库坐标 + tag 前缀，主进程 updater.ts 读它，
   # 换仓库/换 tag 命名只改这一个文件，不用动源码
   - resources/update.json
+  #
+  # ⚠️ 必须排除 opencode 平台包，否则安装包会凭空胖 500MB（2026-09-22 实测）：
+  #   opencode-ai 用 optionalDependencies 声明了 12 个平台包
+  #   （opencode-windows-x64 / -baseline、darwin-x64/arm64、linux-* 等），
+  #   而每个平台包里的 opencode 二进制都是 **172MB**。
+  #   electron-builder 有个"原生依赖自动解包"机制：扫描依赖时发现含原生可执行文件
+  #   （.exe / .node）的包，就把它们**整包**解到 app.asar.unpacked/ 下。于是
+  #   172MB 的二进制被打进去 **4 份**（asar 内、unpacked 内、以及两个平台包各一份），
+  #   光重复就占 516MB —— 安装包从本可做到的 ~50MB 涨到 215MB。
+  #
+  #   这些平台包只是**安装期的原料**：opencode-ai 的 postinstall 从里面把对应平台的
+  #   二进制拿走覆盖到自己的 bin/ 下，之后就没用了。运行期主进程读的是
+  #   resources/bin/opencode.exe（见下方 extraResources），完全不碰这些包。
+  #   所以排除是安全的 —— 但**前提是 extraResources 那一步确实拿对了文件**，
+  #   这就是 scripts/check-kernel.mjs 存在的意义（它会在打包前确认 bin/ 下是真二进制）。
+  - "!node_modules/opencode-ai/**"
+  - "!node_modules/opencode-*/**"
+  - "!node_modules/opencode-windows-*/**"
+  - "!node_modules/opencode-darwin-*/**"
+  - "!node_modules/opencode-linux-*/**"
+  #
+  # 另外几个被"原生依赖自动解包"捎进来的包，源码里**从未 import**，纯粹是
+  # computer-use-mcp / sharp 的传递依赖，同样不该进安装包：
+  #   @img/sharp-*（28MB，sharp 只在一次性脚本 scripts/gen-icon.mjs 里用）
+  #   clipboardy（1MB，其 fallback .exe 触发了解包）
+  #   @nut-tree-fork（1.5MB，MCP 端依赖；MCP 脚本是独立 spawn 的，跑在用户自己的 node 环境）
+  - "!node_modules/@img/**"
+  - "!node_modules/clipboardy/**"
+  - "!node_modules/@nut-tree-fork/**"
 extraResources:
   # OpenCode 内核原生二进制（主进程打包态从 resources/bin 读取）
   - from: node_modules/opencode-ai/bin
