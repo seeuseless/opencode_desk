@@ -59,13 +59,15 @@ npm run dist:mac   # electron-builder 打 macOS dmg/zip（需 .icns，npm instal
 
 ## 发版
 
-改 `package.json` 的 `version` → 提交 → 打 `v*` tag 推送，GitHub Actions 会自动构建
-Windows 安装包并挂到对应 Release，用户端随即能在「设置 → 关于」看到更新提示。
+改 `package.json` 的 `version` + 在 [CHANGELOG.md](./CHANGELOG.md) 顶部落新版本条目
+→ 提交 → 打 `v*` tag 推送，GitHub Actions 会自动构建 Windows 安装包并挂到对应 Release，
+用户端随即能在「设置 → 关于」看到更新提示。
 
 ```bash
-vim package.json                    # version: 0.0.2（必须与 tag 一致）
-git commit -am "release: v0.0.2" && git push
-git tag -a v0.0.2 -m "release v0.0.2" && git push origin v0.0.2
+vim package.json                    # version: 1.0.1（必须与 tag 一致）
+vim CHANGELOG.md                    # 顶部落一条 v1.0.1
+git commit -am "release: v1.0.1" && git push
+git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 ```
 
 详见 [docs/发版与更新提示.md](./docs/发版与更新提示.md)。
