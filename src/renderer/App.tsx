@@ -13,7 +13,7 @@ import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './t
 type View = 'chat' | 'settings'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'deps' | 'about'
+export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
 
 /**
  * 外部（对话框里的「配置模型」等）请求打开设置页时带的目标页。

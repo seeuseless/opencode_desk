@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Package, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
-import { DepsPanel } from './DepsPanel'
 import { UpdatePanel } from './UpdatePanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
@@ -160,7 +159,7 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'sideBg', label: '左侧面板底色' },
 ]
 
-/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 依赖 / 关于 */
+/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
@@ -171,9 +170,8 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'mcp', label: 'MCP', icon: Globe },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
   { id: 'usage', label: '使用量', icon: BarChart3 },
-  // 依赖与关于收尾：都是"这个软件本身"的信息（用了哪些开源包、什么版本、什么条款），
-  // 不是要配置的东西。关于排最末——它是整页的收口，也最符合"关于"这个命名的直觉
-  { id: 'deps', label: '依赖', icon: Package },
+  // 关于排最末：它是「这个软件本身」的信息（版本、条款），不是要配置的东西，
+  // 整页的收口，也最符合「关于」这个命名的直觉
   { id: 'about', label: '关于', icon: Rocket }
 ]
 
@@ -1194,8 +1192,6 @@ export function SettingsView(p: Props) {
             onLogin={p.onLogin}
           />
         )}
-
-        {tab === 'deps' && <DepsPanel />}
 
         {tab === 'about' && <UpdatePanel />}
 
