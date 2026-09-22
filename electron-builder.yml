@@ -14,18 +14,30 @@ productName: 青鸟
 #    去掉后 electron-builder 会自己从 package.json 取 version，行为完全一致。
 #    记住：extraMetadata 的值不做占位符展开，只有 artifactName 那类模板字段才展开。
 #
-# ⚠️ publish: generic 是**必需**的，不是可选项（2026-09-22 CI 实测踩到）：
-#   不写它时，electron-builder 会从 package.json 的 repository 字段（github.com/...）
-#   推断出 provider=github，然后**无论有没有 --publish never** 都会构造 GitHubPublisher，
-#   而它的构造函数第一件事就是要 token，没有就抛：
-#      ⨯ GitHub Personal Access Token is not set, neither programmatically, nor using env "GH_TOKEN"
-#   （报错发生在 sign/blockmap 之后，看着像"发布失败"，其实是 app-update.yml 那步构造 publisher 时炸的；
-#     调用点在 app-builder-lib/out/publish/PublishManager.js 的 getAppUpdatePublishConfiguration，
-#     它由 packager.on 触发，跟 publishPolicy 无关）
-#   写成 generic 后，scheduleUpload 会直接 return、不构造任何 publisher（provider === "generic" 短路）。
-#   对本项目**无副作用**：应用内更新读的是 resources/update.json + GitHub Releases 的
-#   /releases/latest/download/青鸟-Setup.exe 固定地址，从不使用 electron-builder 生成的 app-update.yml。
-publish: generic
+# ⚠️ publish: null 是**必需**的，不是可选项（2026-09-22 CI 实测踩到，连续两次踩坑）：
+#   本项目**不使用 electron-builder 的更新元数据**（app-update.yml）——
+#   应用内更新读的是 resources/update.json + GitHub Releases 的
+#   /releases/latest/download/青鸟-Setup.exe 固定地址（见下方 artifactName 说明）。
+#
+#   不写 publish 会怎样：electron-builder 从 package.json 的 repository 字段
+#   （github.com/seeuseless/opencode_desk）**推断出 provider=github**，
+#   然后在写 app-update.yml 那步构造 GitHubPublisher，其构造函数第一件事就是取 token，
+#   取不到即抛：
+#     ⨯ GitHub Personal Access Token is not set, neither programmatically, nor using env "GH_TOKEN"
+#   注意报错发生在签名 + blockmap **之后**，看着像"发布失败"，实际是生成更新元数据时炸的。
+#   而且 `--publish never` 拦不住它 —— PublishManager 源码注释明说
+#   "file should be generated regardless of publish state"（无条件生成）。
+#
+#   写成 `publish: generic` 也不行（试过）：generic 分支会被 getResolvedPublishConfig
+#   强制校验 url，缺了就换一个错继续抛：
+#     ⨯ Please specify "url" for "generic" update server
+#
+#   只有 `publish: null` 才真正短路（PublishManager.getPublishConfigs 三处都有
+#   `if (publishers === null) return null`，语义就是注释写的 "explicitly set to null - do not publish"）
+#   → 上游拿到 null 后 getAppUpdatePublishConfiguration 直接 return null，
+#     既不推断 provider、也不建 publisher、也不生成 app-update.yml，干净。
+#   将来若改用 electron-updater，把这里换回 { provider: github, ... } 即可。
+publish: null
 directories:
   output: dist
   buildResources: resources
