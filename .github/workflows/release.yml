@@ -1,10 +1,10 @@
 # 发版（打 tag 自动出安装包并挂到 Release）
 #
 # 用法：
-#   1. 改 package.json 的 version（如 0.0.2）——**必须先改再打 tag**，两者要对得上：
+#   1. 改 package.json 的 version（如 1.0.1）——**必须先改再打 tag**，两者要对得上：
 #      应用内的"当前版本"读的就是安装包里的这个值，对不上会导致它一直提示有新版本。
 #   2. git commit && git push
-#   3. git tag -a v0.0.2 -m "release v0.0.2" && git push origin v0.0.2
+#   3. git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 #      → 本工作流自动跑：Windows 上构建安装包、上传到对应 Release 的附件。
 #
 # 为什么附件名必须固定成「青鸟-Setup.exe」：
@@ -16,6 +16,11 @@
 #
 # 顺带生成 latest.yml 一起传上去：应用侧的检查更新走的是 GitHub Releases API，
 # 不需要它；留着是为了将来若改用 electron-updater，元数据已经就位（不影响现在的流程）。
+#
+# ⚠️ 已知踩过的坑（2026-09-22 首次发版失败）：
+#   仓库 .npmrc 与 yarn.lock 里的 780 条 resolved 全部指向腾讯云镜像，
+#   海外 runner 拉不动 → install 阶段超时失败（耗时 3m53s，上传步骤被跳过，
+#   Release 建出来了但没有任何附件）。修法见下面「安装依赖」那一步的注释。
 
 name: release
 
@@ -45,19 +50,61 @@ jobs:
           node-version: 22
           cache: yarn
 
-      # 项目用 yarn（yarn.lock 在库），--frozen-lockfile 保证 CI 装的版本与本地一致
-      - name: 安装依赖
-        run: yarn install --frozen-lockfile
+      # ⚠️ 源的问题必须显式处理，否则 CI 会在 install 阶段挂：
+      #   仓库里的 .npmrc 把 registry 指到 mirrors.cloud.tencent.com（本地开发用，快），
+      #   而 **yarn.lock 里 780 条依赖的 resolved 字段全部写死了该镜像地址**。
+      #   yarn 1 下载时优先照 resolved 走（--frozen-lockfile 下更是强制），
+      #   于是海外 runner 要横跨到腾讯云拉 780 个包，慢且易超时（实测首次失败耗时 3m53s）。
+      #
+      #   修法：在 runner 上把 lockfile 的镜像地址**临时改写**回官方源再装。
+      #   - 只改工作副本、不提交回仓库 → 本地开发照旧走腾讯源，速度不受影响
+      #   - 版本号与 integrity 哈希都不动，仅换下载主机，装的还是同一批包
+      - name: 安装依赖（腾讯源改写为官方源）
+        shell: bash
+        run: |
+          set -e
+          # 1) 仓库自带的 .npmrc 会把 registry 拉回腾讯源，先移除
+          rm -f .npmrc
+
+          # 2) lockfile 里所有 resolved 从腾讯镜像改回官方 registry。
+          #    改完打印前后数量便于在日志里核对（预期：780 → 0）。
+          before=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          sed -i 's#https://mirrors\.cloud\.tencent\.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+          after=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          echo "lockfile 腾讯源数量：改前 $before → 改后 $after（应为 0）"
+
+          # 3) 官方源安装。此时 lockfile 已指向官方源，--frozen-lockfile 既能保证
+          #    「装的版本与本地一致」，又不会再去碰腾讯源。
+          yarn install --frozen-lockfile --network-timeout 600000
 
       # dist 里已经串了 gen-update-meta → electron-vite build → electron-builder --win
       - name: 构建 Windows 安装包
         run: yarn dist
         env:
-          # 这几个包会在 install 阶段下 Electron 二进制，走默认源即可；
-          # 若 CI 上偶发超时，可改用镜像（不在配置里写死，避免影响本地开发）
+          # electron 二进制体积大（~100MB），走官方 GitHub Release 直连；
+          # 若 CI 上偶发超时，可改为国内镜像（不在仓库里写死，避免影响本地开发）
+          ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
 
-      # 备份并上传安装包（filename= 显式指定：GitHub 会把中文名转义，用固定名最稳）
+      # ⚠️ 打包后的产物名校验，**不能省**：
+      #   上传步骤不会因为"文件不存在"就报错（fail_on_unmatched_files 需谨慎开启，
+      #   否则 mac 产物缺失时 Windows 也会连带失败），一旦 electron-builder.yml 的
+      #   artifactName 没生效——比如产物还叫「青鸟 Setup 1.0.0.exe」这种带版本号的默认名，
+      #   上传就会**静默跳过**，Release 建出来却是空的，且日志里看不出异常。
+      #   所以这里主动断言文件名，不对就立刻红掉并打出实际内容，便于一眼定位。
+      - name: 校验安装包名（必须是 青鸟-Setup.exe）
+        shell: bash
+        run: |
+          echo "dist 实际内容："
+          ls -l dist
+          if [ ! -f "dist/青鸟-Setup.exe" ]; then
+            echo "::error::未找到 dist/青鸟-Setup.exe——检查 electron-builder.yml 的 artifactName 是否生效"
+            exit 1
+          fi
+          echo "✓ 安装包名正确"
+
+      # 上传安装包（files 用固定名：GitHub 会把中文名转义，写死最稳）。
+      # 前面已断言过文件存在，故这里改为「匹配不到就失败」——静默成功比失败更难排查。
       - name: 上传安装包到 Release
         uses: softprops/action-gh-release@v2
         with:
@@ -65,7 +112,7 @@ jobs:
           files: |
             dist/青鸟-Setup.exe
             dist/latest.yml
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
           # 没有手写说明时自动用提交信息生成；有 Release 说明就先建好 Release 再跑本流程
@@ -75,5 +122,5 @@ jobs:
 
       # 构建日志里留一份产物清单：发版后想确认"到底传上去了什么"时不用翻 UI
       - name: 列出产物
-        run: ls -l dist
         shell: bash
+        run: ls -l dist
