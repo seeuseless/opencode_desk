@@ -4,8 +4,6 @@
 [![GitHub](https://img.shields.io/badge/GitHub-seeuseless%2Fopencode__desk-181717?logo=github)](https://github.com/seeuseless/opencode_desk)
 [![Release](https://img.shields.io/github/v/release/seeuseless/opencode_desk?label=release&color=blue)](https://github.com/seeuseless/opencode_desk/releases/latest)
 
-**当前版本：v1.0.0**（首个正式版本）— 安装包见 [Releases](https://github.com/seeuseless/opencode_desk/releases/latest)，更新记录见 [CHANGELOG.md](./CHANGELOG.md)。下载地址固定为 `releases/latest/download/青鸟-Setup.exe`（Windows）与 `青鸟-Setup-arm64.dmg`（macOS），**每次发版由 GitHub Actions 自动构建并覆盖上传**，无需从源码编译。
-
 ![screenshot](screenshot/1.png)
 
 ## 界面速览
