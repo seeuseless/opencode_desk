@@ -14,8 +14,7 @@ import type { UpdateProgress, UpdateState } from './types.ts'
  *    传到 Release 上，且**文件大小/校验值必须与实际产物逐字节一致**，手工维护极易失真；
  *  · 我们本来的诉求很简单——「看一眼有没有新版、下载下来、让用户点下一步」——
  *    用 GitHub 自己就有的 Releases 元数据（tag_name / body / assets）比多维护一份 yml 更不容易坏。
- *  所以这里只把 `latest.yml` 当**可选**补充（Actions 顺手传上去，能拿到就顺手校验安装包大小），
- *  拿不到也不影响更新流程。
+ *  所以本模块**完全不依赖 latest.yml**，更新判断只用 GitHub Releases 的数据。
  *
  * 三个约束决定了实现形态：
  *  1. **只有打包态才有意义**。dev 跑的是源码，版本号恒等于 package.json，没有"升级"这回事，
@@ -42,8 +41,6 @@ interface UpdateMeta {
   tagPrefix: string
   /** 当前版本号（打包时会与 app.getVersion() 交叉验证，取 app.getVersion() 为准） */
   version: string
-  /** Release 上与安装包配套的元数据文件名（可选；Actions 若上传则可用来校验大小） */
-  latestYml?: string
 }
 
 function metaFile(): string {
@@ -59,15 +56,24 @@ function readMeta(): UpdateMeta {
     return {
       repo: typeof raw.repo === 'string' && raw.repo.trim() ? raw.repo.trim() : fallback.repo,
       tagPrefix: typeof raw.tagPrefix === 'string' ? raw.tagPrefix : fallback.tagPrefix,
-      version: fallback.version, // 版本号只信应用自己：安装包里 app.getVersion() 就是权威
-      latestYml: typeof raw.latestYml === 'string' ? raw.latestYml : undefined
+      version: fallback.version // 版本号只信应用自己：安装包里 app.getVersion() 就是权威
     }
   } catch {
     return fallback
   }
 }
 
-/** 打包后安装包的固定文件名（electron-builder.yml 的 artifactName 写死成它） */
+/**
+ * 打包后安装包的固定文件名（electron-builder.yml 的 artifactName 写死成它）。
+ *
+ * 这两个常量只是**兜底**：正常路径是 pickAsset 从 Release 的 assets 里按扩展名挑，
+ * 拿到的就是当次实际上传的真实文件名（见下方 pickAsset）。只有 Release 元数据异常、
+ * 拿不到 assets 时才回落到这里。
+ *
+ * mac 侧带 arch 后缀是因为 electron-builder.yml 的 mac.artifactName 用了 ${arch}——
+ * 多架构产物若同名会互相覆盖。当前 CI 用 macos-latest（Apple Silicon），故为 arm64；
+ * 将来若加了 x64 mac 构建或换了 runner，记得同步这里的兜底值。
+ */
 const WIN_SETUP_NAME = '青鸟-Setup.exe'
 const MAC_DMG_NAME = '青鸟-Setup-arm64.dmg'
 
