@@ -160,7 +160,7 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'sideBg', label: '左侧面板底色' },
 ]
 
-/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
+/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 依赖 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
@@ -171,10 +171,10 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'mcp', label: 'MCP', icon: Globe },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
   { id: 'usage', label: '使用量', icon: BarChart3 },
-  // 关于（版本 + 更新）放倒数第二：是"这个软件本身"的信息，不属于要配置的东西
-  { id: 'about', label: '关于', icon: Rocket },
-  // 依赖放最后：它只是"这个软件用了哪些开源包"的清单
-  { id: 'deps', label: '依赖', icon: Package }
+  // 依赖与关于收尾：都是"这个软件本身"的信息（用了哪些开源包、什么版本、什么条款），
+  // 不是要配置的东西。关于排最末——它是整页的收口，也最符合"关于"这个命名的直觉
+  { id: 'deps', label: '依赖', icon: Package },
+  { id: 'about', label: '关于', icon: Rocket }
 ]
 
 /** 依赖平台接口的两页：关了远程服务就没有存在意义，连同导航一起收起 */

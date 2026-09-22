@@ -1794,7 +1794,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 }
 /* 最新版本号在"确实更新"时才染主色，其余（已是最新 / 未知）保持正文色 */
 .ud-num.new { color: var(--accent); }
-.ud-arrow { color: var(--fg2); font-size: 15px; margin-top: 14px; }
+/* 「已是最新」：只在查过一次且确认无新版时出现，紧挨着版本号右侧的小确认标记。
+   用 ok 色而非中性色：这是一条"好消息"，用户点完检查更新最想看到的就是它 */
+.ud-state { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--ok); }
 
 /* 说明性条/失败条：左侧图标 + 文字 + 右侧可选按钮 */
 .ud-note {
@@ -1838,12 +1840,38 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .ud-acts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
 .ud-hint { font-size: 11.5px; color: var(--fg2); line-height: 1.5; }
 
-.ud-meta {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin-top: 18px; padding-top: 12px; font-size: 11.5px; color: var(--fg2);
-  border-top: 1px solid var(--line);
+/* 服务条款入口：一行"你已同意《…》"。入口要显眼（链接用主色 + 下划线），
+   但整行保持次级文字的克制感——它是告知，不是要求操作 */
+.ud-terms {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 18px; padding: 10px 14px; border-radius: 10px;
+  background: var(--bg3); color: var(--fg2); font-size: 12.5px;
 }
-.ud-meta code {
-  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
-  background: var(--bg3); border-radius: 5px; padding: 1px 6px;
+.ud-terms > svg { flex-shrink: 0; }
+.ud-term-link {
+  background: none; border: none; padding: 0; font-size: 12.5px; font-family: inherit;
+  color: var(--accent); text-decoration: underline; text-underline-offset: 3px;
 }
+.ud-term-link:hover { filter: brightness(1.15); }
+
+/* ================= 服务条款弹窗 ================= */
+/* 正文区：条款长，给个上限高度内滚，避免弹窗高到超出屏幕（Modal 本身不滚） */
+.lic-body { max-height: 52vh; overflow-y: auto; padding-right: 4px; }
+.lic-sec + .lic-sec { margin-top: 18px; }
+.lic-sec h4 { font-size: 13.5px; margin-bottom: 8px; color: var(--fg); }
+.lic-sec p { font-size: 13px; line-height: 1.75; color: var(--fg2); margin-bottom: 8px; }
+/* 风险清单：左侧竖线 + 缩进，跟普通段落区分开（这几条是要用户真读进去的） */
+.lic-sec ul { margin: 0 0 8px; padding-left: 2px; list-style: none; }
+.lic-sec li {
+  position: relative; padding-left: 14px; margin-bottom: 8px;
+  font-size: 13px; line-height: 1.75; color: var(--fg2);
+}
+.lic-sec li::before {
+  content: ''; position: absolute; left: 2px; top: 9px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--fg2); opacity: 0.7;
+}
+/* 条款正文里的加粗不加重颜色：全篇都是重点等于没有重点，
+   保持与正文同色、只靠字重区分即可 */
+.lic-sec b { font-weight: 600; color: var(--fg); }
+/* 弹窗底部操作区与正文之间加条分隔线，滚动到底时才看得出"说完了" */
+.lic-body + .actions { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }

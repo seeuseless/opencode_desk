@@ -531,8 +531,6 @@ export interface UpdateState {
   dev: boolean
   /** 当前版本号（来自 package.json / 安装包） */
   current: string
-  /** 仓库坐标，如 seeuseless/opencode_desk（界面上「在浏览器里查看发布页」用） */
-  repo: string
   /** 正在向 GitHub 查询 */
   checking: boolean
   /** 上次检查完成的时间戳（0 = 本次会话从未查过） */

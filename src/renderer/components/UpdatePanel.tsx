@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, FileText, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
+import { Modal } from './Modal'
+import { LICENSE_SECTIONS, LICENSE_TITLE } from '../lib/license'
 import type { UpdateState } from '../../../electron/main/types'
 
 /**
@@ -20,6 +22,8 @@ export function UpdatePanel() {
   const [busy, setBusy] = useState(false)
   /** 本地提示（下载失败、取消、安装包已被删这类一次性结果），成功/失败都在这条显示 */
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  /** 条款弹窗开着没（条款正文不常看，占位在页面上会挤走真正要操作的更新按钮） */
+  const [showLicense, setShowLicense] = useState(false)
 
   const apply = useCallback((s: UpdateState) => {
     setSt(s)
@@ -76,23 +80,22 @@ export function UpdatePanel() {
         <Rocket size={15} /> 关于
       </h3>
       <p className="sec-tip">
-        青鸟 QingNiao —— 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）。 更新包直接从 GitHub
-        仓库获取，不走第三方中转。
+        青鸟 QingNiao —— 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）。
       </p>
 
-      {/* 版本卡片：左边当前版本，右边目标版本/状态 */}
+      {/* 版本卡片：常态只有"当前版本 + 检查更新"。
+          没有新版本时不摆"最新版本：已是最新"这类空栏——用户点检查更新本来就是为了有新版可用，
+          摆一排"已是最新"只是占位置；真有新版才在下面单独开一块（见下方 ud-upd）。 */}
       <div className="ud-card">
         <div className="ud-ver">
           <span className="ud-lab">当前版本</span>
           <b className="ud-num">{st.current}</b>
         </div>
-        <div className="ud-arrow">→</div>
-        <div className="ud-ver">
-          <span className="ud-lab">最新版本</span>
-          <b className={'ud-num' + (latest ? ' new' : '')}>
-            {latest ? latest.version : st.checkedAt ? '已是最新' : '—'}
-          </b>
-        </div>
+        {st.checkedAt > 0 && !latest && !st.checking && (
+          <span className="ud-state">
+            <Check size={13} /> 已是最新
+          </span>
+        )}
         <span className="spacer" />
         {!st.dev && (
           <button
@@ -105,13 +108,6 @@ export function UpdatePanel() {
           </button>
         )}
       </div>
-
-      {/* 开发模式：源码跑的时候版本号恒为 package.json，没有"升级"这回事 */}
-      {st.dev && (
-        <div className="ud-note">
-          <AlertCircle size={14} /> 开发模式不检查更新（源码运行的版本号不会变）。发版后的安装版才有更新提示。
-        </div>
-      )}
 
       {/* 检查失败：如实说原因，并给一个"自己去发布页看"的出口，而不是编个假版本号 */}
       {st.error && (
@@ -133,7 +129,8 @@ export function UpdatePanel() {
         </div>
       )}
 
-      {/* 有新版本 */}
+      {/* 有新版本：只在这一块里给「查看发布页」——其他时候不暴露仓库地址，
+          用户不需要知道包从哪来，知道"能升级"就够了 */}
       {latest && (
         <div className="ud-upd">
           <div className="ud-upd-head">
@@ -213,17 +210,70 @@ export function UpdatePanel() {
         </div>
       )}
 
-      <div className="ud-meta">
-        <span>
-          仓库 <code>{st.repo}</code>
-        </span>
-        <span className="spacer" />
-        <button className="ghost sm" onClick={() => void window.qingniao.openRelease()}>
-          <ExternalLink size={13} /> github.com/{st.repo}
+      {/* 服务条款入口：只放一行"入口"，正文在弹窗里——条款很长，摊在页面上会挤掉
+          真正要操作的更新按钮；但入口必须显眼可点，不能藏成脚注 */}
+      <div className="ud-terms">
+        <FileText size={14} />
+        <span>使用本软件即表示你已阅读并同意</span>
+        <button type="button" className="ud-term-link" onClick={() => setShowLicense(true)}>
+          《{LICENSE_TITLE}》
         </button>
       </div>
+
+      {showLicense && <LicenseModal onClose={() => setShowLicense(false)} />}
     </section>
   )
+}
+
+/**
+ * 条款弹窗。
+ *
+ * 用 Modal 的 wide 档（720px）：条款条目多、每条又带缩进列表，540px 会频繁换行，
+ * 读起来很碎。**不给"同意"按钮**——同意在使用软件那一刻就已构成，弹窗只是让用户能看，
+ * 逼着点一次"我同意"既无法律增益也烦人；给「知道了」关掉即可。
+ *
+ * **不显示版本号与日期**：用户看条款是为了知道"我承担什么"，不是来核对版本对齐的；
+ * 摆一行「v1.0 · 2026-09-22」只会让人以为"这是不是过期了"。版本信息留在
+ * lib/license.ts 里给维护者用即可。
+ */
+function LicenseModal({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title={LICENSE_TITLE} wide onClose={onClose}>
+      <div className="lic-body">
+        {LICENSE_SECTIONS.map((sec) => (
+          <div className="lic-sec" key={sec.heading}>
+            <h4>{sec.heading}</h4>
+            {sec.paras.map((p) => (
+              // 正文里的 **加粗** 是给"风险自担""不承担任何责任"这类关键词加强调的，
+              // 用极简标记而不是 dangerouslySetInnerHTML：条款文本将来可能来自外部，
+              // 走 HTML 注入等于给未来埋一个 XSS 面（这里只需要粗体一种样式）
+              <p key={p}>{renderBold(p)}</p>
+            ))}
+            {sec.items && (
+              <ul>
+                {sec.items.map((it) => (
+                  <li key={it}>{renderBold(it)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="actions">
+        <button className="primary" onClick={onClose}>
+          知道了
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/** 把 `**粗体**` 渲染成 <b>（只支持这一种标记，够用且不引入 HTML 注入面） */
+function renderBold(text: string): ReactNode {
+  // 按 ** 切分：奇数段是加粗内容（"a**b**c" → ['a','b','c']，下标 1 为粗体）
+  const parts = text.split('**')
+  if (parts.length === 1) return text
+  return parts.map((seg, i) => (i % 2 === 1 ? <b key={i}>{seg}</b> : <span key={i}>{seg}</span>))
 }
 
 /** 字节数 → 人类可读（进度条与"安装包多大"都用它，避免两处各写一套换算） */

@@ -141,11 +141,9 @@ const st: Internal = { checking: false, checkedAt: 0 }
 
 /** 对外快照（不含 abort 这类内部句柄） */
 function snapshot(): UpdateState {
-  const meta = readMeta()
   return {
     dev: !app.isPackaged,
     current: app.getVersion(),
-    repo: meta.repo,
     checking: st.checking,
     checkedAt: st.checkedAt,
     error: st.error,
