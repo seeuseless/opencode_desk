@@ -751,13 +751,24 @@ input, textarea { font: inherit; }
   resize: none; width: 100%; line-height: 1.5; padding: 2px 0 8px;
 }
 .crow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* 触发器允许收缩：flex 项默认 min-width:auto 不肯变小，窄栏时会把整排撑溢出、
+   把最右的发送/停止挤出可视区（压到浏览器面板底下）。放开 min-width 后标签省略号收缩 */
+.crow > .menu-wrap { min-width: 0; }
+.crow .menu-trigger { min-width: 0; }
+.crow .menu-trigger > svg { flex-shrink: 0; }
 
 /* 输入区变窄时逐级隐藏次要控件，保证发送/模型等核心操作始终留得下：
    <540px  隐藏「默认权限」
    <460px  连同「思考」一起隐藏
-   （用容器查询绑定到 .cbox 实际宽度，窗口小/右栏开都会触发，不用 JS） */
+   <400px  项目只留文件夹图标、浏览入口收起；模型/项目标签靠上面放开收缩后省略号变短
+   （用容器查询绑定到 .cbox 实际宽度，窗口小/右栏开都会触发，不用 JS；
+     发送/停止在最右且 flex-shrink:0，其余都能缩，任何宽度下都不会被挤出） */
 @container (max-width: 540px) { .crow > .menu-wrap.ap { display: none; } }
 @container (max-width: 460px) { .crow > .menu-wrap.tp { display: none; } }
+@container (max-width: 400px) {
+  .crow > .menu-wrap.pp .menu-label { display: none; }
+  .crow > .icon-btn.globe { display: none; }
+}
 
 /* 输入框左端的当前项目名：路径放 tooltip，名称过长省略；无背景色，纯文字 */
 .crow-proj {

@@ -73,7 +73,8 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
 
   return (
     <div className="menu-wrap pp" ref={wrap}>
-      <button type="button" className="menu-trigger pp" onClick={() => setOpen((v) => !v)}>
+      {/* 极窄栏时标签会被容器查询藏掉只留图标，title 兜底说明 */}
+      <button type="button" className="menu-trigger pp" title="切换项目文件夹" onClick={() => setOpen((v) => !v)}>
         <Folder size={14} />
         <span className="menu-label">{display}</span>
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />

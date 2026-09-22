@@ -2300,7 +2300,7 @@ export function ChatView(p: Props) {
               </button>
             )}
             {!browserMax && (
-              <button className="icon-btn" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
+              <button className="icon-btn globe" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
                 <Globe size={14} />
               </button>
             )}
