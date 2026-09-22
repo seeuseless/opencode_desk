@@ -382,11 +382,12 @@ export default function App() {
   /**
    * 移除项目：允许移除到「只剩任务目录」。
    * 任务目录（builtin）是内核 workspace，也是列表最后的落脚点，**直接拒绝移除**——
-   * 否则用户能把目录清空，之后连往哪干活都没了（UI 侧已置灰，这里是兜底）。
+   * 否则用户能把目录清空，之后连往哪干活都没了（UI 侧右键菜单里根本不显示这一项，
+   * 这里再兜一次；id 一并认，标记万一丢了也不会被误删）。
    */
   function removeProject(id: string) {
     const target = projects.find((x) => x.id === id)
-    if (target?.builtin) return
+    if (!target || target.builtin || target.id === 'builtin') return
     const next = projects.filter((x) => x.id !== id)
     setProjectsPersisted(next)
     setExpanded((e) => {

@@ -39,6 +39,16 @@ export interface Project {
 
 const COLLAPSE_AT = 5
 
+/**
+ * 是不是内置的「任务」目录（列表面板与右键菜单共用同一判据）。
+ * 既认 builtin 标记，也认 id —— 标记万一在存档里丢了（手改存档、旧版本写过），
+ * 这里仍然认得出它，**不会误露「从列表移除」**。
+ * 只影响「任务」这一个目录；用户自己加的文件夹一律 `false`，移除入口照旧保留。
+ */
+function isBuiltinProj(proj: Project): boolean {
+  return !!proj.builtin || proj.id === 'builtin'
+}
+
 interface Props {
   projects: Project[]
   activeId: string
@@ -153,7 +163,7 @@ export function Sidebar(p: Props) {
             排序放在渲染层而不是 setProjects 时——存档里它本来就在最前，但用户若手动改过
             存档、或将来加了项目拖拽排序，渲染层这一句是唯一能保证「永远在最上面」的地方。
           */}
-          {[...p.projects].sort((a, b) => Number(!!b.builtin) - Number(!!a.builtin)).map((proj) => {
+          {[...p.projects].sort((a, b) => Number(isBuiltinProj(b)) - Number(isBuiltinProj(a))).map((proj) => {
             const isOpen = !!p.expanded[proj.id]
             const list = p.sessionsMap[proj.path] ?? []
             const count = shownCount[proj.id] ?? COLLAPSE_AT
@@ -161,7 +171,7 @@ export function Sidebar(p: Props) {
             return (
               <div key={proj.id}>
                 <div
-                  className={'proj' + (proj.builtin ? ' builtin' : '')}
+                  className={'proj' + (isBuiltinProj(proj) ? ' builtin' : '')}
                   title={proj.path}
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
@@ -399,7 +409,10 @@ export function Sidebar(p: Props) {
               <MessageSquarePlus size={14} />
               添加任务
             </button>
-            {menu.proj.builtin ? null : (
+            {/* 只有内置的「任务」目录不给「从列表移除」（连分隔线一起不画）：
+                它由主进程创建、是列表清空后仅剩的落脚点，点了也移不掉。
+                **其余用户自己加的文件夹一律保留这一项**，别顺手一起藏了。 */}
+            {isBuiltinProj(menu.proj) ? null : (
               <>
                 <div className="ctx-sep" />
                 <button

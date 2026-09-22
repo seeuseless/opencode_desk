@@ -19,7 +19,7 @@
 - 收藏夹：地址栏星标（页面标题作显示名，hostOf 兜底域名），localStorage `qingniao.bookmarks`；全屏时面板顶部渲染 bp-marks 收藏条
 
 ## 约定
-- 左侧目录右键菜单对 builtin 项目不显示「移除」项（连分隔线一起隐藏），hover 标题只显示 path，不写「不可移除」说明
+- 左侧目录右键菜单：**只有内置「任务」目录**不显示「移除」项（连分隔线一起隐藏）；**用户自己加的文件夹一律保留这一项**。判据见 `Sidebar.tsx` 的 `isBuiltinProj()`（认 `builtin` 标记 + `id === 'builtin'` 双保险）；hover 标题只显示 path，不写「不可移除」说明
 - 用户回复「1」= 写 git 提交日志并 push（全局约定，跨项目）
 - 禁止上传 `.git` 目录下文件；禁止生成 `nul` / `null` 文件（已在 `.gitignore` 加 `/.git/`、`/nul*`、`/null*` 规则兜底）
 - 应用 `Menu.setApplicationMenu(null)`：Ctrl+R 等加速键无效，改完代码窗口不会自动重载；验证新 UI 要重启 `npm run dev`
