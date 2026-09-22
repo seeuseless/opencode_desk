@@ -5,7 +5,7 @@
 #      应用内的"当前版本"读的就是安装包里的这个值，对不上会导致它一直提示有新版本。
 #   2. git commit && git push
 #   3. git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
-#      → 本工作流自动跑：Windows 上构建安装包、上传到对应 Release 的附件。
+#      → 本工作流自动跑：Windows / macOS 上分别构建安装包，上传到对应 Release 的附件。
 #
 # 为什么附件名必须固定成「青鸟-Setup.exe」：
 #   应用内"一键下载"用的地址是
@@ -14,10 +14,12 @@
 #   每次发版覆盖同名附件。历史版本靠 git tag 与各自的 Release 页面追溯。
 #   （名字由 electron-builder.yml 的 artifactName 决定，本工作流只负责上传，不再改名）
 #
-# 顺带生成 latest.yml 一起传上去：应用侧的检查更新走的是 GitHub Releases API，
-# 不需要它；留着是为了将来若改用 electron-updater，元数据已经就位（不影响现在的流程）。
+# 两个平台各自的附件名（都由 electron-builder.yml 决定，改一处即可）：
+#   · Windows：青鸟-Setup.exe              （artifactName: ${productName}-Setup.${ext}）
+#   · macOS  ：青鸟-Setup-arm64.dmg / .zip （mac.artifactName 带 ${arch}，多架构不互相覆盖）
+#   mac 侧的文件名与主进程 updater.ts 的 MAC_DMG_NAME 常量必须一致，否则应用内更新找不到包。
 #
-# ⚠️ 已知踩过的坑（2026-09-22 首次发版，连续失败三次，修完才通）：
+# ⚠️ 已知踩过的坑（2026-09-22 首次发版，连续失败多次，修完才通）：
 #   1) 仓库 .npmrc 与 yarn.lock 里的 780 条 resolved 全部指向腾讯云镜像，
 #      海外 runner 拉不动 → install 阶段超时失败。
 #      修法见下面「安装依赖」那一步的注释。
@@ -31,12 +33,21 @@
 #      教训：extraMetadata 的值不做占位符展开（只有 artifactName 那类模板字段才展开）；
 #            排查时**先看构建步骤日志里真正的 ⨯ 那一行**，别被前置步骤的"成功"带偏。
 #   3) GH_TOKEN 报错（`GitHub Personal Access Token is not set`）：发生在签名、blockmap 都
-#      成功之后，看着像发布失败。其实有两层原因，**两层都要治**：
-#        a. electron-builder 在「CI + tag」下隐式开启发布 → 用 `--publish never` 关掉；
-#        b. 更隐蔽的一层：没写 publish 配置时它从 package.json 的 repository 推断出
-#           provider=github，写 app-update.yml 那步就构造 GitHubPublisher 要 token。
-#           → 在 electron-builder.yml 里写 `publish: generic` 短路掉（本项目用不上 app-update.yml）。
-#      只做 a 不做 b，报错一模一样 —— 别以为是没生效。
+#      成功之后，看着像发布失败。真正的来源是——只要 electron-builder.yml 里没显式写
+#      publish 配置，它就从 package.json 的 repository 推断出 provider=github，
+#      并在写 app-update.yml 时构造 GitHubPublisher → 没 token 直接抛错。
+#      ⚠️ `--publish never` **拦不住它**（PublishManager 源码注释：
+#         "file should be generated regardless of publish state"）。
+#      也**不能**写 `publish: generic`（那样会被强制校验 url，换一个错继续抛：
+#         ⨯ Please specify "url" for "generic" update server）。
+#      唯一可行解是 `publish: null`（三处 `if (publishers === null) return null` 短路）。
+#   4) 上传时列了 `dist/latest.yml` 报
+#        ⚠️ Pattern 'dist/latest.yml' does not match any files
+#      原因：上面设了 `publish: null` 后 electron-builder **不再生成** latest.yml，
+#      而上传步骤带 `fail_on_unmatched_files: true` → 少一个文件就整体失败，
+#      把已经构建成功的 exe 一起丢掉。本项目用不到 electron-updater，故不再生成/上传它。
+#      教训：`fail_on_unmatched_files: true` 是把双刃剑——它能防"静默跳过"，但要求
+#            files 里**只列确定会产出的文件**。新增一行前先确认它真的会被生成。
 
 name: release
 
@@ -56,6 +67,9 @@ permissions:
   contents: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Windows：主发版线。这个 job 失败就是发版失败。
+  # ---------------------------------------------------------------------------
   build-win:
     runs-on: windows-latest
     steps:
@@ -108,18 +122,8 @@ jobs:
         shell: bash
         run: node node_modules/opencode-ai/postinstall.mjs
 
-      # dist 里已经串了 gen-update-meta → electron-vite build → electron-builder --win
-      # ⚠️ `--publish never` 不能省（脚本里已带，这里再显式写一遍防绕过）：
-      #   electron-builder 一旦发现「在 CI 里 + 当前是 tag」，就会**隐式开启发布**，
-      # ⚠️ 这里曾误以为 `--publish never` 能解决 GH_TOKEN 报错，实际不能，两点都要做：
-      #   1) electron-builder 检测到「CI + git tag」会隐式开启发布（日志里那句
-      #      "Implicit publishing triggered by git tag"），加上 --publish never 关掉它。
-      #   2) 但 token 报错的真正来源**不是发布策略**：只要 electron-builder.yml 里没显式写
-      #      publish 配置，它就从 package.json 的 repository 推断出 provider=github，
-      #      并在写 app-update.yml 时构造 GitHubPublisher → 没 token 直接抛错。
-      #      对策是 electron-builder.yml 里的 `publish: generic`（见该文件注释），
-      #      与 --publish never 无关，缺哪个都还是失败。
-      #   （本流程上传由下面的 softprops/action-gh-release 负责，electron-builder 不参与发布）
+      # dist 里已经串了 gen-update-meta → electron-vite build → check-kernel → electron-builder
+      # `--publish never` 在这里再显式写一遍（脚本里已带），防将来有人改脚本时把发布打开。
       - name: 构建 Windows 安装包
         run: yarn dist --publish never
         env:
@@ -129,10 +133,9 @@ jobs:
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
 
       # ⚠️ 打包后的产物名校验，**不能省**：
-      #   上传步骤不会因为"文件不存在"就报错（fail_on_unmatched_files 需谨慎开启，
-      #   否则 mac 产物缺失时 Windows 也会连带失败），一旦 electron-builder.yml 的
-      #   artifactName 没生效——比如产物还叫「青鸟 Setup 1.0.0.exe」这种带版本号的默认名，
-      #   上传就会**静默跳过**，Release 建出来却是空的，且日志里看不出异常。
+      #   上传步骤一旦列错文件名就会（在 fail_on_unmatched_files 下）整体失败，
+      #   一旦 artifactName 没生效——比如产物还叫「青鸟 Setup 1.0.0.exe」这种带版本号的默认名——
+      #   上传步骤就会报错或静默跳过，Release 建出来却是空的，且日志里不易看出源头。
       #   所以这里主动断言文件名，不对就立刻红掉并打出实际内容，便于一眼定位。
       - name: 校验安装包名（必须是 青鸟-Setup.exe）
         shell: bash
@@ -170,14 +173,13 @@ jobs:
           echo "✓ 内核二进制正常"
 
       # 上传安装包（files 用固定名：GitHub 会把中文名转义，写死最稳）。
-      # 前面已断言过文件存在，故这里改为「匹配不到就失败」——静默成功比失败更难排查。
+      # ⚠️ files 里**只列确定会产出的文件**（理由见文件头注释第 4 条）：
+      #   本项目不用 electron-updater，latest.yml 不会被生成，所以不列。
       - name: 上传安装包到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            dist/青鸟-Setup.exe
-            dist/latest.yml
+          files: dist/青鸟-Setup.exe
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
@@ -187,6 +189,100 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # 构建日志里留一份产物清单：发版后想确认"到底传上去了什么"时不用翻 UI
+      - name: 列出产物
+        shell: bash
+        run: ls -l dist
+
+  # ---------------------------------------------------------------------------
+  # macOS：与 Windows 并行构建，产物同样是 dmg / zip。
+  #
+  # ⚠️ `continue-on-error: true` 是刻意的：
+  #   个人项目没有 Apple Developer 账号，dmg 出的是**未签名**包（用户首次打开需右键→打开
+  #   绕过 Gatekeeper），且 mac 构建历史上更容易受 runner 环境波动影响。
+  #   发版的主体是 Windows 包（国内用户为主），不该让 mac 的失败把整个 Release 拦下。
+  #   失败时这个 job 会标红但在 GitHub 上不阻塞其他 job；Release 页仍会出 Windows 附件。
+  #   想收紧时把这一行删掉即可（那样 mac 构建失败 = 发版失败）。
+  # ---------------------------------------------------------------------------
+  build-mac:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+
+      - name: 安装依赖（腾讯源改写为官方源）
+        shell: bash
+        run: |
+          set -e
+          rm -f .npmrc
+          before=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          sed -i '' 's#https://mirrors\.cloud\.tencent\.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+          after=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          echo "lockfile 腾讯源数量：改前 $before → 改后 $after（应为 0）"
+          yarn install --frozen-lockfile --network-timeout 600000
+
+      # mac 上这步同样不能省：opencode-ai 的 bin/opencode 预置文件是占位脚本，
+      # 真二进制（darwin-arm64 / darwin-x64）要靠 postinstall 从平台包链接过来。
+      # 注意文件名在 mac 上是 `opencode`（无 .exe），check-kernel.mjs 已按平台区分。
+      - name: 补跑 opencode-ai postinstall
+        shell: bash
+        run: node node_modules/opencode-ai/postinstall.mjs
+
+      # dist:mac 里串的是 electron-builder --mac；这里额外关掉签名自动发现，
+      # 否则没有钥匙串证书时 electron-builder 会要求签名而失败。
+      # 产物：青鸟-Setup-arm64.dmg / 青鸟-Setup-arm64.zip（macos-latest 是 Apple Silicon）
+      - name: 构建 macOS 安装包（未签名）
+        run: yarn dist:mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
+
+      - name: 校验产物
+        shell: bash
+        run: |
+          echo "dist 实际内容："
+          ls -l dist
+          # dmg 是主产物（应用内更新按 MAC_DMG_NAME 找它）；zip 是补充分发格式
+          for f in dist/*.dmg dist/*.zip; do
+            if [ -f "$f" ]; then echo "✓ 找到 $f"; else echo "::warning::未产出 $f"; fi
+          done
+          if ! ls dist/*.dmg >/dev/null 2>&1; then
+            echo "::error::未产出任何 dmg——检查 electron-builder.yml 的 mac 配置与 icon.icns 是否存在"
+            exit 1
+          fi
+
+      # 应用内更新在 mac 上找的文件名是固定常量（updater.ts 的 MAC_DMG_NAME），
+      # 这里断言一下两边没写岔，免得 Release 传上去了、应用却永远说"没有新版本"。
+      - name: 校验 dmg 文件名与 updater.ts 常量一致
+        shell: bash
+        run: |
+          grep -n "MAC_DMG_NAME" electron/main/updater.ts
+          if ! ls dist/青鸟-Setup-arm64.dmg >/dev/null 2>&1; then
+            echo "::error::未找到 dist/青鸟-Setup-arm64.dmg"
+            echo "::error::主进程 updater.ts 的 MAC_DMG_NAME 期望这个文件名；"
+            echo "::error::若实际产物名不同（如 arch 不是 arm64），请同步改 MAC_DMG_NAME 或 mac.artifactName"
+            ls -l dist
+            exit 1
+          fi
+          echo "✓ dmg 文件名与 updater.ts 一致"
+
+      - name: 上传 macOS 安装包到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist/青鸟-Setup-arm64.dmg
+            dist/青鸟-Setup-arm64.zip
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: 列出产物
         shell: bash
         run: ls -l dist

@@ -26,11 +26,27 @@ let mainWin: BrowserWindow | null = null
 // agent 的默认工作目录（"工作台"项目）
 const workspace = join(app.getPath('home'), 'qingniaoai-workspace')
 
-/** dev：node_modules/opencode-ai/bin；打包：resources/bin（electron-builder extraResources 拷贝） */
+/**
+ * dev：node_modules/opencode-ai/bin；打包：resources/bin（electron-builder extraResources 拷贝）。
+ *
+ * ⚠️ 文件名**不能按平台猜**（这是 mac 版曾经的阻塞点，2026-09-22 修）：
+ *   opencode-ai 的 postinstall.mjs 第 29 行把目标路径**写死**成 `bin/opencode.exe`——
+ *   即使跑在 macOS 上也叫 `opencode.exe`（内容确实是 Mach-O，它靠 chmod 0o755 使其可执行，
+ *   后缀只是名字）。所以「win32 才叫 .exe、mac 叫 opencode」的推断是错的，
+ *   在 mac 上会去找一个永不存在的 bin/opencode → 内核拉不起来。
+ *   （同时它的 package.json `bin.opencode` 也指向 ./bin/opencode.exe，两处一致。）
+ *
+ *   更稳的做法是**按存在性探测**：优先 .exe（上游的既定命名），退回到无后缀
+ *   （万一将来上游改成平台化命名，这里也不用跟着改）。前缀由 electron-builder 的
+ *   extraResources 整目录拷贝保证，两种名字都能到得了 resources/bin。
+ */
 function opencodeBin(): string {
-  const exe = process.platform === 'win32' ? 'opencode.exe' : 'opencode'
-  if (app.isPackaged) return join(process.resourcesPath, 'bin', exe)
-  return join(app.getAppPath(), 'node_modules', 'opencode-ai', 'bin', exe)
+  const dir = app.isPackaged
+    ? join(process.resourcesPath, 'bin')
+    : join(app.getAppPath(), 'node_modules', 'opencode-ai', 'bin')
+  const withExt = join(dir, 'opencode.exe')
+  // 上游命名就是 opencode.exe；无后缀那份是防御性回退（见上方注释）
+  return existsSync(withExt) ? withExt : join(dir, 'opencode')
 }
 
 function createWindow(): void {

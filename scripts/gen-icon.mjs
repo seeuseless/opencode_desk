@@ -1,4 +1,12 @@
-/* 生成应用图标：青鸟（lucide bird，ISC）+ 渐变蓝圆角底 → resources/image/icon.png / icon.ico */
+/* 生成应用图标：青鸟（lucide bird，ISC）+ 渐变蓝圆角底
+ *   → resources/image/icon.png  （Linux / 主进程 createWindow+createTray 运行时读）
+ *   → resources/image/icon.ico  （Windows：electron-builder 的 win.icon）
+ *   → resources/image/icon.icns （macOS：electron-builder 的 mac.icon）
+ *
+ * 三个格式都是**一次性生成、随仓库提交**的产物，改动图标后才需要重跑：
+ *   node scripts/gen-icon.mjs
+ * 它依赖 devDependency 的 sharp（纯构建期），不进安装包。
+ */
 import sharp from 'sharp'
 import { writeFileSync, mkdirSync } from 'node:fs'
 
@@ -52,4 +60,48 @@ for (const size of [16, 32, 48, 256]) {
   entries.push({ size, buf })
 }
 writeFileSync('resources/image/icon.ico', makeIco(entries))
-console.log('icon.png / icon.ico done')
+
+/**
+ * 组装 .icns（macOS 图标容器），供 electron-builder 的 mac 目标使用。
+ *
+ * 格式很简单：8 字节文件头（magic 'icns' + 总长度 BE）+ 若干块，
+ * 每块 = 4 字节 type + 4 字节块长度(BE，含这 8 字节头) + 数据。
+ * 数据部分**允许直接是 PNG**（macOS 10.7+ 支持），所以不需要 iconutil。
+ *
+ * ⚠️ 为什么手写而不是调 `iconutil`：CI 的 Windows runner 上没有 iconutil（那是 macOS 自带），
+ *    而这个脚本在 Windows 上就要能跑（yarn dist 前置步骤）。手写 20 行换来跨平台一致，
+ *    比"mac job 里另外跑一套生成逻辑"更不容易两边漂移。
+ *
+ * size → type 的映射是苹果固定枚举，别改：
+ *   icp4=16  icp5=32  icp6=64  ic07=128  ic08=256  ic09=512  ic10=1024(512@2x)
+ * mac 的 .icns 惯例要求提供 16~1024 全套，缺了 Finder/Dock 在对应场景就回落到默认图标。
+ */
+function makeIcns(entries) {
+  const blocks = entries.map(({ type, buf }) => {
+    const head = Buffer.alloc(8)
+    head.write(type, 0, 4, 'ascii')
+    head.writeUInt32BE(buf.length + 8, 4)
+    return Buffer.concat([head, buf])
+  })
+  const body = Buffer.concat(blocks)
+  const head = Buffer.alloc(8)
+  head.write('icns', 0, 4, 'ascii')
+  head.writeUInt32BE(body.length + 8, 4)
+  return Buffer.concat([head, body])
+}
+
+const icnsEntries = []
+for (const [type, size] of [
+  ['icp4', 16],
+  ['icp5', 32],
+  ['icp6', 64],
+  ['ic07', 128],
+  ['ic08', 256],
+  ['ic09', 512],
+  ['ic10', 1024]
+]) {
+  const buf = await sharp(Buffer.from(svg)).resize(size, size).png().toBuffer()
+  icnsEntries.push({ type, buf })
+}
+writeFileSync('resources/image/icon.icns', makeIcns(icnsEntries))
+console.log('icon.png / icon.ico / icon.icns done')
