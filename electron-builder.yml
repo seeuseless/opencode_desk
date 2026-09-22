@@ -49,8 +49,14 @@ artifactName: ${productName}-Setup.${ext}
 files:
   - out/**
   - resources/image/icon.png
+  #
   # 主进程运行时要用的第三方包：二维码编码器（移动端面板把 {平台}/ide/device/{token} 画成码）。
   # files 一旦自定义就不再带默认的 node_modules，用到的必须显式列出来。
+  # ⚠️ 这是**唯一**需要白名单的运行时依赖 —— 因为它对应 package.json 里唯一一个 runtime
+  #    import（electron/main/relay.ts）。别再把渲染层的包往 dependencies 里塞：
+  #    electron-builder 会连带收集整棵传递依赖树进 app.asar，2026-09-22 实测因此白胖 74MB。
+  #    判据很简单 —— 问自己"打包后的主进程代码里还能搜到这个名字吗？"
+  #    renderer 的依赖全部被 Vite 打进 out/renderer 单文件了，源码侧搜不到，所以不用列。
   - node_modules/qrcode-generator/**
   # 第三方依赖快照（scripts/gen-deps.mjs 生成）：设置 → 依赖 页在打包态读不到 node_modules，靠它显示真实版本号与协议
   - resources/deps.json
@@ -78,11 +84,13 @@ files:
   - "!node_modules/opencode-darwin-*/**"
   - "!node_modules/opencode-linux-*/**"
   #
-  # 另外几个被"原生依赖自动解包"捎进来的包，源码里**从未 import**，纯粹是
-  # computer-use-mcp / sharp 的传递依赖，同样不该进安装包：
+  # 兜底排除：下面这些包**现在已不是 dependencies**（2026-09-22 全部移到 devDependencies），
+  # 正常不会被打进来；留着是防止将来有人手滑把它们塞回 dependencies 又把 asar 撑胖。
+  # 原理同上：含原生可执行文件（.exe/.node）的包会被"自动解包"整包搬进去。
   #   @img/sharp-*（28MB，sharp 只在一次性脚本 scripts/gen-icon.mjs 里用）
   #   clipboardy（1MB，其 fallback .exe 触发了解包）
-  #   @nut-tree-fork（1.5MB，MCP 端依赖；MCP 脚本是独立 spawn 的，跑在用户自己的 node 环境）
+  #   @nut-tree-fork（1.5MB，computer-use-mcp 的依赖；MCP 是独立 node 进程，
+  #                   resources/mcp/screen-mcp.mjs 用 `npx -y computer-use-mcp` 现拉）
   - "!node_modules/@img/**"
   - "!node_modules/clipboardy/**"
   - "!node_modules/@nut-tree-fork/**"

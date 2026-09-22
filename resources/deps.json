@@ -1,10 +1,10 @@
 {
-  "generatedAt": "2026-09-21T22:18:40.996Z",
+  "generatedAt": "2026-09-22T03:16:02.399Z",
   "items": [
     {
       "name": "@types/node",
       "declared": "^24.13.5",
-      "version": "24.13.5",
+      "version": "24.13.6",
       "license": "MIT",
       "dev": true
     },
@@ -30,25 +30,11 @@
       "dev": true
     },
     {
-      "name": "any-base",
-      "declared": "^1.1.0",
-      "version": "1.1.0",
-      "license": "MIT",
-      "dev": false
-    },
-    {
-      "name": "bmp-js",
-      "declared": "^0.1.0",
-      "version": "0.1.0",
-      "license": "MIT",
-      "dev": false
-    },
-    {
       "name": "computer-use-mcp",
       "declared": "^1.8.0",
       "version": "1.8.0",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "cross-env",
@@ -60,7 +46,7 @@
     {
       "name": "electron",
       "declared": "^44.4.0",
-      "version": "44.4.0",
+      "version": "44.4.3",
       "license": "MIT",
       "dev": true
     },
@@ -79,39 +65,18 @@
       "dev": true
     },
     {
-      "name": "exif-parser",
-      "declared": "^0.1.12",
-      "version": "0.1.12",
-      "license": "MIT",
-      "dev": false
-    },
-    {
-      "name": "gifwrap",
-      "declared": "^0.10.1",
-      "version": "0.10.1",
-      "license": "MIT",
-      "dev": false
-    },
-    {
       "name": "highlight.js",
       "declared": "^11.12.0",
       "version": "11.12.0",
       "license": "BSD-3-Clause",
-      "dev": false
-    },
-    {
-      "name": "isomorphic-fetch",
-      "declared": "^3.0.0",
-      "version": "3.0.0",
-      "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "lucide-react",
       "declared": "^1.46.0",
-      "version": "1.46.0",
+      "version": "1.47.0",
       "license": "ISC",
-      "dev": false
+      "dev": true
     },
     {
       "name": "opencode-ai",
@@ -132,35 +97,35 @@
       "declared": "^19.3.0",
       "version": "19.3.0",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "react-dom",
       "declared": "^19.3.0",
       "version": "19.3.0",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "react-markdown",
       "declared": "^10.1.0",
       "version": "10.1.0",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "rehype-highlight",
       "declared": "^7.0.2",
       "version": "7.0.2",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "remark-gfm",
       "declared": "^4.0.1",
       "version": "4.0.1",
       "license": "MIT",
-      "dev": false
+      "dev": true
     },
     {
       "name": "sharp",
@@ -168,13 +133,6 @@
       "version": "0.35.4",
       "license": "Apache-2.0",
       "dev": true
-    },
-    {
-      "name": "tr46",
-      "declared": "^0.0.3",
-      "version": "0.0.3",
-      "license": "MIT",
-      "dev": false
     },
     {
       "name": "typescript",
@@ -189,13 +147,6 @@
       "version": "7.3.6",
       "license": "MIT",
       "dev": true
-    },
-    {
-      "name": "whatwg-url",
-      "declared": "^5.0.0",
-      "version": "5.0.0",
-      "license": "MIT",
-      "dev": false
     }
   ]
 }

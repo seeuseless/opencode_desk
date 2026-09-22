@@ -41,8 +41,12 @@ try {
     tagPrefix: 'v',
     // 版本号只作参考，主进程以 app.getVersion() 为准
     version: String(pkg.version ?? '0.0.0'),
-    // Release 上若同时上传了 electron-builder 的 latest.yml，可用来交叉校验安装包大小（可选）
-    latestYml: 'latest.yml',
+    // ⚠️ 这里**不要**再写 `latestYml: 'latest.yml'`（2026-09-22 移除）：
+    //   electron-builder.yml 设了 `publish: null`，electron-builder 从此**不再生成** latest.yml，
+    //   而 CI 的上传步骤带 `fail_on_unmatched_files: true`，一旦列上它就会
+    //   报 `Pattern 'dist/latest.yml' does not match any files` 并把已构建成功的 exe 一起丢掉。
+    //   主进程侧 updater.ts 也从未消费这个字段（只解析、无使用点），属纯死元数据。
+    //   将来若改用 electron-updater，那时再让 electron-builder 产出并上传 latest.yml。
     generatedAt: new Date().toISOString()
   }
 
