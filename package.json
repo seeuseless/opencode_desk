@@ -28,10 +28,11 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "gen:deps": "node scripts/gen-deps.mjs",
     "gen:update": "node scripts/gen-update-meta.mjs",
+    "check:kernel": "node scripts/check-kernel.mjs",
     "postinstall": "node scripts/gen-deps.mjs && node scripts/gen-update-meta.mjs",
-    "dist": "node scripts/gen-update-meta.mjs && electron-vite build && electron-builder --win --publish never",
-    "dist:mac": "node scripts/gen-update-meta.mjs && electron-vite build && electron-builder --mac --publish never",
-    "dist:mac:unsigned": "node scripts/gen-update-meta.mjs && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish never"
+    "dist": "node scripts/gen-update-meta.mjs && electron-vite build && node scripts/check-kernel.mjs && electron-builder --win --publish never",
+    "dist:mac": "node scripts/gen-update-meta.mjs && electron-vite build && node scripts/check-kernel.mjs && electron-builder --mac --publish never",
+    "dist:mac:unsigned": "node scripts/gen-update-meta.mjs && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-vite build && node scripts/check-kernel.mjs && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --publish never"
   },
   "dependencies": {
     "any-base": "^1.1.0",

@@ -93,6 +93,21 @@ jobs:
           #    「装的版本与本地一致」，又不会再去碰腾讯源。
           yarn install --frozen-lockfile --network-timeout 600000
 
+      # ⚠️ 补跑 opencode-ai 的 postinstall（**不能省**，2026-09-22 用户装完启动报
+      #   `spawn UNKNOWN` 就是栽在这里）：
+      #   opencode-ai 的 bin/opencode.exe **仓库里预置的那个只有 479 字节**，是个
+      #   `exit 1` 的斥退占位脚本；真二进制（约 172MB）靠它自己的 postinstall.mjs
+      #   从平台包（opencode-windows-x64 / -baseline）硬链接过来覆盖。
+      #   而 electron-builder.yml 的 extraResources 正是从 node_modules/opencode-ai/bin 取文件——
+      #   一旦 postinstall 没生效，就会把那个占位脚本打进安装包，用户装上必然打不开。
+      #   yarn 1 的 postinstall 行为在 CI 上不够可靠（--ignore-scripts / 平台包没装上都会静默跳过），
+      #   所以这里显式再跑一次。**失败即中断**（宁可不出包，也不出打不开的包）。
+      #   注：跟着的 check-kernel 由 dist 脚本内部再跑一遍（本地打包同样受这个护栏保护），
+      #   这里提前跑是为了让失败尽可能早、日志位置更清楚。
+      - name: 补跑 opencode-ai postinstall
+        shell: bash
+        run: node node_modules/opencode-ai/postinstall.mjs
+
       # dist 里已经串了 gen-update-meta → electron-vite build → electron-builder --win
       # ⚠️ `--publish never` 不能省（脚本里已带，这里再显式写一遍防绕过）：
       #   electron-builder 一旦发现「在 CI 里 + 当前是 tag」，就会**隐式开启发布**，
@@ -129,6 +144,30 @@ jobs:
             exit 1
           fi
           echo "✓ 安装包名正确"
+
+      # ⚠️ 断言打进去的内核二进制是真货（**最后一道闸**，2026-09-22 用户装完
+      #   `spawn UNKNOWN` 就是漏了这道检查）：
+      #   node_modules/opencode-ai/bin/opencode.exe 仓库预置的那个只有 479 字节，
+      #   是个 `exit 1` 的斥退占位脚本，必须由 postinstall 换成 ~172MB 的真二进制。
+      #   前面「补跑 postinstall」那步已经保证了一次，但这里**验的是最终产物**——
+      #   只有产物里躺着真二进制，用户装完才打得开。用大小做粗判即可：
+      #   真货 >100MB，占位脚本只有几百字节，中间没有任何合法的中间态。
+      - name: 校验内核二进制已打进安装包
+        shell: bash
+        run: |
+          BIN="dist/win-unpacked/resources/bin/opencode.exe"
+          if [ ! -f "$BIN" ]; then
+            echo "::error::安装包内缺少内核二进制：$BIN"
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$BIN")
+          echo "内核二进制大小：$SIZE 字节（预期 >100MB）"
+          if [ "$SIZE" -lt 100000000 ]; then
+            echo "::error::$BIN 只有 $SIZE 字节，是未替换的占位脚本而非真二进制——检查 postinstall 是否生效"
+            echo "::error::（这个包装上去会启动失败，绝不能再传上 Release）"
+            exit 1
+          fi
+          echo "✓ 内核二进制正常"
 
       # 上传安装包（files 用固定名：GitHub 会把中文名转义，写死最稳）。
       # 前面已断言过文件存在，故这里改为「匹配不到就失败」——静默成功比失败更难排查。
