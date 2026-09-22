@@ -3,6 +3,7 @@
 ## 技术栈
 - Electron + React (renderer) + TypeScript (main/electron)
 - 内核是 OpenCode，通过 MCP 扩展工具
+- OpenCode 协议是 MIT（用户已核实，https://github.com/anomalyco/opencode）
 - 前端在 `src/renderer`，主进程在 `electron/main`，MCP 脚本在 `resources/`
 
 ## 面板浏览器（panel_*）
@@ -18,6 +19,7 @@
 - 收藏夹：地址栏星标（页面标题作显示名，hostOf 兜底域名），localStorage `qingniao.bookmarks`；全屏时面板顶部渲染 bp-marks 收藏条
 
 ## 约定
+- 左侧目录右键菜单对 builtin 项目不显示「移除」项（连分隔线一起隐藏），hover 标题只显示 path，不写「不可移除」说明
 - 用户回复「1」= 写 git 提交日志并 push（全局约定，跨项目）
 - 禁止上传 `.git` 目录下文件；禁止生成 `nul` / `null` 文件（已在 `.gitignore` 加 `/.git/`、`/nul*`、`/null*` 规则兜底）
 - 应用 `Menu.setApplicationMenu(null)`：Ctrl+R 等加速键无效，改完代码窗口不会自动重载；验证新 UI 要重启 `npm run dev`

@@ -162,7 +162,7 @@ export function Sidebar(p: Props) {
               <div key={proj.id}>
                 <div
                   className={'proj' + (proj.builtin ? ' builtin' : '')}
-                  title={proj.builtin ? `${proj.path}\n内置目录，不可移除` : `${proj.path}\n右键：打开文件夹`}
+                  title={proj.path}
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
                 >
@@ -399,21 +399,21 @@ export function Sidebar(p: Props) {
               <MessageSquarePlus size={14} />
               添加任务
             </button>
-            <div className="ctx-sep" />
-            {/* 「任务」目录不给移除：置灰 + 说明，菜单里直接写清原因，不用弹窗 */}
-            <button
-              className="ctx-item danger"
-              disabled={!!menu.proj.builtin}
-              title={menu.proj.builtin ? '内置目录，不可移除' : undefined}
-              onClick={() => {
-                if (menu.proj.builtin) return
-                setConfirmDel(menu.proj)
-                setMenu(null)
-              }}
-            >
-              <Trash2 size={14} />
-              {menu.proj.builtin ? '内置目录 · 不可移除' : '从列表移除'}
-            </button>
+            {menu.proj.builtin ? null : (
+              <>
+                <div className="ctx-sep" />
+                <button
+                  className="ctx-item danger"
+                  onClick={() => {
+                    setConfirmDel(menu.proj)
+                    setMenu(null)
+                  }}
+                >
+                  <Trash2 size={14} />
+                  从列表移除
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
