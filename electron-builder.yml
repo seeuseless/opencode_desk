@@ -4,10 +4,15 @@
 # - extraResources 把 OpenCode 内核二进制拷进 resources/bin（主进程打包态从该处读取）
 appId: com.qingniao.desktop
 productName: 青鸟
-# 版本号唯一事实来源就是 package.json（发版时改它、并打同名 tag）。显式重述一遍，
-# 避免将来 package.json 里出现 version 之外的同义字段时被打包器取到别的值。
-extraMetadata:
-  version: ${version}
+# 版本号唯一事实来源就是 package.json（发版时改它、并打同名 tag），**不要在这里重复声明**：
+# ⚠️ 曾写过 `extraMetadata: { version: ${version} }` 想"重述一遍"，结果把这个占位符**原样**塞进了
+#    app 的 package.json —— electron-builder 读到的 version 是字面量 "${version}"，
+#    在 Windows 上写 exe 资源版本号时就炸了（2026-09-22 CI 实测）：
+#      updating asar integrity executable resource  executablePath=dist\win-unpacked\青鸟.exe
+#      ⨯ Invalid major number in: ${version}
+#         at AppInfo.getVersionInWeirdWindowsForm (app-builder-lib/src/appInfo.ts:93:13)
+#    去掉后 electron-builder 会自己从 package.json 取 version，行为完全一致。
+#    记住：extraMetadata 的值不做占位符展开，只有 artifactName 那类模板字段才展开。
 directories:
   output: dist
   buildResources: resources
