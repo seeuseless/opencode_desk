@@ -282,8 +282,8 @@ input, textarea { font: inherit; }
   display: flex; align-items: center; justify-content: flex-end; gap: 2px;
   padding-top: 10px; margin-top: 6px;
 }
-/* 底栏最左的 LOGO：margin-right:auto 独占左侧空间，把账号/设置/手机推到右端 */
-.foot-logo { width: 20px; height: 20px; object-fit: contain; margin: 0 auto 0 4px; flex-shrink: 0; }
+/* 底栏最左的 LOGO：margin-right:auto 独占左侧空间，把账号/设置/手机推到右端；尺寸对齐旁边 16px 图标 */
+.foot-logo { width: 16px; height: 16px; object-fit: contain; margin: 0 auto 0 7px; flex-shrink: 0; }
 .foot-btn {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;
