@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, DESKTOP_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -43,8 +43,6 @@ interface Props {
   access: AccessLevel
   /** 拨权限档位；切到「完全控制」的二次确认由 App 负责 */
   onAccess: (level: AccessLevel) => void
-  /** 桌面控制（computer 工具）是否启用：桌面意图那一轮据此注入「别碰内置浏览器」的边界提示 */
-  desktopControl: boolean
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
@@ -60,13 +58,12 @@ function parseModel(key: string): ModelSel | undefined {
   return { providerID: key.slice(0, i), modelID: key.slice(i + 1) }
 }
 
-/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文 / 桌面控制边界）：AI 可见、界面不渲染 */
+/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文 / 附件说明）：AI 可见、界面不渲染 */
 function isCtxOnly(txt: string): boolean {
   return (
     txt.startsWith(MEMORY_PREFIX) ||
     txt.startsWith(BROWSER_CTX_PREFIX) ||
-    txt.startsWith(ATTACH_CTX_PREFIX) ||
-    txt.startsWith(DESKTOP_CTX_PREFIX)
+    txt.startsWith(ATTACH_CTX_PREFIX)
   )
 }
 
@@ -85,11 +82,6 @@ function hostOf(u: string): string {
 /** 任务中断后的提示条：不自动重发消息，交还用户点「重试」手动续跑 */
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
-/**
- * 桌面控制「卡死」判定线：同一个 computer 调用 running 超过这么久就中止本轮。
- * 内核侧给 computer-use 配的超时是 30s（见 config.ts），这里留足一点余量做最后兜底。
- */
-const DESKTOP_STUCK_MS = 45000
 
 /** 会话中断的识别：助手消息自带错误（非用户主动中止），或回合结束时还残留 running/pending 的工具调用（半截截断）。
  *  running/pending 工具 = 任务没真正跑完（即便已有半截文本，工具还在排队/执行中，回合未结束）；
@@ -349,8 +341,6 @@ export function ChatView(p: Props) {
   const replyingRef = useRef<Set<string>>(new Set())
   // bash 类工具的起始计时：长跑超 30s 视为「终端运行中」，不算处理中
   const termStart = useRef<Record<string, number>>({})
-  // computer 类工具的起始计时：单次调用僵住这么久就判定卡死并中止本轮
-  const computerStart = useRef<Record<string, number>>({})
   // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
   const pollFingerprint = useRef('')
   // 各 busy 会话所属项目路径：多项目并行时停止/重试都要带 directory，否则内核找不到该会话
@@ -378,8 +368,6 @@ export function ChatView(p: Props) {
   const [marks, setMarks] = useState<Bookmark[]>(() => load<Bookmark[]>('qingniao.bookmarks', []))
   /** 已注入的浏览器上下文（会话 + URL + 是否全屏）：没变过就不再重复注入，避免每条消息都塞一份 */
   const browserCtxRef = useRef<{ sid: string; url: string; max: boolean } | null>(null)
-  /** 已注入的桌面控制上下文（会话 + 本轮原话）：同上，同一轮不重复注入 */
-  const desktopCtxRef = useRef<{ sid: string; text: string } | null>(null)
   /** 浮动聊天卡位置：距窗口右/下边缘的偏移（px），窗口缩放后仍保持相对位置；null = 默认右下角 */
   const [floatPos, setFloatPos] = useState<{ r: number; b: number } | null>(() => {
     const v = load<{ r: number; b: number } | null>('qingniao.floatPos', null)
@@ -662,16 +650,6 @@ export function ChatView(p: Props) {
   /** 当前会话的自动重试状态（pending=等待下一次重试；无定时器=次数耗尽等手动重试） */
   const retryState = p.sessionId ? retryView[p.sessionId] : undefined
 
-  /**
-   * 视觉代看人：当前对话模型看不到画面、但配置里有视觉模型 → 截图是由**另一个**模型看的。
-   *
-   * 提前算（桌面控制横幅要用）：它只依赖 props，与 msgs 无关，放前面没有副作用。
-   * 名字跟内核挑人同序（visionModelName 与主进程 pickVision 同口径），
-   * 顶部横幅点名的代看人就是同一个人。
-   */
-  const modelSeesImage = modelSupportsImage(p.settings, p.model)
-  const visionWho = !modelSeesImage ? visionModelName(p.settings) : ''
-
   // 自动续跑发的「继续」不出用户气泡，统一由尾部「重试 x/10」状态条体现：
   // pending=本轮 runPrompt 是续跑发起的；ids=已确认属于续跑的真实用户消息 id（含别的会话，防止切会话漏隐藏）
   const autoContinuePending = useRef(false)
@@ -681,9 +659,6 @@ export function ChatView(p: Props) {
   // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
   // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
   const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
-  /** 看门狗要读最新的消息与助手 id：渲染几乎每帧都在变，不好做 timer 依赖，这里留一份镜像供 effect 读取 */
-  const watchdogRef = useRef<{ msgs: MessageView[]; lastAid?: string }>({ msgs: [], lastAid: undefined })
-  watchdogRef.current = { msgs, lastAid }
   // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
   // 新消息发送将中止当前轮并接管
   let terminalBlocked = false
@@ -698,37 +673,6 @@ export function ChatView(p: Props) {
   } else if (Object.keys(termStart.current).length) {
     termStart.current = {}
   }
-  // 桌面控制进行中（computer-use 的 computer 工具在跑）：AI 的键鼠可能点进本应用，
-  // 锁定聊天输入，防止它的按键落进对话
-  const desktopCtl =
-    busy &&
-    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
-      (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
-    )
-  /**
-   * 桌面控制真的被调用过、但当前对话模型收不了图 —— 这种情况下截图由视觉模型代看（screen MCP
-   * 在 computer 的返回里附一段画面文字），所以不再报「发不出去」，只在界面明确告知正在代看。
-   * 判定用「配置里没有任何视觉模型」：一个都没有才真的没眼睛。
-   */
-  const cuBlind =
-    !modelSeesImage &&
-    hasVisionModel(p.settings) === false &&
-    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
-      (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
-    )
-  /** 当前对话模型看不到画面，但配了视觉模型 → 截图正由视觉模型代看（界面要给个明确交代） */
-  const cuVisionAssist = !modelSeesImage && hasVisionModel(p.settings)
-  /** 代看那个模型的名字（跟内核挑人同序），横幅里点名，用户才知道是谁在看 */
-  const cuVisionWho = cuVisionAssist ? visionWho : ''
-  /**
-   * 桌面控制进行中、或本轮调用过 computer 工具 → 顶部横幅的显示窗口。
-   * 进行中要显示（用户得知道键鼠在自己动），本轮用过也要留一会儿（刚操作完的收尾说明）。
-   */
-  const desktopBanner =
-    desktopCtl ||
-    !!msgs.find((x) => x.info.id === lastAid)?.parts.some(
-      (x) => x.type === 'tool' && (x.tool ?? '').toLowerCase().includes('computer')
-    )
 
   /** busySet 的同步镜像 + 修改入口：事件回调（effect 只注册一次）里要用最新值 */
   const busySetRef = useRef<Record<string, boolean>>({})
@@ -928,7 +872,6 @@ export function ChatView(p: Props) {
     } catch { /* 保留现状，由重发接续 */ }
     // 撤回可能带走了已注入的浏览器上下文消息：清掉记录，重发时按需重新注入
     browserCtxRef.current = null
-    desktopCtxRef.current = null
     void runPrompt(newText, sid, dir)
   }
 
@@ -1052,39 +995,6 @@ export function ChatView(p: Props) {
       askAlive = false
     }
   }, [p.sessionId, p.project?.path])
-
-  /**
-   * 桌面控制看门狗：单次 `computer` 调用僵住超过 45 秒就中止本轮、把键鼠还给用户。
-   *
-   * 正常链路上限是 30 秒——内核侧给 computer-use 这个 MCP 配了 timeout，
-   * screen-mcp 内部还有更紧的预算（一次调用 25s、等回包 20s、识图 10s）。
-   * 这里只防「工具状态流式更新漏了一拍」这种极端情况：没有它，界面会一直卡在
-   * 「AI 正在控制你的电脑」那句话上，输入框也被 desktopCtl 锁着，用户只能杀进程。
-   */
-  useEffect(() => {
-    if (!busy) {
-      computerStart.current = {}
-      return
-    }
-    const timer = window.setInterval(() => {
-      const last = watchdogRef.current.msgs.find((m) => m.info.id === watchdogRef.current.lastAid)
-      const running = (last?.parts ?? []).filter(
-        (x) => x.type === 'tool' && x.state?.status === 'running' && (x.tool ?? '').toLowerCase().includes('computer')
-      )
-      const ids = new Set(running.map((x) => x.id))
-      for (const k of Object.keys(computerStart.current)) if (!ids.has(k)) delete computerStart.current[k]
-      for (const part of running) {
-        const t0 = computerStart.current[part.id] ?? (computerStart.current[part.id] = part.state?.time?.start ?? Date.now())
-        if (Date.now() - t0 < DESKTOP_STUCK_MS) continue
-        const sid = sidRef.current
-        if (sid) oc.abort(sid, busyDir.current[sid]).catch(() => { /* 已结束 */ })
-        setNotice('这一步桌面控制超过 45 秒没有回结果，已中止本轮（键鼠已交还给你）。可以点「重试」再试一次。')
-        computerStart.current = {}
-        break
-      }
-    }, 5000)
-    return () => clearInterval(timer)
-  }, [busy])
 
   // 订阅内核事件：token 级增量 + part 快照 + 会话空闲
   useEffect(() => {
@@ -1720,56 +1630,6 @@ export function ChatView(p: Props) {
         }
       }
     }
-    // 桌面控制场景：本轮要操作的是用户**真实的整个桌面**，与内置浏览器（应用内一块网页面板）
-    // 是两套互不替代的操作面。不点名的话模型容易串台——拿 panel_* 去开桌面应用（开不动），
-    // 或在控制桌面中途跑去开内置浏览器。这里把边界按死：只用 computer，不要碰 panel_*。
-    //
-    // **全屏浏览时反过来压制**：面板已占满窗口、用户正盯着一个网页，此时「打开微信发消息」
-    // 这类命中桌面意图的词，若照旧注入「只用 computer」，就会与浏览器上下文互相打架，
-    // 结果 AI 去截整个桌面（用户明确要求：全屏浏览时禁用 computer-use，只用 panel_）。
-    if (isDesktopIntent(text) && p.desktopControl && !browserFullscreen) {
-      const dc = desktopCtxRef.current
-      if (!dc || dc.sid !== sid || dc.text !== text) {
-        try {
-          await oc.injectContext(
-            sid,
-            dir,
-            DESKTOP_CTX_PREFIX +
-              '这一轮的任务是**操作本机桌面 / 桌面应用**（不是浏览网页）。\n' +
-              '- 主通道是**截图 → 看画面 → 动作**：`{"action":"get_screenshot"}` 拿画面 → ' +
-              '`{"action":"left_click","coordinate":[x,y]}` 点、或 `{"action":"key","text":"ctrl+f"}` 发键。\n' +
-              '  每步之前都可以截一张判断「该点哪儿 / 上一步成没成」；**两张截图之间必须夹一个真实动作**' +
-              '（点击 / 按键 / 输入 / 滚动）——「截 → 什么都没做 → 再截」会被熔断。\n' +
-              '  看不到图就认截图回执里的「【电脑画面（由 X 识别）】」文字描述（视觉模型代看）；' +
-              '坐标按截图尺寸估算，图上红色十字是当前鼠标位置，点偏了就按它的偏移量成比例修正。\n' +
-              '- **中文 / 文件 / 图片一律走剪贴板**：`computer-use_set_clipboard` 放好内容 → `uia_paste {"match":"微信"}`。' +
-              '它粘贴前会先 Ctrl+A 全选，**是覆盖不是追加**——重发不会叠成两份。`type` 直接打中文会被输入法拦掉。\n' +
-              '  **按键一律用 `uia_keys` 并带上目标窗口**：`uia_keys {"keys":"ctrl+f","match":"微信"}`——' +
-              '它会先把目标窗口切到前台、确认成功后才发键；切不过去就直接拒绝，**绝不会把键打进别的窗口**。\n' +
-              '  **青鸟自己的窗口永远不会被输入**：当前最前面是青鸟（就是用户正在跟你对话的这个窗口）时，按键类调用会被' +
-              '**直接拒绝**——这是保护用户输入框的一道闸，不是故障；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n' +
-              '  **发给真人 / 群的消息，在按回车之前先用 `uia_read_input` 核对输入框里真实的内容**' +
-              '（Ctrl+A + Ctrl+C 把输入框内容读回来，**不需要截图**）；内容不对就重新 set_clipboard 再 ' +
-              '`uia_paste {"match":"微信","enter":false}` 粘一次，**别把明显不对的内容发出去**。\n' +
-              '  微信完整例子：`uia_keys {"keys":"esc","match":"微信"}` → `uia_keys {"keys":"ctrl+f","match":"微信"}` → ' +
-              '`computer-use_set_clipboard`（mode="text" 放好会话名）→ `uia_paste {"match":"微信"}`（打开会话）→ ' +
-              '`computer-use_set_clipboard`（mode="text" 换成正文）→ `uia_paste {"match":"微信","enter":false}` → ' +
-              '`uia_read_input {"match":"微信"}` 核对内容 → `uia_keys {"keys":"return","match":"微信"}`。\n' +
-              '  **要发送本地文件 / 图片**（如「把这张图发给微信好友 X」）：`computer-use_set_clipboard` 的 ' +
-              'mode="image"（发图片消息）或 mode="file"（发文件），files 填前面工具回执里「本地文件：」那一行的绝对路径，' +
-              '再 `uia_paste {"match":"微信"}` 发出。' +
-              '**不要为了「确认图片内容」去调识图工具**，也不要用 glob 满目录找图片——路径就在回执里。\n' +
-              '- 无障碍树 `uia_windows` / `uia_tree` / `uia_click` 只在**原生控件应用**（资源管理器、记事本、系统设置等）上有元素；' +
-              '**自绘界面（微信这类）树是空的，读不到元素就回到截图通道，不要反复试树**。\n' +
-              '- **不要调用 `panel_*`**：内置浏览器是青鸟窗口里的网页面板，只能操作网页，' +
-              '打不开也控制不了桌面上的应用（微信、资源管理器、外部浏览器窗口等），调它只会白跑一趟。'
-          )
-          desktopCtxRef.current = { sid, text }
-        } catch {
-          /* 注入失败不阻塞对话，路由约定里也写了同一条边界 */
-        }
-      }
-    }
     // 附件工具路由：只靠工具描述里的触发条件不够稳——模型看不到图片画面时往往直接回
     // 「我看不了图片」。这里点名本轮附件路径和该调的工具（noReply：AI 可见、界面不渲染）。
     const attFiles = attsOverride ?? []
@@ -2064,36 +1924,6 @@ export function ChatView(p: Props) {
               </div>
             </div>
           )}
-          {cuBlind && (
-            <div className="amsg">
-              <div className="msgnotice">
-                <Info size={13} />{' '}
-                <span>
-                  桌面控制要看屏幕截图，但<strong>没有任何模型能做视觉代看</strong>，AI 这轮看不到屏幕。
-                  请到 设置 → 模型，给有识图能力的模型勾上输入类型里的「视觉」（可与「图片」一起勾），
-                  它就会在控制电脑时替对话模型看画面。
-                </span>
-              </div>
-            </div>
-          )}
-          {/* 桌面控制醒目提示：AI 正在操作这台电脑，键鼠会自己动，用户要能一眼知道发生了什么 */}
-          {desktopBanner && (
-            <div className="amsg">
-              <div className={'cu-banner' + (desktopCtl ? ' live' : '')}>
-                {desktopCtl ? <LoaderCircle size={14} className="spin" /> : <Monitor size={14} />}
-                <div className="cu-text">
-                  <strong>{desktopCtl ? 'AI 正在控制你的电脑' : '桌面控制已启用'}</strong>
-                  <span>
-                    {desktopCtl
-                      ? '鼠标和键盘由 AI 操作中，请不要碰键鼠，以免打断它。'
-                      : '刚才的操作使用过鼠标和键盘。'}
-                    {cuVisionAssist &&
-                      ` 当前模型看不了画面，截图已交给视觉模型${cuVisionWho ? `「${cuVisionWho}」` : ''}代看。`}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )}
           {/*
             「调用其他模型」授权卡排在最前：它背后是一个**正在超时**的挂起调用（桌面代看只有 20s），
             排在最后会被别的弹窗挡住，用户还没看清就已经自动按拒绝处理了。
@@ -2217,15 +2047,12 @@ export function ChatView(p: Props) {
             className="ctext"
             value={input}
             rows={2}
-            readOnly={desktopCtl}
             placeholder={
-              desktopCtl
-                ? 'AI 正在控制桌面，输入已暂时锁定'
-                : busy
-                  ? '当前任务执行中，输入新需求可加入队列'
-                  : panelUrl && (manualBrowser || browserMax)
-                    ? '针对当前浏览器页面提问，AI 会直接操作这个浏览器'
-                    : 'Enter 发送 / Shift+Enter 换行'
+              busy
+                ? '当前任务执行中，输入新需求可加入队列'
+                : panelUrl && (manualBrowser || browserMax)
+                  ? '针对当前浏览器页面提问，AI 会直接操作这个浏览器'
+                  : 'Enter 发送 / Shift+Enter 换行'
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -2246,7 +2073,7 @@ export function ChatView(p: Props) {
               }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                if (!desktopCtl) send()
+                send()
               }
             }}
           />
@@ -2962,23 +2789,7 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   question: { name: '提问', icon: <HelpCircle size={13} /> },
   skill: { name: '技能', icon: <Sparkles size={13} /> },
   retry: { name: '重试', icon: <RotateCw size={13} /> },
-  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> },
-  // MCP 工具：内核注册时会拼上「服务名_工具名」，桌面键鼠那条就变成 computer-use_computer
-  // 这种重复到读不出来的名字。标签里只留服务名那一半（用户明确要求：就叫 computer-use）。
-  // 桌面控制全家族：用户要求每一手（截屏/按键/点击/粘贴…）都在界面可见，见 desktopCmd() 的命令摘要。
-  'computer-use_computer': { name: 'computer-use', icon: <Monitor size={13} /> },
-  'computer-use_set_clipboard': { name: '写入剪贴板', icon: <Monitor size={13} /> },
-  'desktop-helper_app_running': { name: '查应用进程', icon: <Cpu size={13} /> },
-  uia_windows: { name: '窗口列表', icon: <Monitor size={13} /> },
-  uia_tree: { name: '控件树', icon: <Search size={13} /> },
-  uia_click: { name: '点击控件', icon: <MousePointerClick size={13} /> },
-  uia_set_text: { name: '写入控件文本', icon: <Pencil size={13} /> },
-  uia_focus: { name: '聚焦控件', icon: <Monitor size={13} /> },
-  uia_window_focus: { name: '聚焦窗口', icon: <Monitor size={13} /> },
-  uia_keys: { name: '发送按键', icon: <Keyboard size={13} /> },
-  uia_paste: { name: '粘贴', icon: <Keyboard size={13} /> },
-  uia_read_input: { name: '读取输入框', icon: <FileText size={13} /> },
-  uia_foreground: { name: '前台窗口', icon: <Monitor size={13} /> }
+  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> }
 }
 
 /** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
@@ -3347,65 +3158,6 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 桌面控制类 MCP 工具全集：命令摘要 + 展开正文都走专用渲染 */
-const DESKTOP_TOOLS = new Set([
-  'computer-use_computer', 'computer-use_set_clipboard', 'desktop-helper_app_running',
-  'uia_windows', 'uia_tree', 'uia_click', 'uia_set_text', 'uia_focus', 'uia_window_focus',
-  'uia_keys', 'uia_paste', 'uia_read_input', 'uia_foreground'
-])
-
-/**
- * 桌面控制类工具的「正在执行的命令」摘要：把入参格式化成一行可读命令，
- * 显示在工具行折叠行上（用户要求：AI 操作电脑的每一手都要看得见，截屏/按键/点击/粘贴…）。
- * 非桌面工具返回 ''，走原通用 target 逻辑。
- */
-function desktopCmd(tool: string, inp: Record<string, unknown>): string {
-  const s = (k: string): string => str(inp[k])
-  const cut = (v: string, n = 60): string => (v.length > n ? v.slice(0, n) + '…' : v)
-  switch (tool) {
-    case 'computer-use_computer': {
-      const act = s('action')
-      const xy = Array.isArray(inp.coordinate) ? ` (${(inp.coordinate as unknown[]).map(String).join(',')})` : ''
-      if (act === 'key') return `key: ${s('text')}`
-      if (act === 'type') return `type: ${cut(s('text'))}`
-      if (act === 'scroll') return `scroll ${s('scroll_direction') || 'down'}${s('scroll_amount') ? ' ×' + s('scroll_amount') : ''}`
-      if (act === 'get_screenshot') return 'screenshot（截屏看画面）'
-      if (act === 'get_cursor_position') return 'cursor position（查鼠标位置）'
-      if (act === 'mouse_move') return `mouse_move${xy}`
-      if (act) return `${act}${xy}`
-      return ''
-    }
-    case 'computer-use_set_clipboard':
-      return s('mode') === 'file'
-        ? `剪贴板 ← 文件 ${cut(s('file_path') || s('file'), 45)}`
-        : `剪贴板 ← ${cut(s('text'), 45) || '（截图）'}`
-    case 'desktop-helper_app_running':
-      return `查进程: ${Array.isArray(inp.keywords) ? (inp.keywords as unknown[]).map(String).join(' / ') : s('keywords')}`
-    case 'uia_keys':
-      return `${s('keys')}${s('match') ? ` → 「${s('match')}」` : ''}`
-    case 'uia_paste':
-      return `粘贴${s('match') ? ` → 「${s('match')}」` : ''}${inp.enter === false || s('enter') === 'false' ? '（不回车）' : ''}`
-    case 'uia_window_focus':
-      return `聚焦窗口: ${s('title') || s('process')}`
-    case 'uia_focus':
-      return `聚焦控件: ${s('ref')}`
-    case 'uia_click':
-      return `点击: ${s('ref')}${s('text') ? `「${cut(s('text'), 30)}」` : ''}`
-    case 'uia_set_text':
-      return `写入文本 → ${s('ref')}: ${cut(s('text'), 45)}`
-    case 'uia_read_input':
-      return `读输入框${s('match') ? `:「${s('match')}」` : ''}`
-    case 'uia_windows':
-      return s('query') ? `列窗口: ${s('query')}` : '列窗口（含最小化，全量）'
-    case 'uia_tree':
-      return '读控件树'
-    case 'uia_foreground':
-      return '查前台窗口'
-    default:
-      return ''
-  }
-}
-
 function toolTarget(part: Part, projPath?: string): string {
   // 待办清单工具的输出是 JSON 数组（已渲染成任务卡），其标题「N todos」无信息量，不展示在工具行
   if ((part.tool ?? '').toLowerCase().includes('todo')) return ''
@@ -3413,8 +3165,6 @@ function toolTarget(part: Part, projPath?: string): string {
   if ((part.tool ?? '').toLowerCase() === 'invalid') return ''
   const inp = part.state?.input ?? {}
   // 桌面控制类：折叠行直接亮出正在执行的命令（key: ctrl+f / 点击: (960,540) / 粘贴 → 「微信」…），不猜通用字段
-  const dcmd = desktopCmd((part.tool ?? '').toLowerCase(), inp as Record<string, unknown>)
-  if (dcmd) return dcmd.length > 90 ? dcmd.slice(0, 90) + '…' : dcmd
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
   // 兜底内核生成的英文摘要 → 中文化（"4 todos"→"4条任务"、"Asked 2 questions"→"提问 2 个问题"）
@@ -3497,10 +3247,6 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
       const err = str(toolIn?.error)
       const cut = err.length > 2000 ? err.slice(0, 2000) + '\n…' : err
       body = <CodeBlock text={inner ? `「${zh}」工具的调用参数不完整，已让模型重写参数重试。\n${cut}` : cut} />
-    } else if (DESKTOP_TOOLS.has(tool)) {
-      // 桌面控制：展开正文 = 第一行正在执行的命令（与折叠行同源），后面跟工具回执；running 时命令先行可见
-      const cmd = desktopCmd(tool, (toolIn ?? {}) as Record<string, unknown>)
-      body = <CodeBlock text={rawOut ? (cmd ? cmd + '\n' : '') + rawOut : cmd || '（执行中…）'} />
     } else if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
@@ -3563,7 +3309,6 @@ function doingLabel(name: string): string {
     case '待办清单': return '正在整理任务'
     case '提问': return '等待回答'
     // 桌面控制家族：running 时跟的操作动词
-    case 'computer-use': return '正在操作桌面'
     case '写入剪贴板': return '正在放剪贴板'
     case '查应用进程': return '正在查进程'
     case '窗口列表': case '前台窗口': return '正在查看窗口'

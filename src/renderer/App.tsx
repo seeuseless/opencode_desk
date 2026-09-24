@@ -62,8 +62,7 @@ export default function App() {
     remote: false,
     mobile: false,
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
-    // 桌面控制默认关；access 'default' = 写操作要确认（均与主进程 DEFAULT_SETTINGS 一致）
-    desktopControl: false,
+    // access 'default' = 写操作要确认（与主进程 DEFAULT_SETTINGS 一致）
     access: 'default',
     // 「永久允许调用其他模型」清单：默认空，AI 每次要调别的模型都会先问
     modelAuth: []
@@ -633,7 +632,6 @@ export default function App() {
             onPickDir={addProject}
             access={access}
             onAccess={setAccess}
-            desktopControl={settings.desktopControl}
             onSwitchProject={(id) => {
               if (id === activeId) return
               setActiveId(id)

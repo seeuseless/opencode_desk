@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDesktopMcp, setMediaMcp, setMobileEnabled, setPanelMcp, setScreenMcp, setSelfRefs, setUiaMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
@@ -77,30 +77,6 @@ function createWindow(): void {
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
-  })
-  /**
-   * 把自己的原生窗口句柄与窗口标题一起报给 MCP 的键盘守卫。
-   *
-   * 为什么在有了 pid 之后还要这两样：
-   *  · pid 判据依赖「Electron 顶层窗口属于主进程」这个实现细节——Windows 上渲染进程所属的窗口、
-   *    以及后开的窗口常常报的是另一个 pid，光靠 pid 会漏判（实测就漏过：前台明明是青鸟的窗口，
-   *    却因为 pid 对不上而被放行，按键直接打进了用户的对话框）。
-   *  · 标题是兜底判据：应用今后开的任何窗口，标题都以本应用名开头，不依赖 pid 也不依赖句柄。
-   * 窗口建好才知道句柄、标题随后还可能被渲染层改写，而 MCP 的环境变量是内核启动时写死的——
-   * 所以这里持续记下来，下一次写配置（保存设置 → 重启内核）时自然带进去。
-   */
-  try {
-    const buf = mainWin.getNativeWindowHandle()
-    const hwnd = buf.length >= 8 ? Number(buf.readBigUInt64LE(0)) : buf.readUInt32LE(0)
-    const t = mainWin.getTitle()
-    if (Number.isFinite(hwnd) && hwnd > 0) setSelfRefs({ pids: [process.pid], hwnds: [hwnd], titles: t ? [t] : [] })
-  } catch {
-    /* 拿不到句柄就算了，pid 与标题那两道判据还在 */
-  }
-  // 渲染层会按当前会话改写标题（「青鸟 QingNiao — xxx」）；前缀匹配本来就能覆盖，
-  // 但标题若是被整体换掉的，这里把新标题也并进清单，避免守卫漏判。
-  mainWin.on('page-title-updated', (_e, t) => {
-    if (t) setSelfRefs({ titles: [t] })
   })
   const sendMax = (v: boolean) => mainWin?.webContents.send('win:maximized', v)
   mainWin.on('maximize', () => sendMax(true))
@@ -621,13 +597,6 @@ function panelMcpPath(): string {
     : join(app.getAppPath(), 'resources', 'mcp', 'panel-mcp.mjs')
 }
 
-/** 桌面辅助 MCP（app_running）脚本位置（随安装包分发） */
-function desktopMcpPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'desktop-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'mcp', 'desktop-mcp.mjs')
-}
-
 /** 媒体生成 MCP（生图/生视频工具）脚本位置（随安装包分发） */
 function mediaMcpPath(): string {
   return app.isPackaged
@@ -640,53 +609,6 @@ function visionMcpPath(): string {
   return app.isPackaged
     ? join(process.resourcesPath, 'vision-mcp.mjs')
     : join(app.getAppPath(), 'resources', 'mcp', 'vision-mcp.mjs')
-}
-
-/**
- * 桌面控制的底层依赖 computer-use-mcp（截屏 + 键鼠）在**哪里**。
- *
- * 为什么必须有一份可直接跑的本地副本：screen-mcp 底下要 spawn 它，若靠
- * `npx -y computer-use-mcp` 现场拉包，实测**即便命中缓存也要 ~8 秒**才吐第一行，
- * 内核启动时的 MCP 握手等不了这么久 → computer-use 被判失败，桌面控制就只剩
- * app_running（用户看到的就是「开了却没有截屏/点击/输入」）。直连本地入口约 2.4 秒且不联网。
- *
- * 三级查找，取第一个命中的：
- *  1. **随包内置**（resources/mcp/cu-mcp，electron-builder extraResources 带进安装包）——
- *     开箱即用、完全离线，这是正常路径；
- *  2. 老版本装到用户数据目录的那份（~/.qingniaoai/opencode/node_modules）——平滑过渡；
- *  3. 都没有 → 返回空串，配置里回落 npx（仍可用，只是慢且依赖网络）。
- */
-function builtinComputerUseMcp(): string {
-  const rel = join('node_modules', 'computer-use-mcp', 'dist', 'main.js')
-  const candidates = [
-    // 打包态：extraResources 平铺到 resources 根
-    join(process.resourcesPath, 'cu-mcp', rel),
-    // dev：项目根 package.json 已把它列为依赖，装完直接就在根 node_modules
-    join(app.getAppPath(), rel),
-    // dev：跑过 prepare:cu-mcp 生成的自包含副本
-    join(app.getAppPath(), 'resources', 'mcp', 'cu-mcp', rel),
-    // 老版本预装到用户数据目录的那份
-    join(opencodeConfigDir(), rel)
-  ]
-  return candidates.find((p) => existsSync(p)) ?? ''
-}
-
-/** 电脑控制视觉叠加 MCP（给收不了图的模型把截图读成文字）脚本位置（随安装包分发） */
-function screenMcpPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'screen-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'mcp', 'screen-mcp.mjs')
-}
-
-/**
- * UIA 桌面 MCP（读 Windows 无障碍树、按元素名点击/输入）脚本位置（随安装包分发）。
- * 同目录还必须带上 uia-host.ps1：uia-mcp.mjs 靠 import.meta.url 从**自己所在目录**找那个宿主，
- * 所以打包时两个文件都平铺到 resources 根（见 electron-builder.yml 的 extraResources）。
- */
-function uiaMcpPath(): string {
-  return app.isPackaged
-    ? join(process.resourcesPath, 'uia-mcp.mjs')
-    : join(app.getAppPath(), 'resources', 'mcp', 'uia-mcp.mjs')
 }
 
 /** 语音合成 MCP（generate_speech 配音工具）脚本位置（随安装包分发） */
@@ -1223,15 +1145,8 @@ app.whenReady().then(async () => {
   const panelPort = await startPanelApi() // 面板浏览器控制端点：MCP 配置要带上端口，先于内核配置
   syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前
   setPanelMcp({ path: panelMcpPath(), port: panelPort })
-  setDesktopMcp({ path: desktopMcpPath() })
   setMediaMcp({ path: mediaMcpPath() })
   setVisionMcp({ path: visionMcpPath() })
-  setScreenMcp({ path: screenMcpPath(), upstreamBin: builtinComputerUseMcp() })
-  setUiaMcp({ path: uiaMcpPath() })
-  // 「不要往这些窗口里输入」清单：主进程自己的 pid。窗口的原生句柄要等 createWindow
-  // 之后才有，那时补进 selfRefs（下一次重启内核时写进 MCP 环境）。pid 这一步已经够用——
-  // Chromium 的顶层窗口句柄就属于主进程。
-  setSelfRefs({ pids: [process.pid] })
   setTtsMcp({ path: ttsMcpPath() })
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })

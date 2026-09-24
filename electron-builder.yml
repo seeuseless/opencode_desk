@@ -89,8 +89,7 @@ files:
   # 原理同上：含原生可执行文件（.exe/.node）的包会被"自动解包"整包搬进去。
   #   @img/sharp-*（28MB，sharp 只在一次性脚本 scripts/gen-icon.mjs 里用）
   #   clipboardy（1MB，其 fallback .exe 触发了解包）
-  #   @nut-tree-fork（1.5MB，computer-use-mcp 的依赖；MCP 是独立 node 进程，
-  #                   resources/mcp/screen-mcp.mjs 用 `npx -y computer-use-mcp` 现拉）
+  #   @nut-tree-fork（1.5MB，computer-use-mcp 的依赖；MCP 是独立 node 进程）
   - "!node_modules/@img/**"
   - "!node_modules/clipboardy/**"
   - "!node_modules/@nut-tree-fork/**"
@@ -107,35 +106,12 @@ extraResources:
   # 面板浏览器 MCP 脚本（AI 操控右侧面板 webview 的工具端）
   - from: resources/mcp/panel-mcp.mjs
     to: panel-mcp.mjs
-  # 桌面辅助 MCP 脚本（app_running 查进程，防桌面控制重复启动应用实例）
-  - from: resources/mcp/desktop-mcp.mjs
-    to: desktop-mcp.mjs
   # 媒体生成 MCP 脚本（generate_image / create_video / check_video，让对话模型也能生图生视频）
   - from: resources/mcp/media-mcp.mjs
     to: media-mcp.mjs
   # 图片理解 MCP 脚本（describe_image，非视觉模型发图时由视觉模型代看）
   - from: resources/mcp/vision-mcp.mjs
     to: vision-mcp.mjs
-  # 电脑控制视觉叠加 MCP 脚本（代理 computer-use-mcp，把截图读成文字给收不了图的模型）
-  - from: resources/mcp/screen-mcp.mjs
-    to: screen-mcp.mjs
-  # computer-use-mcp 自包含副本（scripts/prepare-cu-mcp.mjs 生成，dist 前自动跑）。
-  # 打包态主进程从 resources/cu-mcp 读取（builtinComputerUseMcp() 候选 1）：
-  # 开箱即用、完全离线——用户机器没有 Node.js / npx 也能正常桌面控制
-  - from: resources/mcp/cu-mcp
-    to: cu-mcp
-  # UIA 桌面 MCP 脚本（读 Windows 无障碍树，按元素名点击/输入——桌面控制的首选通道，不吃图片输入）
-  - from: resources/mcp/uia-mcp.mjs
-    to: uia-mcp.mjs
-  # UIA 常驻宿主（PowerShell + UI Automation）。**必须与 uia-mcp.mjs 平铺在同一目录**：
-  # 薄壳靠 import.meta.url 从自己所在目录找它，放子目录就找不到
-  - from: resources/mcp/uia-host.ps1
-    to: uia-host.ps1
-  # 原生键盘输入层（SendInput 组合键 + 「不往青鸟自己窗口输入」守卫）。
-  # **必须与 uia-mcp.mjs / screen-mcp.mjs 平铺在同一目录**：前者 dot-source 它，后者按
-  # 相对路径 spawn 它；而且 screen-mcp 内的 win-input.ps1 走同一份实现，放子目录两边都找不到
-  - from: resources/mcp/win-input.ps1
-    to: win-input.ps1
   # 语音合成 MCP 脚本（generate_speech，把文字配成音频）
   - from: resources/mcp/tts-mcp.mjs
     to: tts-mcp.mjs

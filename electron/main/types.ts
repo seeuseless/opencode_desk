@@ -259,15 +259,6 @@ export interface Settings {
   /** 平台登录态（第三方 provider 与它并存，不互相影响） */
   platform: PlatformCfg
   /**
-   * 桌面控制（截屏 + 模拟键鼠操作本机）是否启用，**默认关**。
-   *
-   * 这是个很重的能力：开了以后 AI 能看整块屏幕、能动键盘鼠标，风险面远大于读写文件。
-   * 所以不做成内置默认项，交给用户在「设置 → 浏览器与扩展」里自己打开——
-   * 开关同时控制 desktop-helper（app_running 查进程）与 computer-use（截屏键鼠）两个 MCP，
-   * 见 config.ts buildOpencodeConfig。
-   */
-  desktopControl: boolean
-  /**
    * 访问权限档位，**全局一份、对所有文件夹生效**（默认 'default'：写操作要确认）。
    *
    * 为什么不按目录存：内核的 permission 是一份全局配置，按目录存再合并回去只是自欺；
@@ -293,7 +284,6 @@ export const DEFAULT_SETTINGS: Settings = {
   remote: false,
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
-  desktopControl: false,
   access: 'default',
   modelAuth: []
 }

@@ -732,10 +732,6 @@ export function SettingsView(p: Props) {
       setFormMsg({ text: 'playwright 为内置浏览器保留名，请换一个', bad: true })
       return
     }
-    if (name === 'computer-use') {
-      setFormMsg({ text: 'computer-use 为桌面控制保留名，请换一个', bad: true })
-      return
-    }
     const list = p.settings.mcps
     if (list.some((x, i) => x.name === name && i !== mcpDraft.index)) {
       setFormMsg({ text: '同名 MCP 已存在：' + name, bad: true })
@@ -773,20 +769,6 @@ export function SettingsView(p: Props) {
     applySettings(
       { ...p.settings, mcps: p.settings.mcps.filter((_, k) => k !== i) },
       { note: `将删除 MCP「${m.name}」。` }
-    )
-  }
-
-  /**
-   * 桌面控制开关：同时管 computer-use（截屏 + 键鼠）与 desktop-helper（app_running 查进程）两个内置 MCP。
-   *
-   * **默认关**——开了以后 AI 能看整块屏幕、能动键盘鼠标，风险面远大于读写文件，
-   * 所以不做成内置默认项，由用户在这里显式打开（落盘后走 applySettings → 重启内核生效）。
-   */
-  async function toggleDesktopControl() {
-    const on = !p.settings.desktopControl
-    applySettings(
-      { ...p.settings, desktopControl: on },
-      { note: on ? '将启用桌面控制（截屏 + 模拟键鼠）。' : '将停用桌面控制。' }
     )
   }
 
@@ -1123,24 +1105,9 @@ export function SettingsView(p: Props) {
             </button>
           </h3>
           <p className="sec-tip">
-            桌面控制（截屏 + 模拟键鼠）能看屏幕、能动键鼠，风险较高，默认关闭，需要时在下面自行打开。
             也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
           </p>
           <div className="mcp-list">
-          {/* 桌面控制：与下面用户自加的 MCP 一样带开关，但它是内置项、不可删除（关闭即停用）。
-              不做常灰提示，开关关掉只是行内开关的断开，不整行变灰 */}
-          <div className="prow builtin">
-            <Switch checked={!!p.settings.desktopControl} onChange={() => void toggleDesktopControl()} />
-            <span className="prow-ico"><Monitor size={15} /></span>
-            <div className="prow-main">
-              <div className="prow-name">
-                桌面控制
-              </div>
-              <div className="prow-url">
-                AI 可截屏并模拟键鼠操作电脑（需模型支持图片输入），仅用于用户点名要操作桌面的时候
-              </div>
-            </div>
-          </div>
           {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
           {p.settings.mcps.map((m, i) => (
             <div key={m.name} className="prow">

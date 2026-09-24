@@ -178,11 +178,20 @@ input, textarea { font: inherit; }
 .col { width: 100%; max-width: 820px; margin: 0 auto; }
 
 .shell { display: flex; height: 100vh; }
-.app { flex: 1; display: flex; min-height: 0; }
-/* 右列：标题栏 + 内容区（侧栏独占左侧全高，一直顶到窗口最上面） */
-.rightcol { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.app { flex: 1; display: flex; min-height: 0; background: var(--side-bg); }
+/* 右列：标题栏 + 内容区（侧栏独占左侧全高，一直顶到窗口最上面）。
+   右列整体做成悬浮卡片：与窗口边缘留出缝隙露出底色，配圆角更有层次 */
+.rightcol {
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
+  margin: 8px 8px 8px 0;
+  background: var(--content);
+  border-radius: 12px;
+  overflow: hidden;
+}
+/* 浏览器面板放大时侧栏隐藏、面板要铺满整窗：卡片缝隙与圆角一并还原 */
+.app:has(.browser-panel.max) .rightcol { margin: 0; border-radius: 0; }
 
-/* ================= 自绘标题栏（只在右列上方，底色跟聊天内容面） ================= */
+/* ================= 自绘标题栏（只在右列上方，底色跟右列内容面一致） ================= */
 .titlebar {
   height: 40px; min-height: 40px;
   display: flex; align-items: center; gap: 2px;
@@ -192,8 +201,7 @@ input, textarea { font: inherit; }
 }
 .tb-drag { flex: 1; height: 100%; }
 .tb-btn { -webkit-app-region: no-drag; width: 40px; height: 100%; border-radius: 0; }
-/* 标题栏内的窗口/功能按钮都在右段内容色块上，用内容区配色
-   （沿用通用 .icon-btn 的 --fg2/--line；彩色主题面板是深色块，若沿用 --side-fg 白字会没进浅色底里） */
+/* 标题栏内的窗口/功能按钮都在右段内容色块上，用内容区配色（--fg2/--line） */
 .titlebar .icon-btn { color: var(--fg2); }
 .titlebar .icon-btn:hover { background: var(--line); color: var(--fg); }
 .tb-close:hover { background: #e0245e; color: #fff; }
@@ -317,7 +325,8 @@ input, textarea { font: inherit; }
 /* 内容容器：对话/欢迎与设置面板共用，设置面板以覆盖层叠在其上——对话组件保持挂载，任务不中断 */
 .content { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 /* 设置面板：绝对覆盖右侧内容区，左侧任务列表仍可点；对话不被卸载，AI 输出与轮询照常进行 */
-.main.settings { position: absolute; inset: 0; z-index: 20; }
+/* 设置页盖在内容区上：底色跟聊天内容面（--content）一致，别露出窗体灰底 */
+.main.settings { position: absolute; inset: 0; z-index: 20; background: var(--content); }
 
 /* 无项目时的引导页 */
 .welcome { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--content); }
@@ -341,25 +350,6 @@ input, textarea { font: inherit; }
 }
 .msgerr svg { flex-shrink: 0; margin-top: 3px; }
 .msgerr span { flex: 1; min-width: 0; }
-
-/* 桌面控制提示横幅：AI 正在操作本机，键鼠会自己动——用醒目底色，别让用户以为是卡了/中了病毒 */
-.cu-banner {
-  display: flex; align-items: flex-start; gap: 9px;
-  padding: 9px 12px; margin: 8px 0; border-radius: 10px;
-  background: color-mix(in srgb, #e08c1a 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #e08c1a 50%, transparent);
-  color: var(--fg);
-}
-.cu-banner svg { flex-shrink: 0; margin-top: 2px; color: #e08c1a; }
-/* 进行中：改用主题强调色，与「AI 正在动」的实时态呼应 */
-.cu-banner.live {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
-}
-.cu-banner.live svg { color: var(--accent); }
-.cu-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.cu-text strong { font-size: 13px; font-weight: 600; }
-.cu-text span { font-size: 12.5px; color: var(--fg2); line-height: 1.6; }
 
 /* 本轮额外调用过的模型汇总（识图 / 生图 / 配音…）：挂在 AI 回复末尾，
    用虚线分隔 + 弱化色小字，既让人对得上账，又不至于抢正文的注意力。

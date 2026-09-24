@@ -12,7 +12,7 @@ const base = 'http://127.0.0.1:' + (process.argv[2] || '39521')
 const TOOLS = [
   {
     name: 'navigate',
-    description: '在应用内右侧的面板浏览器中打开网址。打开网页/链接/上网一律默认用本工具：面板与用户看的是同一个浏览器（共享登录态），打开后先 panel_snapshot 获取页面元素再操作。**不要为「看看有没有打开」去 computer-use_computer 截屏**——面板的页面状态用 panel_snapshot 读文本就够了，截屏又慢又要求模型支持图片输入。只有用户明确点名要在桌面上、外部真实浏览器里打开时，才改用 computer-use_computer。\n**要进站点的某个页面时，优先从 panel_snapshot 的清单里找链接点进去**：清单里 a 标签后面 `→ /path` 就是站点自己给出的真实地址，点它的 ref 即可，比猜地址可靠得多。**只有你确知完整地址时才直接用本工具**——不要靠拼 /invite、/my/xxx 这类路径去试探站点有没有那个页面（回执里的 ok:false /「导航未生效」就是这条路走不通的信号）。',
+    description: '在应用内右侧的面板浏览器中打开网址。打开网页/链接/上网一律默认用本工具：面板与用户看的是同一个浏览器（共享登录态），打开后先 panel_snapshot 获取页面元素再操作。面板的页面状态用 panel_snapshot 读文本就够了。\n**要进站点的某个页面时，优先从 panel_snapshot 的清单里找链接点进去**：清单里 a 标签后面 `→ /path` 就是站点自己给出的真实地址，点它的 ref 即可，比猜地址可靠得多。**只有你确知完整地址时才直接用本工具**——不要靠拼 /invite、/my/xxx 这类路径去试探站点有没有那个页面（回执里的 ok:false /「导航未生效」就是这条路走不通的信号）。',
     inputSchema: { type: 'object', properties: { url: { type: 'string', description: '完整网址，http(s):// 开头' } }, required: ['url'] }
   },
   {

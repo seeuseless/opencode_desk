@@ -478,7 +478,7 @@ async function generateImage(args) {
     if (refs.dropped.length) parts.push(`（注意：以下参考图没能用上：${refs.dropped.join('；')}）`)
     if (file)
       parts.push(
-        '（要把这张图**发给别人**——微信 / QQ / 邮件等——用 `computer-use_set_clipboard`：' +
+        '（生成的图保存在上面这条本地路径里，直接把路径告诉用户即可：' +
           `mode="image" 或 "file"，files 填上面这条本地路径，然后到目标窗口按 Ctrl+V。` +
           '**不要用识图工具去「看」自己刚生成的图**，你不需要看见画面，路径就是全部证据。）'
       )
@@ -767,7 +767,7 @@ async function checkVideo(args) {
       else parts.push(`（没能拿到成品文件，原始返回：${JSON.stringify(last).slice(0, 400)}）`)
       if (local)
         parts.push(
-          '（要把它**发给别人**：用 `computer-use_set_clipboard` 的 mode="file" 把上面这条本地路径放进剪贴板，再到目标窗口按 Ctrl+V。）'
+          '（把它**发给别人**超出了本应用的能力范围：请把上面这条本地路径告诉用户，由用户自行发送。）'
         )
       return parts.join('\n')
     }
