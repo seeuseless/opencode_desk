@@ -12,6 +12,8 @@ import type {
   SkillDraft,
   SkillItem,
   SkillScope,
+  ScheduleRan,
+  ScheduleTask,
   UsageLog,
   UsagePage,
   UsageRecord,
@@ -101,6 +103,21 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('openExternal', url),
   /** 在系统文件管理器里打开某个文件夹（左栏项目右键菜单「打开文件夹」）；返回空串表示成功 */
   openFolder: (path: string): Promise<string> => ipcRenderer.invoke('folder:open', path),
+  /** 计划任务清单（左栏「计划任务」区块）；数据与调度器都在主进程 */
+  scheduleList: (): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:list'),
+  /** 新建/保存计划任务（同一 id 即覆盖），返回落盘后的最新清单 */
+  scheduleSave: (t: ScheduleTask): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:save', t),
+  /** 删除计划任务（会话历史保留），返回最新清单 */
+  scheduleRemove: (id: string): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:remove', id),
+  /** 立即执行一次：主进程在「任务」目录建会话并发 prompt；返回执行结果 */
+  scheduleRunNow: (id: string): Promise<{ ok: boolean; sessionId?: string; error?: string }> =>
+    ipcRenderer.invoke('schedule:runNow', id),
+  /** 计划任务执行完成（到点自动触发/手动立即执行）：刷新左栏会话列表用 */
+  onScheduleRan: (cb: (r: ScheduleRan) => void): (() => void) => {
+    const handler = (_: unknown, r: ScheduleRan): void => cb(r)
+    ipcRenderer.on('schedule:ran', handler)
+    return () => ipcRenderer.removeListener('schedule:ran', handler)
+  },
   /** 保存聊天里的图片/视频：远程地址下载、本地路径复制，弹系统另存为对话框；返回空串表示成功 */
   saveMedia: (source: string, name?: string): Promise<string> => ipcRenderer.invoke('media:save', { source, name }),
   /** 读本地图片为 data URL（聊天内嵌显示本地图用）；非图片或不存在的返回空串 */

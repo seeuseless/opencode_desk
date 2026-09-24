@@ -576,3 +576,36 @@ export interface PlatformAccount {
   /** 本机设备名（平台侧登记的这台电脑，未注册为 undefined） */
   device?: string
 }
+
+// ---------- 计划任务（左侧栏「计划任务」区块，主进程调度器持有） ----------
+
+/** 定时方式：每天/每周在指定时刻，或每隔 N 小时 */
+export type ScheduleSpec =
+  | { kind: 'daily'; hour: number; minute: number }
+  | { kind: 'weekly'; day: number; hour: number; minute: number } // day: 1-7（周一..周日）
+  | { kind: 'hourly'; everyHours: number }
+
+/** 一条计划任务：到点由主进程在内置「任务」目录新建会话并发送 prompt */
+export interface ScheduleTask {
+  id: string
+  name: string
+  prompt: string
+  spec: ScheduleSpec
+  enabled: boolean
+  /** 创建时间戳；hourly 型在没有 lastRun 时以它为锚推下次执行 */
+  createdAt: number
+  /** 持久化的下次执行时刻（错过即跳过、推进到下个周期） */
+  nextRun: number
+  lastRun?: number
+  /** 最近一次执行产出的内核会话 id（点开可看结果） */
+  lastSession?: string
+  /** 最近一次执行失败原因（成功时清除，界面提示用） */
+  lastError?: string
+}
+
+/** 主进程推给渲染层的「计划任务执行完成」通知 */
+export interface ScheduleRan {
+  taskId: string
+  sessionId: string
+  name: string
+}

@@ -352,16 +352,18 @@ export function ChatView(p: Props) {
   const diffsBusy = useRef<Set<string>>(new Set())
 
   // ---------- 浏览面板 ----------
-  // AI 调用浏览器工具（playwright MCP，headless）时右侧滑出：内嵌 webview 直接渲染页面，地址栏跟随 AI 的导航。
-  // 用户关掉后同一会话内不再自动弹出，切到其他会话恢复；会话无浏览器活动时面板收起。
-  const [browserOpen, setBrowserOpen] = useState(false)
+  // 面板的**可见性只由用户点击决定**：AI 调浏览器工具不弹面板，但 webview 一直活着，
+  // AI 照常能导航、读元素、点、输入。分开两件事：panelBorn 管 webview 挂没挂（挂上就不卸），
+  // panelOpen 管用户看不看得见。
+  /** webview 是否已挂载：用户点开过、或 AI 首次调浏览器工具时置 true，此后不再复位 */
+  const [panelBorn, setPanelBorn] = useState(false)
+  /** 面板是否可见：只有用户点标题栏按钮/点对话里的链接/进浏览模式才会置 true */
+  const [panelOpen, setPanelOpen] = useState(false)
   const [browserMax, setBrowserMax] = useState(false)
   /** 放大时右下角浮动聊天卡是否展开 */
   const [floatOpen, setFloatOpen] = useState(false)
   /** 全屏时彻底隐藏 AI 对话：浮动卡收起 + 右下角气泡一并消失（打游戏等完全不需要对话的场景） */
   const [chatHidden, setChatHidden] = useState(false)
-  /** 浏览模式：用户从输入框手动进入的全屏浏览器，不随会话浏览器活动自动开关 */
-  const [manualBrowser, setManualBrowser] = useState(false)
   /** 面板当前页 URL（含用户手输导航，BrowserPanel 回传）：浏览器对话的上下文锚点 */
   const [panelUrl, setPanelUrl] = useState('')
   /** 浏览器收藏夹：地址栏星标收藏 / 取消，全屏时顶部收藏条展示（localStorage 持久化） */

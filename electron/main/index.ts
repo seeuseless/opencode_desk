@@ -12,6 +12,8 @@ import { AUTH_PROTOCOL, platform } from './platform.ts'
 import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
 import { cancelDownload, checkUpdate, downloadUpdate, installUpdate, openReleasePage, setUpdateSink, updateState } from './updater.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
+import { readSchedules, removeSchedule, runScheduleNow, startScheduler, upsertSchedule } from './scheduler.ts'
+import type { ScheduleTask } from './types.ts'
 
 /**
  * 主进程职责：
@@ -380,17 +382,22 @@ app.on('web-contents-created', (_e, wc) => {
   }
 })
 
-/** 面板没开时通知渲染层打开，并等它创建好（MCP navigate 场景：AI 想浏览而面板关着） */
+/**
+ * 拿到面板 webview，必要时让渲染层挂一个并等它就绪。
+ *
+ * 面板的**可见性归用户**：AI 调用浏览器工具不该把面板弹出来，所以这里只发 wake
+ * 让渲染层挂载（可以隐藏着）webview，不去动任何「打开面板」的状态。
+ */
 async function ensurePanel(): Promise<WebContents> {
   if (panelWc && !panelWc.isDestroyed()) return panelWc
-  mainWin?.webContents.send('opencode:event', { type: 'qingniao.browser.open' })
+  mainWin?.webContents.send('opencode:event', { type: 'qingniao.browser.wake' })
   // 等待窗口足够久（渲染层要挂载 webview、分区会话要就绪）。太短会让模型拿到
   // 「面板浏览器未打开」后反复重试同一个调用——用户看到的就是「一直在找」。
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 300))
     if (panelWc && !panelWc.isDestroyed()) return panelWc
   }
-  throw new Error('面板浏览器未能打开：已通知界面打开右侧浏览面板，但 6 秒内没等到它就绪。请让用户手动点一下右侧的浏览器面板，然后重试。')
+  throw new Error('内置浏览器未能初始化：已请求界面挂载面板，但 6 秒内没等到 webview 就绪。请重试，若持续失败请重启应用。')
 }
 
 /** 页面可交互元素采集：给可见元素打 data-qref 编号，输出 AI 可读的清单 */
@@ -1063,6 +1070,12 @@ ipcMain.handle('skills:openDir', (_e, req: { scope: SkillScope; projectPath?: st
   return shell.openPath(dir)
 })
 
+// ---------- 计划任务（左栏「计划任务」区块：数据 + 触发都在主进程，关窗驻留托盘也照跑） ----------
+ipcMain.handle('schedule:list', () => readSchedules())
+ipcMain.handle('schedule:save', (_e, t: ScheduleTask) => upsertSchedule(t))
+ipcMain.handle('schedule:remove', (_e, id: string) => removeSchedule(id))
+ipcMain.handle('schedule:runNow', (_e, id: string) => runScheduleNow(id))
+
 // 自绘标题栏的窗口控制
 ipcMain.on('win:min', () => mainWin?.minimize())
 ipcMain.on('win:max', () => {
@@ -1183,6 +1196,12 @@ app.whenReady().then(async () => {
   createWindow()
 
   createTray() // 右上角 X 隐藏后驻留托盘，点图标恢复
+
+  // 计划任务调度器：关窗只隐藏、进程驻留托盘，到点照跑；
+  // 错过的时刻（当时应用没在跑）不补跑——schedules.json 读入时已把过期的 nextRun 推进到下个周期
+  startScheduler(workspace, (r) => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('schedule:ran', r)
+  })
 
   // 设备注册是异步的（要向平台换一张设备 token），注册完才知道二维码内容，
   // 所以状态一变就主动推给渲染层——否则登录后面板一直停在「二维码生成中…」。

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FolderPlus, Settings } from 'lucide-react'
+import { FolderPlus, Settings, X } from 'lucide-react'
 import { Sidebar, type AccessLevel, type Project } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
 import { SettingsView } from './components/SettingsView'
@@ -117,8 +117,19 @@ export default function App() {
 
   useEffect(() => save('qingniao.expanded', expanded), [expanded])
 
-  // App 级 SSE 监听：busy 事实源与 ChatView 生命周期解耦。
-  // ChatView 卸载（切走/切设置页）后 side 加载图标仍能正确更新，不残留。
+  useEffect(() => {
+    if (view !== 'settings') return
+    const close = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setSettingsReq(null)
+      setView('chat')
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [view])
+
+  // App 级 SSE 监听：busy 事实源与 ChatView 内部事件处理解耦。
+  // 侧栏加载图标直接由这里的会话级状态更新，不依赖 ChatView 重新挂载。
   useEffect(() => {
     const off = window.qingniao.onEvent((raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
@@ -241,9 +252,7 @@ export default function App() {
   /**
    * 打开设置页并定位到某一页（对话框里的「配置模型」、左栏账号入口都走这里）。
    *
-   * 设置页是盖在内容区之上的覆盖层，而左侧任务列表始终可点：用户点任务想回对话，
-   * 若只切了内容区、覆盖层还留着，看着就像"点了没反应"——所以下面所有要进对话的动作
-   * 都走 toChat()，顺手把这条定位请求清掉。
+   * 设置用居中浮层展示，背后对话保持挂载；关闭统一走 toChat()，顺手清掉定位请求。
    */
   function openSettingsAt(t: SettingsTab) {
     setSettingsTab(t)
@@ -251,7 +260,7 @@ export default function App() {
     setView('settings')
   }
 
-  /** 进对话：收起设置覆盖层（点任务 / 点项目 / 新建会话都用它） */
+  /** 进对话：关闭设置浮层（关闭设置 / 点任务 / 点项目 / 新建会话都用它） */
   function toChat() {
     setSettingsReq(null)
     setView('chat')
@@ -644,33 +653,49 @@ export default function App() {
         ) : (
           <Welcome onAddProject={addProject} onOpenSettings={() => openSettingsAt('providers')} />
         )}
-        {view === 'settings' && (
-          <SettingsView
-            settings={settings}
-            onSave={saveSettingsAll}
-            saving={saving}
-            theme={theme}
-            onTheme={setTheme}
-            custom={custom}
-            onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
-            onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
-            projectPath={activeProject?.path ?? null}
-            projectName={activeProject?.name ?? null}
-            model={model}
-            tab={settingsTab}
-            onTab={setSettingsTab}
-            req={settingsReq}
-            platform={platformSt}
-            platformBusy={platformBusy}
-            onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
-            onLogout={() => void platformAction(() => window.qingniao.platformLogout())}
-            onSetBaseUrl={(url) => void platformAction(() => window.qingniao.platformSetBaseUrl(url))}
-            onSubmitCode={(code) => void platformAction(() => window.qingniao.platformSubmitCode(code))}
-          />
-        )}
         </div>
         </div>
       </div>
+
+      {view === 'settings' && (
+        <div
+          className="settings-mask"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) toChat()
+          }}
+        >
+          <div className="settings-layer" role="dialog" aria-modal="true" aria-label="设置">
+            <header className="settings-head">
+              <h3>设置</h3>
+              <button className="icon-btn" onClick={toChat} title="关闭">
+                <X size={17} />
+              </button>
+            </header>
+            <SettingsView
+              settings={settings}
+              onSave={saveSettingsAll}
+              saving={saving}
+              theme={theme}
+              onTheme={setTheme}
+              custom={custom}
+              onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
+              onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
+              projectPath={activeProject?.path ?? null}
+              projectName={activeProject?.name ?? null}
+              model={model}
+              tab={settingsTab}
+              onTab={setSettingsTab}
+              req={settingsReq}
+              platform={platformSt}
+              platformBusy={platformBusy}
+              onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
+              onLogout={() => void platformAction(() => window.qingniao.platformLogout())}
+              onSetBaseUrl={(url) => void platformAction(() => window.qingniao.platformSetBaseUrl(url))}
+              onSubmitCode={(code) => void platformAction(() => window.qingniao.platformSubmitCode(code))}
+            />
+          </div>
+        </div>
+      )}
 
       {notice && (
         <Modal title="操作没成功" onClose={() => setNotice('')}>
