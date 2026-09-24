@@ -456,7 +456,8 @@ export default function App() {
     // 先落 UI 状态：开关即刻翻转（乐观更新），内核重启在后台完成
     setSettings(next)
     try {
-      // 主进程写 ~/.qingniaoai 并重启内核后返回，配置即刻生效
+      // 主进程写 ~/.qingniaoai 即返回（内核重启转后台进行，通常数秒）；
+      // 重启完成的界面刷新走 qingniao.kernel.started / kernel.unhealthy 事件桥
       await window.qingniao.saveSettings(next)
     } catch (e) {
       // 重启失败/超时：回读磁盘上的真实设置，并弹窗说清原因——不然按钮一转就再没下文，

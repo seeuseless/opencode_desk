@@ -119,7 +119,8 @@ Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例�
 ~/.qingniaoai/data/              XDG_DATA_HOME：OpenCode 会话存储
 ~/.qingniaoai/state/             XDG_STATE_HOME
 ~/.qingniaoai/updates/           更新包下载目录（设置 → 关于里下载的安装包，点「立即安装」时执行它）
-~/qingniaoai-workspace/          默认"工作台"项目目录
+~/.qingniaoai/workspace/         默认"工作台"项目目录（旧版散在 ~/qingniaoai-workspace，首次启动自动迁到这里）
+~/.qingniaoai/media/             AI 生成的图片 / 视频 / 音频
 ```
 
 以上是应用层数据；**项目记忆不在这里**——它写在被添加为项目的那个目录里，跟仓库走：

@@ -35,6 +35,13 @@ const VISION_TARGETS = parse(process.env.QN_VISION_TARGETS)
 const UPSTREAM_CMD = process.env.QN_SCREEN_UPSTREAM_CMD || 'npx'
 const UPSTREAM_ARGS = parse(process.env.QN_SCREEN_UPSTREAM_ARGS)
 if (!UPSTREAM_ARGS.length) UPSTREAM_ARGS.push('-y', 'computer-use-mcp')
+/**
+ * Windows 上 npx/npm 是 .cmd 批处理，裸 spawn('npx') 不带 shell 会直接 ENOENT——
+ * 「npx 安装没自动执行」就是这里：回落路径从未真正启动过。必须套一层 cmd /c 才能跑。
+ * 本地直连（Electron 二进制 / 绝对路径 main.js）不受影响，不走这层包装。
+ */
+const UPSTREAM_NEEDS_SHELL =
+  process.platform === 'win32' && /^(npx|npm)(\.cmd)?$/i.test(UPSTREAM_CMD.trim())
 
 /**
  * 兜底超时（毫秒）：**桌面控制的每一步都必须有上限，绝不能无限等**。
@@ -114,7 +121,13 @@ let upReadyReject
  * 对真正的 node / npx 这一项会被忽略，无副作用。
  */
 const upEnv = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-const up = spawn(UPSTREAM_CMD, UPSTREAM_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: upEnv })
+const up = UPSTREAM_NEEDS_SHELL
+  ? spawn('cmd.exe', ['/d', '/s', '/c', UPSTREAM_CMD, ...UPSTREAM_ARGS], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+      env: upEnv
+    })
+  : spawn(UPSTREAM_CMD, UPSTREAM_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: upEnv })
 up.stderr.on('data', (d) => process.stderr.write(d))
 up.on('error', (e) => {
   process.stderr.write(`[screen-mcp] 上游启动失败：${e?.message ?? e}\n`)
@@ -250,7 +263,12 @@ const STATIC_TOOLS = [
       '**读不到元素就立刻回到截图通道，不要反复试树**——自绘界面（微信 4.0 这类把 UI 画在画布上的应用）' +
       '`uia_tree` 是空的，实测只剩标题栏三个按钮。\n' +
       '**青鸟自己的窗口永远不会被输入**：当前最前面是青鸟（用户正在对话的这个窗口）时，key/type 会被**直接拒绝**——' +
-      '这是保护用户输入框的一道闸，不是故障；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n\n' +
+      '这是保护用户输入框的一道闸，不是故障；照回执改用带 `match` 的 `uia_keys` / `uia_paste` 即可。\n' +
+      '**严禁点窗口右上角的「— ✕」按钮**（最小化 / 关闭，坐标点击与 uia_click 都算）：微信、QQ 这类应用点 ✕ ' +
+      '**不是退出，是缩进系统托盘**——窗口直接消失、任务栏图标挪位，之后你就「找不到」它了，用户会觉得你把他的应用关了。' +
+      '把应用「打开」= 用 `uia_window_focus` 把已有窗口提到前台即可；只有用户的任务本身就是关闭应用时才允许点 ✕。\n' +
+      '**窗口突然不见了 ≠ 应用退出**：先 `uia_windows` 重列一遍窗口（可能被最小化 / 缩进托盘），' +
+      '微信缩进托盘后用截图通道点任务栏 / 托盘图标唤回，**绝不要重新启动应用**。\n\n' +
       'Use a mouse and keyboard to interact with a computer, and take screenshots.\n' +
       '* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\n' +
       '* Always prefer using keyboard shortcuts rather than clicking, where possible.\n' +

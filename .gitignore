@@ -22,6 +22,12 @@ dist
 /.workbuddy
 /.gitcheck.txt
 
+# computer-use-mcp 自包含副本（scripts/prepare-cu-mcp.mjs 生成，dist 前自动重建，不入库）
+/resources/mcp/cu-mcp/
+
+# yarn 本地缓存
+/.yarn-cache/
+
 # 本地调试脚本与输出（不入库）
 /qn_*
 *.log

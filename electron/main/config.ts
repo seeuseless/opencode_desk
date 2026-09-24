@@ -694,10 +694,13 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   } else if (desktopOn) {
-    // 兜底（screen 脚本缺失）：退回直接挂原始的 computer-use-mcp
+    // 兜底（screen 脚本缺失）：退回直接挂原始的 computer-use-mcp。
+    // Windows 上 npx 是 .cmd 批处理，内核若按可执行文件直接 spawn 会 ENOENT，套一层 cmd /c。
     mcp['computer-use'] = upstreamLocal
       ? { type: 'local', command: [process.execPath, upstreamBin], enabled: true }
-      : { type: 'local', command: ['npx', '-y', 'computer-use-mcp'], enabled: true }
+      : process.platform === 'win32'
+        ? { type: 'local', command: ['cmd', '/c', 'npx', '-y', 'computer-use-mcp'], enabled: true }
+        : { type: 'local', command: ['npx', '-y', 'computer-use-mcp'], enabled: true }
   }
   for (const m of s.mcps) {
     if (m.type === 'remote') {
@@ -794,10 +797,17 @@ export function writeOpencodeConfig(s: Settings): void {
               '既拿不到新信息、又每次多花一次视觉模型调用。结果明显不对就如实告诉用户并停下。\n'
             : '若你收不到画面（只看到尺寸文字、没有「【电脑画面】」段落），说明当前没有配置视觉模型：' +
               '如实说明并让用户到 设置 → 模型 给带视觉能力的模型勾选「图片」输入，**不要退化成写脚本硬猜**。\n') +
-          '- 「打开某应用」动手前必须先调 `desktop-helper_app_running` 查该应用是否已在运行（传英文进程名/拼音关键词，如微信 ["wechat","weixin"]）：\n' +
-          '  已在运行 → 严禁再用 Win+R / 双击图标启动第二个实例，改为把它提到前台：`uia_window_focus "<窗口标题>"`' +
-          '（标题拿不准就先 `uia_windows` 列出所有窗口）；窗口确实不在、又找不到入口（系统托盘等）时才截一张屏找它。\n' +
-          '  未在运行 → 才走启动流程，启动后用 `uia_windows` 确认窗口出现。\n' +
+          '- 「打开 / 切换到某应用」的**最快路径（全程 2 次调用、零截图）**：\n' +
+          '  ① `uia_windows` 列出所有在运行的软件——它等价于任务栏 + Alt+Tab，**包括最小化的窗口**（min=true 标记）；\n' +
+          '  ② 在清单里认准目标窗口（按标题或进程名，微信的进程名是 weixin）→ `uia_window_focus "<标题或进程名>"` 一步聚焦，' +
+          '最小化的会被自动还原并提到前台 → 直接进行下一步操作（发键 / 粘贴 / 点元素）。\n' +
+          '  只有 `uia_windows` 里没有目标窗口、且 `desktop-helper_app_running` 也查不到进程时，才走「启动应用」流程。\n' +
+          '- 「打开某应用」= 把已有窗口提到前台就完事，**全程严禁点「— 最小化 / ✕ 关闭」按钮**（截图坐标点与 uia_click 都算）：\n' +
+          '  微信、QQ 这类应用点 ✕ 不是退出，是**缩进系统托盘**——窗口直接消失、任务栏图标挪位（跑到最右边），\n' +
+          '  之后你就「找不到」它了，用户看到的是「AI 把我的微信关了」。只有任务本身就是「关闭 XX」才允许点 ✕。\n' +
+          '- **窗口突然不见了 ≠ 应用退出**：最小化的在 `uia_windows` 里（min=true，uia_window_focus 直接唤回）；\n' +
+          '  连窗口清单里都没有的（微信点 ✕ 缩进托盘那种），用截图通道点任务栏 / 托盘图标唤回即可；\n' +
+          '  **绝不要重新启动应用、更不要启动新实例**。\n' +
           '- 「打开某应用」直接就是任务：第一步调 `desktop-helper_app_running`，不要先截屏猜、更不要直接 Win+R。'
         : // 桌面控制没开：本轮**没有** computer-use_computer / app_running 工具，不能让模型去找它们。
           // 明确告知「用户可以在哪打开」，比让模型反复试一个不存在的工具好。
@@ -807,6 +817,18 @@ export function writeOpencodeConfig(s: Settings): void {
           '模拟键鼠来绕过**——这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。')
   )
   instructions.push(routing)
+  // 文件系统边界（2026-09-24 用户要求）：青鸟自身数据只放 ~/.qingniaoai，项目操作不越界。
+  // 单独一份指令文件而不是塞进路由约定——它管的是「能在哪儿写文件」，与工具路由是两回事。
+  const boundary = join(opencodeConfigDir(), 'qingniao-boundary.md')
+  writeFileSync(
+    boundary,
+    '# 文件系统边界\n' +
+      '- 青鸟应用自身的一切数据（配置、会话、生成的图片 / 视频 / 音频、内置「任务」目录）只存在 `~/.qingniaoai` 之下，**不要在用户家目录新建任何别的目录**。\n' +
+      '- **除当前项目目录和 `~/.qingniaoai` 之外，不要在任何位置创建 / 修改 / 删除文件或文件夹**：\n' +
+      '  产物默认放当前项目目录；当前没有具体项目（内置「任务」）时放 `~/.qingniaoai/workspace`。\n' +
+      '- 在项目里干活时**只处理当前项目内的文件**；确需写到别的目录，先停下来问用户、拿到明确指定的路径再动手。\n'
+  )
+  instructions.push(boundary)
   /**
    * 工具路由约定（常驻指令）：模型看不到图片画面、或没意识到有生图工具时，光靠工具 description 里的
    * 触发条件基本不会调工具——实测它会直接回「我看不了图片」、或改用写代码的方式画图。这块把规则写进

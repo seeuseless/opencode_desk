@@ -119,6 +119,11 @@ extraResources:
   # 电脑控制视觉叠加 MCP 脚本（代理 computer-use-mcp，把截图读成文字给收不了图的模型）
   - from: resources/mcp/screen-mcp.mjs
     to: screen-mcp.mjs
+  # computer-use-mcp 自包含副本（scripts/prepare-cu-mcp.mjs 生成，dist 前自动跑）。
+  # 打包态主进程从 resources/cu-mcp 读取（builtinComputerUseMcp() 候选 1）：
+  # 开箱即用、完全离线——用户机器没有 Node.js / npx 也能正常桌面控制
+  - from: resources/mcp/cu-mcp
+    to: cu-mcp
   # UIA 桌面 MCP 脚本（读 Windows 无障碍树，按元素名点击/输入——桌面控制的首选通道，不吃图片输入）
   - from: resources/mcp/uia-mcp.mjs
     to: uia-mcp.mjs

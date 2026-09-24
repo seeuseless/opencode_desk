@@ -30,6 +30,7 @@ using System.Runtime.InteropServices;
 public class QnW32 {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, IntPtr e);
@@ -110,6 +111,9 @@ function Get-WindowList {
           proc = [string]$pn
           pid  = [int]$c.ProcessId
           fg   = ([int]$c.NativeWindowHandle -eq $fg)
+          # 最小化标记：min=true 的窗口依然"在运行"，uia_window_focus 会自动还原并提前台，
+          # 千万不要因为它看不见就重启应用
+          min  = [bool][QnW32]::IsIconic([IntPtr][int]$c.NativeWindowHandle)
           rect = (RectOf $w)
         })
       }

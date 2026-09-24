@@ -1,5 +1,5 @@
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type OpenDialogOptions, type WebContents } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { join, resolve, basename } from 'node:path'
@@ -23,8 +23,11 @@ import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 
 let mainWin: BrowserWindow | null = null
 
-// agent 的默认工作目录（"工作台"项目）
-const workspace = join(app.getPath('home'), 'qingniaoai-workspace')
+// agent 的默认工作目录（"工作台"项目）。
+// 收在 ~/.qingniaoai 内，**不放 ~/qingniaoai-workspace**——青鸟自己的东西（配置、会话、
+// 生成的媒体、工作台）必须全部收敛到 ~/.qingniaoai 一个地方，不在用户家目录散落新目录
+// （2026-09-24 用户反馈：右击任务打开的是 ~/qingniaoai-workspace，但生成文件在 ~/.qingniaoai，两处分裂）。
+const workspace = join(qingniaoHome(), 'workspace')
 
 /**
  * dev：node_modules/opencode-ai/bin；打包：resources/bin（electron-builder extraResources 拷贝）。
@@ -708,11 +711,16 @@ ipcMain.handle('settings:get', () => loadSettings())
 /** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
 ipcMain.handle('kernel:health', () => adapter.isHealthy())
 
-// 保存即生效：写 ~/.qingniaoai 并重启内核（provider/MCP 变更后需重载）
+// 保存即生效：写 ~/.qingniaoai 并重启内核（provider/MCP 变更后需重载）。
+// 重启**后台进行、不 await**（2026-09-24 用户反馈：弹窗要陪内核重启走完才关，太慢）——
+// 内核冷启动要数秒，设置先落盘、IPC 立即返回让弹窗马上关掉；重启完成后的界面刷新
+// 由事件桥负责（qingniao.kernel.started / kernel.unhealthy，ChatView 已有整套处理）。
+// restart() 内部自带串行 + 合并，连点保存不会并发 spawn 多个内核。
 ipcMain.handle('settings:save', async (_e, s: Settings) => {
   saveSettings(s)
-  await adapter.restart()
-  // 「远程服务」这个全局总开关（只能改配置文件）：关掉它要顺手把中转通道停掉（一个请求都不再发）
+  void adapter.restart().catch((e: unknown) => console.error('[opencode] 设置变更后重启内核失败', e))
+  // 「远程服务」这个全局总开关（只能改配置文件）：关掉它要顺手把中转通道停掉（一个请求都不再发）。
+  // apply() 只看登录态/开关，不依赖内核端口，不必等重启完成。
   relay.apply()
 })
 
@@ -729,7 +737,8 @@ ipcMain.handle('settings:setAccess', async (_e, req: { level: AccessLevel }) => 
   // 返回落盘后的完整 Settings：渲染层 setSettings(await setAccess(level)) 靠它回读，
   // 不 return 的话渲染层拿到 undefined，下一次渲染 settings.access 直接崩（白屏）。
   const s = setAccess(req?.level === 'full' ? 'full' : 'default')
-  await adapter.restart()
+  // 与 settings:save 同因：内核重启后台进行，不陪弹窗跑完全程（生效靠 kernel.started 事件刷新）
+  void adapter.restart().catch((e: unknown) => console.error('[opencode] 切换权限后重启内核失败', e))
   relay.apply()
   return s
 })
@@ -1117,12 +1126,11 @@ ipcMain.handle('skills:remove', async (_e, req: { scope: SkillScope; projectPath
  * 运行中不会热更新。改动后必须重启内核才会被模型看到——与 MCP/提供商变更同一机制。
  */
 async function reloadKernelForSkills(): Promise<void> {
-  try {
-    await adapter.restart()
-  } catch (e) {
-    // 重启失败不吞掉用户刚保存的文件；内核侧会走 onUnhealthy 提示渲染层
+  // 后台重启、不 await（与 settings:save 同因：技能弹窗不必陪内核冷启动跑完全程）。
+  // 重启失败不吞掉用户刚保存的文件；内核侧会走 onUnhealthy 提示渲染层自动恢复。
+  void adapter.restart().catch((e: unknown) => {
     console.error('[skills] 重启内核失败：', e instanceof Error ? e.message : e)
-  }
+  })
 }
 
 /** 在系统文件管理器里打开技能目录，方便手动编辑 */
@@ -1200,6 +1208,17 @@ app.whenReady().then(async () => {
   // Windows 任务栏图标归属（否则 dev 模式可能沿用 Electron 默认图标）
   app.setAppUserModelId('com.qingniao.desktop')
   Menu.setApplicationMenu(null) // 去掉原生菜单，交互全部走应用内 UI
+  // 旧版把工作台散在 ~/qingniaoai-workspace，现收编到 ~/.qingniaoai/workspace：
+  // 新位置还没有内容且旧目录存在时**一次性改名搬走**（保留用户已有任务文件）；
+  // 两处都在（用户新旧版本都跑过）则不动旧目录——不替用户删数据，留给用户自行清理。
+  const legacyWorkspace = join(app.getPath('home'), 'qingniaoai-workspace')
+  if (!existsSync(workspace) && existsSync(legacyWorkspace)) {
+    try {
+      renameSync(legacyWorkspace, workspace)
+    } catch {
+      /* 搬不动（目录被占用等）就落到下面的 mkdirSync 新建空目录，旧目录用户可手动删 */
+    }
+  }
   mkdirSync(workspace, { recursive: true })
   const panelPort = await startPanelApi() // 面板浏览器控制端点：MCP 配置要带上端口，先于内核配置
   syncBuiltinSkills() // 技能是内核启动时加载的，同步要在拉起内核之前

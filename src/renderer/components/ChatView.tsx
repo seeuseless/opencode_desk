@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, DESKTOP_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, hasVisionModel, visionModelName, isDesktopIntent, isGenIntent, modelSupportsImage, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
@@ -2965,7 +2965,20 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   invalid: { name: '无效调用', icon: <AlertCircle size={13} /> },
   // MCP 工具：内核注册时会拼上「服务名_工具名」，桌面键鼠那条就变成 computer-use_computer
   // 这种重复到读不出来的名字。标签里只留服务名那一半（用户明确要求：就叫 computer-use）。
-  'computer-use_computer': { name: 'computer-use', icon: <Monitor size={13} /> }
+  // 桌面控制全家族：用户要求每一手（截屏/按键/点击/粘贴…）都在界面可见，见 desktopCmd() 的命令摘要。
+  'computer-use_computer': { name: 'computer-use', icon: <Monitor size={13} /> },
+  'computer-use_set_clipboard': { name: '写入剪贴板', icon: <Monitor size={13} /> },
+  'desktop-helper_app_running': { name: '查应用进程', icon: <Cpu size={13} /> },
+  uia_windows: { name: '窗口列表', icon: <Monitor size={13} /> },
+  uia_tree: { name: '控件树', icon: <Search size={13} /> },
+  uia_click: { name: '点击控件', icon: <MousePointerClick size={13} /> },
+  uia_set_text: { name: '写入控件文本', icon: <Pencil size={13} /> },
+  uia_focus: { name: '聚焦控件', icon: <Monitor size={13} /> },
+  uia_window_focus: { name: '聚焦窗口', icon: <Monitor size={13} /> },
+  uia_keys: { name: '发送按键', icon: <Keyboard size={13} /> },
+  uia_paste: { name: '粘贴', icon: <Keyboard size={13} /> },
+  uia_read_input: { name: '读取输入框', icon: <FileText size={13} /> },
+  uia_foreground: { name: '前台窗口', icon: <Monitor size={13} /> }
 }
 
 /** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
@@ -3334,12 +3347,74 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+/** 桌面控制类 MCP 工具全集：命令摘要 + 展开正文都走专用渲染 */
+const DESKTOP_TOOLS = new Set([
+  'computer-use_computer', 'computer-use_set_clipboard', 'desktop-helper_app_running',
+  'uia_windows', 'uia_tree', 'uia_click', 'uia_set_text', 'uia_focus', 'uia_window_focus',
+  'uia_keys', 'uia_paste', 'uia_read_input', 'uia_foreground'
+])
+
+/**
+ * 桌面控制类工具的「正在执行的命令」摘要：把入参格式化成一行可读命令，
+ * 显示在工具行折叠行上（用户要求：AI 操作电脑的每一手都要看得见，截屏/按键/点击/粘贴…）。
+ * 非桌面工具返回 ''，走原通用 target 逻辑。
+ */
+function desktopCmd(tool: string, inp: Record<string, unknown>): string {
+  const s = (k: string): string => str(inp[k])
+  const cut = (v: string, n = 60): string => (v.length > n ? v.slice(0, n) + '…' : v)
+  switch (tool) {
+    case 'computer-use_computer': {
+      const act = s('action')
+      const xy = Array.isArray(inp.coordinate) ? ` (${(inp.coordinate as unknown[]).map(String).join(',')})` : ''
+      if (act === 'key') return `key: ${s('text')}`
+      if (act === 'type') return `type: ${cut(s('text'))}`
+      if (act === 'scroll') return `scroll ${s('scroll_direction') || 'down'}${s('scroll_amount') ? ' ×' + s('scroll_amount') : ''}`
+      if (act === 'get_screenshot') return 'screenshot（截屏看画面）'
+      if (act === 'get_cursor_position') return 'cursor position（查鼠标位置）'
+      if (act === 'mouse_move') return `mouse_move${xy}`
+      if (act) return `${act}${xy}`
+      return ''
+    }
+    case 'computer-use_set_clipboard':
+      return s('mode') === 'file'
+        ? `剪贴板 ← 文件 ${cut(s('file_path') || s('file'), 45)}`
+        : `剪贴板 ← ${cut(s('text'), 45) || '（截图）'}`
+    case 'desktop-helper_app_running':
+      return `查进程: ${Array.isArray(inp.keywords) ? (inp.keywords as unknown[]).map(String).join(' / ') : s('keywords')}`
+    case 'uia_keys':
+      return `${s('keys')}${s('match') ? ` → 「${s('match')}」` : ''}`
+    case 'uia_paste':
+      return `粘贴${s('match') ? ` → 「${s('match')}」` : ''}${inp.enter === false || s('enter') === 'false' ? '（不回车）' : ''}`
+    case 'uia_window_focus':
+      return `聚焦窗口: ${s('title') || s('process')}`
+    case 'uia_focus':
+      return `聚焦控件: ${s('ref')}`
+    case 'uia_click':
+      return `点击: ${s('ref')}${s('text') ? `「${cut(s('text'), 30)}」` : ''}`
+    case 'uia_set_text':
+      return `写入文本 → ${s('ref')}: ${cut(s('text'), 45)}`
+    case 'uia_read_input':
+      return `读输入框${s('match') ? `:「${s('match')}」` : ''}`
+    case 'uia_windows':
+      return s('query') ? `列窗口: ${s('query')}` : '列窗口（含最小化，全量）'
+    case 'uia_tree':
+      return '读控件树'
+    case 'uia_foreground':
+      return '查前台窗口'
+    default:
+      return ''
+  }
+}
+
 function toolTarget(part: Part, projPath?: string): string {
   // 待办清单工具的输出是 JSON 数组（已渲染成任务卡），其标题「N todos」无信息量，不展示在工具行
   if ((part.tool ?? '').toLowerCase().includes('todo')) return ''
   // 无效调用的内核标题是英文「Invalid Tool」，折叠行只留中文名+错误图标
   if ((part.tool ?? '').toLowerCase() === 'invalid') return ''
   const inp = part.state?.input ?? {}
+  // 桌面控制类：折叠行直接亮出正在执行的命令（key: ctrl+f / 点击: (960,540) / 粘贴 → 「微信」…），不猜通用字段
+  const dcmd = desktopCmd((part.tool ?? '').toLowerCase(), inp as Record<string, unknown>)
+  if (dcmd) return dcmd.length > 90 ? dcmd.slice(0, 90) + '…' : dcmd
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
   // 兜底内核生成的英文摘要 → 中文化（"4 todos"→"4条任务"、"Asked 2 questions"→"提问 2 个问题"）
@@ -3422,6 +3497,10 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
       const err = str(toolIn?.error)
       const cut = err.length > 2000 ? err.slice(0, 2000) + '\n…' : err
       body = <CodeBlock text={inner ? `「${zh}」工具的调用参数不完整，已让模型重写参数重试。\n${cut}` : cut} />
+    } else if (DESKTOP_TOOLS.has(tool)) {
+      // 桌面控制：展开正文 = 第一行正在执行的命令（与折叠行同源），后面跟工具回执；running 时命令先行可见
+      const cmd = desktopCmd(tool, (toolIn ?? {}) as Record<string, unknown>)
+      body = <CodeBlock text={rawOut ? (cmd ? cmd + '\n' : '') + rawOut : cmd || '（执行中…）'} />
     } else if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
@@ -3483,6 +3562,18 @@ function doingLabel(name: string): string {
     case '子任务': return '正在执行子任务'
     case '待办清单': return '正在整理任务'
     case '提问': return '等待回答'
+    // 桌面控制家族：running 时跟的操作动词
+    case 'computer-use': return '正在操作桌面'
+    case '写入剪贴板': return '正在放剪贴板'
+    case '查应用进程': return '正在查进程'
+    case '窗口列表': case '前台窗口': return '正在查看窗口'
+    case '控件树': return '正在读取控件树'
+    case '点击控件': return '正在点击'
+    case '写入控件文本': return '正在写入'
+    case '聚焦控件': case '聚焦窗口': return '正在聚焦'
+    case '发送按键': return '正在按键'
+    case '粘贴': return '正在粘贴'
+    case '读取输入框': return '正在核对输入框'
     default: return '进行中'
   }
 }

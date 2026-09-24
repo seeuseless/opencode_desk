@@ -29,7 +29,7 @@ export interface Project {
   /** 添加时间，作为排序兜底 */
   added?: number
   /**
-   * 内置的「任务」目录：内核自己的 workspace（`~/qingniaoai-workspace`）。
+   * 内置的「任务」目录：内核自己的 workspace（`~/.qingniaoai/workspace`）。
    * 它由主进程创建、始终可用，所以**不提供移除**——列表被清空后只剩它一个落脚点，
    * 否则用户会把目录全删光、连「往哪放东西」都没了。
    * 恒排在最前（渲染时单独摘出来先画，见下方 render 注释）。
