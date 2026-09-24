@@ -198,7 +198,7 @@ function ScheduleModal({
   }
 
   return (
-    <Modal title={initial ? '计划任务' : '新建计划任务'} onClose={onClose}>
+    <Modal title={initial ? '计划任务' : '新建计划任务'} onClose={onClose} wide>
       <div className="sched-form">
         <label>
           任务名称

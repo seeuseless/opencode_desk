@@ -1498,6 +1498,8 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .sched-pick .menu-trigger:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--field-line)); }
 /* 面板向上弹（见 SchedulesView 注释），宽度不小于触发器、给足选项文字，最长 24 项看得全 */
 .sched-pick .menu-panel { min-width: max(100%, 150px); max-height: 230px; }
+/* 最右那个下拉的面板右对齐：贴着左边缘展开会顶出弹窗，把内容区挤出横向滚动条 */
+.sched-pick > .menu-wrap:last-child .menu-panel { left: auto; right: 0; }
 
 /* 启用行：左文案 + 右开关 */
 .sched-on {
