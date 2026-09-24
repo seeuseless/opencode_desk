@@ -7,16 +7,21 @@
 #   3. git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 #      → 本工作流自动跑：Windows / macOS 上分别构建安装包，上传到对应 Release 的附件。
 #
-# 为什么附件名必须固定成「青鸟-Setup.exe」：
+# 为什么附件名必须固定成「QingNiao-Setup.exe」：
 #   应用内"一键下载"用的地址是
-#     https://github.com/seeuseless/opencode_desk/releases/latest/download/青鸟-Setup.exe
+#     https://github.com/seeuseless/opencode_desk/releases/latest/download/QingNiao-Setup.exe
 #   这条路**不经过 api.github.com**，是国内能直连的下载方式；代价是附件名不能带版本号，
 #   每次发版覆盖同名附件。历史版本靠 git tag 与各自的 Release 页面追溯。
 #   （名字由 electron-builder.yml 的 artifactName 决定，本工作流只负责上传，不再改名）
 #
+# ⚠️ 文件名用英文 `QingNiao`、不用中文「青鸟」：GitHub 的附件名与
+#   `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名在下载端
+#   表现不稳（转义后地址对不上、部分环境直接拿不到）。**只有产物文件名改英文**，
+#   应用本身仍叫「青鸟」（productName 不变），快捷方式与窗口标题不受影响。
+#
 # 两个平台各自的附件名（都由 electron-builder.yml 决定，改一处即可）：
-#   · Windows：青鸟-Setup.exe              （artifactName: ${productName}-Setup.${ext}）
-#   · macOS  ：青鸟-Setup-arm64.dmg / .zip （mac.artifactName 带 ${arch}，多架构不互相覆盖）
+#   · Windows：QingNiao-Setup.exe              （artifactName: QingNiao-Setup.${ext}）
+#   · macOS  ：QingNiao-Setup-arm64.dmg / .zip （mac.artifactName 带 ${arch}，多架构不互相覆盖）
 #   mac 侧的文件名与主进程 updater.ts 的 MAC_DMG_NAME 常量必须一致，否则应用内更新找不到包。
 #
 # ⚠️ 已知踩过的坑（2026-09-22 首次发版，连续失败多次，修完才通）：
@@ -137,13 +142,13 @@ jobs:
       #   一旦 artifactName 没生效——比如产物还叫「青鸟 Setup 1.0.0.exe」这种带版本号的默认名——
       #   上传步骤就会报错或静默跳过，Release 建出来却是空的，且日志里不易看出源头。
       #   所以这里主动断言文件名，不对就立刻红掉并打出实际内容，便于一眼定位。
-      - name: 校验安装包名（必须是 青鸟-Setup.exe）
+      - name: 校验安装包名（必须是 QingNiao-Setup.exe）
         shell: bash
         run: |
           echo "dist 实际内容："
           ls -l dist
-          if [ ! -f "dist/青鸟-Setup.exe" ]; then
-            echo "::error::未找到 dist/青鸟-Setup.exe——检查 electron-builder.yml 的 artifactName 是否生效"
+          if [ ! -f "dist/QingNiao-Setup.exe" ]; then
+            echo "::error::未找到 dist/QingNiao-Setup.exe——检查 electron-builder.yml 的 artifactName 是否生效"
             exit 1
           fi
           echo "✓ 安装包名正确"
@@ -179,7 +184,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/青鸟-Setup.exe
+          files: dist/QingNiao-Setup.exe
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
@@ -237,7 +242,7 @@ jobs:
 
       # dist:mac 里串的是 electron-builder --mac；这里额外关掉签名自动发现，
       # 否则没有钥匙串证书时 electron-builder 会要求签名而失败。
-      # 产物：青鸟-Setup-arm64.dmg / 青鸟-Setup-arm64.zip（macos-latest 是 Apple Silicon）
+      # 产物：QingNiao-Setup-arm64.dmg / QingNiao-Setup-arm64.zip（macos-latest 是 Apple Silicon）
       - name: 构建 macOS 安装包（未签名）
         run: yarn dist:mac --publish never
         env:
@@ -305,8 +310,8 @@ jobs:
         shell: bash
         run: |
           grep -n "MAC_DMG_NAME" electron/main/updater.ts
-          if ! ls dist/青鸟-Setup-arm64.dmg >/dev/null 2>&1; then
-            echo "::error::未找到 dist/青鸟-Setup-arm64.dmg"
+          if ! ls dist/QingNiao-Setup-arm64.dmg >/dev/null 2>&1; then
+            echo "::error::未找到 dist/QingNiao-Setup-arm64.dmg"
             echo "::error::主进程 updater.ts 的 MAC_DMG_NAME 期望这个文件名；"
             echo "::error::若实际产物名不同（如 arch 不是 arm64），请同步改 MAC_DMG_NAME 或 mac.artifactName"
             ls -l dist
@@ -319,8 +324,8 @@ jobs:
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            dist/青鸟-Setup-arm64.dmg
-            dist/青鸟-Setup-arm64.zip
+            dist/QingNiao-Setup-arm64.dmg
+            dist/QingNiao-Setup-arm64.zip
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

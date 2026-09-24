@@ -17,7 +17,7 @@ productName: 青鸟
 # ⚠️ publish: null 是**必需**的，不是可选项（2026-09-22 CI 实测踩到，连续两次踩坑）：
 #   本项目**不使用 electron-builder 的更新元数据**（app-update.yml）——
 #   应用内更新读的是 resources/update.json + GitHub Releases 的
-#   /releases/latest/download/青鸟-Setup.exe 固定地址（见下方 artifactName 说明）。
+#   /releases/latest/download/QingNiao-Setup.exe 固定地址（见下方 artifactName 说明）。
 #
 #   不写 publish 会怎样：electron-builder 从 package.json 的 repository 字段
 #   （github.com/seeuseless/opencode_desk）**推断出 provider=github**，
@@ -42,10 +42,16 @@ directories:
   output: dist
   buildResources: resources
 # 安装包文件名**写死不含版本号**，这是"应用内检查更新"能自动找到下载地址的前提：
-# 地址规则固定为 https://github.com/{repo}/releases/latest/download/青鸟-Setup.exe，
+# 地址规则固定为 https://github.com/{repo}/releases/latest/download/QingNiao-Setup.exe，
 # 不用先查 GitHub API（国内对 api.github.com 常不通）就能直接下最新版。
 # 因此**每次发版都必须覆盖上传同名附件**，历史版本靠 git tag 与 Release 说明追溯。
-artifactName: ${productName}-Setup.${ext}
+#
+# ⚠️ 文件名前缀写死英文 `QingNiao`，**不要改回 ${productName}**（那会产出「青鸟-Setup.exe」）：
+#   GitHub 的 `releases/latest/download/<名>` 直链、以及上传附件后的 asset 名称对非 ASCII
+#   字符要转义，中文名会让下载链接/文件名在各端表现不稳（转义、显示乱码、个别环境直接拿不到）。
+#   注意这只是**产物文件名**：应用本身仍叫「青鸟」（productName 不变），桌面快捷方式、
+#   开始菜单项、窗口标题都还是中文，改的只是发到 GitHub 的那个安装包文件。
+artifactName: QingNiao-Setup.${ext}
 files:
   - out/**
   - resources/image/icon.png
@@ -133,7 +139,7 @@ win:
   target:
     - nsis
   # 与顶层同名（显式写一遍，避免将来顶层被改时这里悄悄跟着变）
-  artifactName: ${productName}-Setup.${ext}
+  artifactName: QingNiao-Setup.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -145,7 +151,7 @@ mac:
     - zip
   category: public.app-category.productivity
   # mac 上多架构产物同名会互相覆盖，故单独带 arch（与主进程 updater.ts 的 MAC_DMG_NAME 对应）
-  artifactName: ${productName}-Setup-${arch}.${ext}
+  artifactName: QingNiao-Setup-${arch}.${ext}
   # 个人自用 / 无 Apple Developer 账号时，可在调用 dist:mac 脚本前导出：
   #   export CSC_IDENTITY_AUTO_DISCOVERY=false
   # 否则 electron-builder 会要求签名（公证另需 Apple 公证服务）。

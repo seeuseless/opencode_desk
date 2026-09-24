@@ -73,9 +73,13 @@ function readMeta(): UpdateMeta {
  * mac 侧带 arch 后缀是因为 electron-builder.yml 的 mac.artifactName 用了 ${arch}——
  * 多架构产物若同名会互相覆盖。当前 CI 用 macos-latest（Apple Silicon），故为 arm64；
  * 将来若加了 x64 mac 构建或换了 runner，记得同步这里的兜底值。
+ *
+ * 前缀是英文 `QingNiao` 而非中文「青鸟」：GitHub 对非 ASCII 的附件名要 URL 转义，
+ * 中文名会让 `releases/latest/download/<名>` 这条固定直链在各端不稳（见
+ * electron-builder.yml 的 artifactName 注释）。改这里必须同步改那边的 artifactName。
  */
-const WIN_SETUP_NAME = '青鸟-Setup.exe'
-const MAC_DMG_NAME = '青鸟-Setup-arm64.dmg'
+const WIN_SETUP_NAME = 'QingNiao-Setup.exe'
+const MAC_DMG_NAME = 'QingNiao-Setup-arm64.dmg'
 
 /**
  * 版本号归一化：0.0.1 / v0.0.1 / 0.1.0-beta.1 → 可直接比较的数字段 + 预发布标识。

@@ -44,8 +44,12 @@ yarn dist:mac      # electron-builder 打 macOS dmg/zip
 >
 > | 平台 | 安装包 |
 > | --- | --- |
-> | Windows | `青鸟-Setup.exe`（文件名固定不含版本号） |
-> | macOS | `青鸟-Setup-arm64.dmg`（另有 `.zip`） |
+> | Windows | `QingNiao-Setup.exe`（文件名固定不含版本号） |
+> | macOS | `QingNiao-Setup-arm64.dmg`（另有 `.zip`） |
+>
+> 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
+> `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名下载不稳。
+> 只是**安装包文件名**这样，应用本身和快捷方式仍然叫「青鸟」。
 >
 > - Windows 未做代码签名，SmartScreen 首次运行可能提示"未知发布者"，选「更多信息 → 仍要运行」。
 > - macOS 未做签名与公证，首次打开需**右键 →「打开」**绕过 Gatekeeper（直接双击会被拦下）。
@@ -81,13 +85,13 @@ git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 3. 把安装包挂到该 tag 对应的 Release 附件上
 
 Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例如无签名证书、runner 环境波动）
-也不会拦下 Windows 的发版，Release 里仍会正常出现 `青鸟-Setup.exe`。
+也不会拦下 Windows 的发版，Release 里仍会正常出现 `QingNiao-Setup.exe`。
 
 用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**。
 
 > ⚠️ **附件名是固定的，每次发版覆盖上传同名附件**（不带版本号）。
 > 这是应用内"一键下载"能自动找到地址的前提：它走
-> `releases/latest/download/青鸟-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
+> `releases/latest/download/QingNiao-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
 > 历史版本靠 git tag 与各自的 Release 页面追溯。
 
 发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
@@ -109,7 +113,7 @@ Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例�
 10. 自绘标题栏与全部控件（无原生菜单/下拉/弹窗），图标库 lucide，无手写 SVG
 11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
 12. 技能（Skills）：设置页可视化管理 `SKILL.md`，按**全局 / 项目**两组展示，支持新建、编辑、改名、删除与打开目录，保存前按内核规则校验 frontmatter（名称规范、描述必填、描述长度）；模型平时只看到「名称 + 描述」，判断需要才读全文，不占常驻上下文
-13. 更新提示：设置 → 关于里检查新版本（对着 GitHub Releases 比版本号），有新版本就显示更新说明并支持**一键下载 → 立即安装重启**，全程不用去浏览器翻 Release 页；下载走 `releases/latest/download/青鸟-Setup.exe` 固定地址，不经 `api.github.com`，国内可直连
+13. 更新提示：设置 → 关于里检查新版本（对着 GitHub Releases 比版本号），有新版本就显示更新说明并支持**一键下载 → 立即安装重启**，全程不用去浏览器翻 Release 页；下载走 `releases/latest/download/QingNiao-Setup.exe` 固定地址，不经 `api.github.com`，国内可直连
 
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 

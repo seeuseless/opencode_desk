@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-09-24T08:43:37.417Z",
+  "generatedAt": "2026-09-24T13:20:28.805Z",
   "items": [
     {
       "name": "@types/node",
@@ -26,13 +26,6 @@
       "name": "@vitejs/plugin-react",
       "declared": "^5.2.0",
       "version": "5.2.0",
-      "license": "MIT",
-      "dev": true
-    },
-    {
-      "name": "computer-use-mcp",
-      "declared": "^1.8.0",
-      "version": "1.8.0",
       "license": "MIT",
       "dev": true
     },
