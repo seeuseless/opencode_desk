@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { Maximize2, Minimize2, Minus, PanelRight, X } from 'lucide-react'
-import logo from '../assets/logo.png'
 
 /** 自绘标题栏：替代原生 header，颜色跟随主题；整条可拖拽（中间槽位给浏览器工具栏，留白处仍可拖） */
 export function Titlebar({
@@ -23,7 +22,6 @@ export function Titlebar({
 
   return (
     <header className="titlebar">
-      <img className="tb-logo" src={logo} alt="" draggable={false} />
       <span className="tb-browser-slot" />
       {/*
         全屏浏览时这一颗藏起来：面板已占满，关它等于退出全屏，交给右边那颗最大化/还原按钮。

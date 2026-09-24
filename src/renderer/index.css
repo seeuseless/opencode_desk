@@ -177,22 +177,25 @@ input, textarea { font: inherit; }
 .spacer { flex: 1; }
 .col { width: 100%; max-width: 820px; margin: 0 auto; }
 
-.shell { display: flex; flex-direction: column; height: 100vh; }
+.shell { display: flex; height: 100vh; }
 .app { flex: 1; display: flex; min-height: 0; }
+/* 右列：标题栏 + 内容区（侧栏独占左侧全高，一直顶到窗口最上面） */
+.rightcol { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* ================= 自绘标题栏（跟随左侧面板色） ================= */
+/* ================= 自绘标题栏（只在右列上方，底色跟聊天内容面） ================= */
 .titlebar {
   height: 40px; min-height: 40px;
   display: flex; align-items: center; gap: 2px;
-  background: var(--side-bg); padding: 0 4px 0 12px;
+  background: var(--content);
+  padding: 0 4px 0 12px;
   -webkit-app-region: drag; user-select: none;
 }
-.tb-logo { width: 20px; height: 20px; object-fit: contain; margin-right: 4px; }
 .tb-drag { flex: 1; height: 100%; }
 .tb-btn { -webkit-app-region: no-drag; width: 40px; height: 100%; border-radius: 0; }
-/* 标题栏内的窗口/功能按钮用面板配色（覆盖 .icon-btn 的通用色） */
-.titlebar .icon-btn { color: var(--side-fg2); }
-.titlebar .icon-btn:hover { background: var(--side-hover); color: var(--side-fg); }
+/* 标题栏内的窗口/功能按钮都在右段内容色块上，用内容区配色
+   （沿用通用 .icon-btn 的 --fg2/--line；彩色主题面板是深色块，若沿用 --side-fg 白字会没进浅色底里） */
+.titlebar .icon-btn { color: var(--fg2); }
+.titlebar .icon-btn:hover { background: var(--line); color: var(--fg); }
 .tb-close:hover { background: #e0245e; color: #fff; }
 
 /* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
@@ -201,7 +204,7 @@ input, textarea { font: inherit; }
 /* ================= 侧栏（跟随左侧面板色） ================= */
 .side {
   width: 260px; min-width: 260px; background: var(--side-bg);
-  display: flex; flex-direction: column; padding: 8px 12px 10px;
+  display: flex; flex-direction: column; padding: 10px 12px 10px;
 }
 
 /* 左栏顶部常驻的「新建任务」：长得跟下面一行行的目录**同一款**（左对齐、同字号、同字色），
@@ -214,8 +217,6 @@ input, textarea { font: inherit; }
   border: none; border-radius: 8px; font-size: 13px;
 }
 .side-newtask:hover { background: var(--side-hover); }
-.side-newtask > svg { color: var(--side-fg2); flex-shrink: 0; }
-.side-newtask:hover > svg { color: var(--side-fg); }
 
 .projlist { flex: 1; overflow-y: auto; }
 
@@ -281,6 +282,8 @@ input, textarea { font: inherit; }
   display: flex; align-items: center; justify-content: flex-end; gap: 2px;
   padding-top: 10px; margin-top: 6px;
 }
+/* 底栏最左的 LOGO：margin-right:auto 独占左侧空间，把账号/设置/手机推到右端 */
+.foot-logo { width: 20px; height: 20px; object-fit: contain; margin: 0 auto 0 4px; flex-shrink: 0; }
 .foot-btn {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;

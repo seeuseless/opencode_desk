@@ -566,12 +566,6 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Titlebar
-        onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
-        browserOpen={browserUi.open}
-        browserMax={browserUi.max}
-        onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
-      />
       <div className="app">
         <Sidebar
           projects={orderedProjects}
@@ -601,6 +595,14 @@ export default function App() {
           onOpenAccount={() => openSettingsAt('account')}
           /** 远程服务总开关（全局配置）：关掉后登录入口与手机图标一并消失 */
           remote={settings.remote}
+        />
+        {/* 右列 = 标题栏 + 内容区：侧栏独占左侧全高，标题栏不再横贯整窗 */}
+        <div className="rightcol">
+        <Titlebar
+          onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
+          browserOpen={browserUi.open}
+          browserMax={browserUi.max}
+          onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
         />
         <div className="content">
         {/* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */}
@@ -668,6 +670,7 @@ export default function App() {
             onSubmitCode={(code) => void platformAction(() => window.qingniao.platformSubmitCode(code))}
           />
         )}
+        </div>
         </div>
       </div>
 
