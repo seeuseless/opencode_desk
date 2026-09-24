@@ -19,7 +19,6 @@ import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { SCHEDULE_PREFIX, fmtYmd } from '../oc'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
-import logo from '../assets/logo.png'
 
 /** 项目的访问权限档位（定义在主进程 types.ts，这里 re-export 给渲染层各处引用） */
 export type { AccessLevel } from '../../../electron/main/types'
@@ -261,11 +260,8 @@ export function Sidebar(p: Props) {
           })}
         </div>
 
-        {/* 底栏：左侧是账号入口（未登录=登录，已登录=姓名），右侧两个图标只留图标一行靠右。
-            远程服务关掉时左侧账号入口与右侧手机图标都不渲染，只剩「设置」——它们全依赖平台接口。 */}
+        {/* 底栏：账号入口与功能图标同一行靠右。远程服务关掉时账号入口与手机图标都不渲染。 */}
         <div className="side-foot">
-          {/* LOGO：钉在底栏最左（margin-right:auto 把账号/设置等推到右端），与设置图标同一行 */}
-          <img className="foot-logo" src={logo} alt="" draggable={false} />
           {p.remote && (p.platform?.loggedIn ? (
             <button
               type="button"

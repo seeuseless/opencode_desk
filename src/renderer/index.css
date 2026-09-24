@@ -305,13 +305,11 @@ input, textarea { font: inherit; }
 .sess-more:hover { color: var(--side-fg); background: var(--side-hover); }
 
 
-/* 底栏：只有图标、一行、靠右（左侧留空给后续入口）；语义靠 hover 的 tooltip 表达 */
+/* 底栏：入口同一行靠右；语义靠 hover 的 tooltip 表达 */
 .side-foot {
   display: flex; align-items: center; justify-content: flex-end; gap: 2px;
   padding-top: 10px; margin-top: 6px;
 }
-/* 底栏最左的 LOGO：margin-right:auto 独占左侧空间，把账号/设置/手机推到右端；尺寸对齐旁边 16px 图标 */
-.foot-logo { width: 16px; height: 16px; object-fit: contain; margin: 0 auto 0 7px; flex-shrink: 0; }
 .foot-btn {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;
