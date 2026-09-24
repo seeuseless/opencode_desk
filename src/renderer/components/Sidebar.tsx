@@ -12,10 +12,12 @@ import {
   RefreshCw,
   Settings,
   Smartphone,
+  Timer,
   Trash2
 } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
+import { SCHEDULE_PREFIX, fmtYmd } from '../oc'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
 import logo from '../assets/logo.png'
 
@@ -59,7 +61,7 @@ interface Props {
   busyIds: Record<string, boolean>
   /** 正在拉取历史的会话集合（sid → true）：点击当帧高亮，不用等数据回来 */
   loadingSids: Record<string, boolean>
-  view: 'chat' | 'settings'
+  view: 'chat' | 'settings' | 'schedules'
   onToggleProject: (id: string) => void
   onRemoveProject: (id: string) => void
   onNewSession: (id: string) => void
@@ -95,6 +97,8 @@ interface Props {
    * 留着只会点了报错。此时底栏只剩「设置」。
    */
   remote: boolean
+  /** 打开「计划任务」列表页（内容区整页，左栏只留一个入口） */
+  onOpenSchedules: () => void
 }
 
 export function Sidebar(p: Props) {
@@ -202,7 +206,11 @@ export function Sidebar(p: Props) {
                         onClick={() => p.onPickSession(proj, s.id)}
                         title={s.title}
                       >
-                        {s.title ?? s.id}
+                        <span className="sess-title">{s.title ?? s.id}</span>
+                        {/* 计划会话：同一条计划每天产一个会话，光看标题分不出是哪天跑的，标上日期 */}
+                        {s.title?.startsWith(SCHEDULE_PREFIX) && s.time?.created && (
+                          <span className="sess-date">{fmtYmd(s.time.created)}</span>
+                        )}
                         {!!p.busyIds[s.id] && (
                           <span className="sess-busy" title="处理中">
                             <LoaderCircle size={13} className="spin" />
@@ -280,6 +288,13 @@ export function Sidebar(p: Props) {
               <span className="fu-name">登录</span>
             </button>
           ))}
+          <div
+            className={'foot-btn' + (p.view === 'schedules' ? ' on' : '')}
+            title="计划任务"
+            onClick={p.onOpenSchedules}
+          >
+            <Timer size={16} />
+          </div>
           <div
             className={'foot-btn' + (p.view === 'settings' ? ' on' : '')}
             title="设置"

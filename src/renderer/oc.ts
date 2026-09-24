@@ -183,6 +183,16 @@ export interface Session {
   parentID?: string
 }
 
+/** 计划任务产出的会话标题前缀（主进程建会话时加的，见 electron/main/scheduler.ts） */
+export const SCHEDULE_PREFIX = '[计划] '
+
+/** 本地时区的 Y-m-d */
+export function fmtYmd(t: number): string {
+  const d = new Date(t)
+  const p2 = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`
+}
+
 export interface ToolState {
   status?: string
   title?: string

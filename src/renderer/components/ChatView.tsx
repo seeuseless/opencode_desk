@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, defaultThinkingValue, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
@@ -15,12 +15,15 @@ import { ProjectPicker, AccessPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
+import type { TitleInfo } from './Titlebar'
 import type { AccessLevel, Project } from './Sidebar'
 
 interface Props {
   project?: Project
   projects: Project[]
   sessionId: string
+  /** 当前会话的列表条目（标题与创建时间）：顶部条靠它判断是不是计划会话并显示日期 */
+  session?: Session
   model: string
   onModelChange: (key: string) => void
   settings: ProviderCfg[]
@@ -49,6 +52,8 @@ interface Props {
   browserMaxSignal: number
   /** 上报浏览器面板开合与放大状态（标题栏浏览器按钮与最大化按钮据此决定行为与图标） */
   onBrowserUi: (s: { open: boolean; max: boolean }) => void
+  /** 上报会话标题（首条用户信息；计划会话带标记与日期），由 App 转发到标题栏绘制 */
+  onHead: (t: TitleInfo | null) => void
 }
 
 /** 'pid/mid' → ModelSel；'' → 跟随内核默认 */
@@ -77,6 +82,13 @@ function hostOf(u: string): string {
   } catch {
     return u
   }
+}
+
+/** 两个地址是否同一个页面（忽略末尾斜杠与 #hash），拿不到当前地址时按不同处理 */
+function samePage(a: string | undefined, b: string): boolean {
+  if (!a) return false
+  const norm = (s: string) => s.replace(/#.*$/, '').replace(/\/+$/, '').toLowerCase()
+  return norm(a) === norm(b)
 }
 
 /** 任务中断后的提示条：不自动重发消息，交还用户点「重试」手动续跑 */
@@ -289,6 +301,7 @@ export function ChatView(p: Props) {
   const roles = useRef<Map<string, 'user' | 'assistant'>>(new Map())
   const scrollRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const cwrapRef = useRef<HTMLDivElement>(null)
   // 本轮发送前已存在的消息 id：用于判断本轮是否已开始产出
   const turnBase = useRef<Set<string>>(new Set())
   // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文 + 附件）
@@ -397,13 +410,13 @@ export function ChatView(p: Props) {
   const [dragShield, setDragShield] = useState(false)
   /** 标题栏中间的浏览器工具栏挂载点（Titlebar 渲染的槽位，DOM 提交后查一次） */
   const [tbSlot, setTbSlot] = useState<HTMLElement | null>(null)
-  const browserDismissedIn = useRef('')
-  /** 用户点击要浏览器打开的链接（HTML/SVG 产物、网页地址）：面板优先导航到它，盖过 AI 的 browserView.url */
+  /** 用户点击要浏览器打开的链接（HTML/SVG 产物、网页地址）：面板优先导航到它，盖过 AI 的 aiBrowseUrl */
   const [pinnedUrl, setPinnedUrl] = useState('')
   /** 点击开链的计数：同一地址重复点击也强制重新导航 */
   const [pinSeq, setPinSeq] = useState(0)
 
-  const browserView = useMemo(() => {
+  /** AI 浏览上下文里的当前地址：用户点开面板时拿它当首航目标（AI 已在 webview 里导航过则由 loadURL 同步） */
+  const aiBrowseUrl = useMemo(() => {
     let url = ''
     for (const m of msgs) {
       for (const pt of m.parts) {
@@ -428,25 +441,14 @@ export function ChatView(p: Props) {
         if (ms.length) url = ms[ms.length - 1]
       }
     }
-    return { url, active: url !== '' }
+    return url
   }, [msgs])
 
-  useEffect(() => {
-    if (manualBrowser) return
-    if (browserView.active) {
-      if (browserDismissedIn.current !== p.sessionId) setBrowserOpen(true)
-    } else {
-      setBrowserOpen(false)
-    }
-  }, [browserView.active, p.sessionId, manualBrowser])
-
-  // 主进程「AI 要用面板浏览器」事件（panel_* 工具在面板关着时触发）：清掉本会话的关闭记录并打开
+  // 主进程「AI 要用面板浏览器」事件（panel_* 工具发现 webview 还没挂载时触发）：
+  // 只挂 webview，**不打开面板**——用户没点过就不该看见它。
   useEffect(() => {
     return window.qingniao.onEvent((raw) => {
-      if ((raw as { type?: string }).type === 'qingniao.browser.open') {
-        browserDismissedIn.current = ''
-        setBrowserOpen(true)
-      }
+      if ((raw as { type?: string }).type === 'qingniao.browser.wake') setPanelBorn(true)
     })
   }, [])
 
@@ -457,9 +459,8 @@ export function ChatView(p: Props) {
       if (typeof u !== 'string' || !u) return
       setPinnedUrl(u)
       setPinSeq((n) => n + 1)
-      browserDismissedIn.current = ''
-      setBrowserOpen(false)
-      setManualBrowser(true)
+      setPanelBorn(true)
+      setPanelOpen(true)
     }
     window.addEventListener('qingniao:open-in-browser', onOpen)
     return () => window.removeEventListener('qingniao:open-in-browser', onOpen)
@@ -501,19 +502,18 @@ export function ChatView(p: Props) {
     setMarks((ms) => (ms.some((m) => m.url === url) ? ms.filter((m) => m.url !== url) : [...ms, { url, title }]))
   }
 
+  /** 收起面板：webview 留着（AI 照常可操作），只是不再显示 */
   function closeBrowserPanel() {
-    setBrowserOpen(false)
-    setManualBrowser(false)
+    setPanelOpen(false)
     setBrowserMax(false)
     setPinnedUrl('')
     setChatHidden(false) // 面板都关了，隐藏态一起复位，别再带着回右栏布局
-    browserDismissedIn.current = p.sessionId
   }
 
   /** 浏览模式：面板放大全屏 + 右下角浮动对话卡，用户自己在地址栏输网址 */
   function openBrowseMode() {
-    setBrowserOpen(false)
-    setManualBrowser(true)
+    setPanelBorn(true)
+    setPanelOpen(true)
     setBrowserMax(true)
     setFloatOpen(true)
     setChatHidden(false)
@@ -527,12 +527,12 @@ export function ChatView(p: Props) {
    */
   function toggleBrowserFromHeader() {
     if (browserMax) return
-    if (browserOpen || manualBrowser) {
+    if (panelOpen) {
       closeBrowserPanel()
       return
     }
-    setBrowserOpen(false)
-    setManualBrowser(true)
+    setPanelBorn(true)
+    setPanelOpen(true)
     setBrowserMax(false)
   }
 
@@ -1253,9 +1253,9 @@ export function ChatView(p: Props) {
 
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
-    p.onBrowserUi({ open: browserOpen || manualBrowser, max: browserMax })
+    p.onBrowserUi({ open: panelOpen, max: browserMax })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [browserOpen, manualBrowser, browserMax])
+  }, [panelOpen, browserMax])
 
   // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
   useEffect(() => {
@@ -1598,8 +1598,8 @@ export function ChatView(p: Props) {
     // 让本轮对话默认针对这个 URL（网页浏览场景）而不是本地项目；URL 没变就不重复注入。
     // **全屏浏览（浏览模式 / 面板放大）时另外标一份**：这时面板占满整个窗口，
     // 操作面就是那个网页，本轮必须走 panel_*、禁用 computer（见下方桌面路由的互斥判定）。
-    const browserFullscreen = (browserMax || manualBrowser) && !!panelUrl
-    if ((browserOpen || manualBrowser || browserMax) && panelUrl) {
+    const browserFullscreen = browserMax && !!panelUrl
+    if (panelOpen && panelUrl) {
       const bc = browserCtxRef.current
       if (!bc || bc.sid !== sid || bc.url !== panelUrl || bc.max !== browserFullscreen) {
         try {
@@ -1817,6 +1817,31 @@ export function ChatView(p: Props) {
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
+  /**
+   * 会话标题：用户发的第一条信息（过长在标题栏截断），计划会话再带上执行日期。
+   *
+   * 为什么不用会话标题：标题要么是内核自动生成的、要么是首条消息的前 30 个字，
+   * 都不能一眼看出"这轮到底问了什么"；首条用户消息才是用户自己认得出的那个说法。
+   * 「计划」会话另标日期——同一条计划每天产一个会话，光看标题分不出是哪天跑的。
+   * 标题本体画在标题栏（放大按钮那一行），这里算好后上报给 App 转发。
+   */
+  const isSchedule = !!p.session?.title?.startsWith(SCHEDULE_PREFIX)
+  const firstUserText = useMemo(() => {
+    for (const m of msgs) {
+      if (m.info.role !== 'user') continue
+      const t = m.parts.filter((x) => x.type === 'text' && !x.synthetic).map((x) => x.text).join('')
+      if (t && !isCtxOnly(t)) return t.trim()
+    }
+    return ''
+  }, [msgs])
+  const schedDate = isSchedule && p.session?.time?.created ? fmtYmd(p.session.time.created) : ''
+  useEffect(() => {
+    p.onHead(firstUserText ? { text: firstUserText, sched: isSchedule, date: schedDate } : null)
+    // 卸载时清空：切到设置/计划任务页后标题栏不该还挂着上一轮的标题
+    return () => p.onHead(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstUserText, isSchedule, schedDate])
+
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
@@ -1858,7 +1883,7 @@ export function ChatView(p: Props) {
           {visibleMsgCount === 0 && !busy && (
             <div className="empty">
               <div className="empty-title">新对话</div>
-              {(manualBrowser || browserMax) && panelUrl ? (
+              {panelOpen && panelUrl ? (
                 <div>在下方输入框提问，AI 会针对当前浏览器页面作答并直接操作这个浏览器</div>
               ) : (
                 <div>在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令</div>
@@ -1934,7 +1959,7 @@ export function ChatView(p: Props) {
             <ModelAuthModal key={modelAsks[0].reqId} req={modelAsks[0]} onReply={(s) => replyModelAllow(modelAsks[0], s)} />
           )}
           {modelAsks.length === 0 && asks.length > 0 && (
-            <AskModal key={asks[0].id} req={asks[0]} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
+            <AskModal key={asks[0].id} req={asks[0]} anchorRef={cwrapRef} onReply={(ans) => replyAsk(asks[0], ans)} onReject={() => rejectAsk(asks[0])} />
           )}
           {/* 权限询问：与助手提问互斥显示（同一时刻只弹一件事，避免两层弹窗叠在一起） */}
           {modelAsks.length === 0 && asks.length === 0 && perms.length > 0 && (
@@ -2042,7 +2067,7 @@ export function ChatView(p: Props) {
           </div>
         )}
       </div>
-      <div className="cwrap">
+      <div className="cwrap" ref={cwrapRef}>
         <div className="cbox col">
           <textarea
             ref={taRef}
@@ -2052,7 +2077,7 @@ export function ChatView(p: Props) {
             placeholder={
               busy
                 ? '当前任务执行中，输入新需求可加入队列'
-                : panelUrl && (manualBrowser || browserMax)
+                : panelUrl && panelOpen
                   ? '针对当前浏览器页面提问，AI 会直接操作这个浏览器'
                   : 'Enter 发送 / Shift+Enter 换行'
             }
@@ -2158,9 +2183,11 @@ export function ChatView(p: Props) {
         </div>
       </div>
     </main>
-    {(browserOpen || manualBrowser) && (
+    {/* webview 挂上就不再卸载（AI 要一直能操作它），显不显示只看 visible */}
+    {(panelOpen || panelBorn) && (
       <BrowserPanel
-        url={pinnedUrl || browserView.url}
+        visible={panelOpen}
+        url={pinnedUrl || aiBrowseUrl}
         navSeq={pinSeq}
         max={browserMax}
         slot={tbSlot}
@@ -2188,7 +2215,9 @@ export function ChatView(p: Props) {
   )
 }
 /** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
-function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onToggleChat }: {
+function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onToggleChat }: {
+  /** 面板是否可见：false 时只隐藏 UI，webview 继续挂着，AI 照常能操作 */
+  visible: boolean
   url: string
   /** 用户点链开面板的计数：变化时即使地址相同也强制重新导航 */
   navSeq: number
@@ -2208,8 +2237,8 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
 }) {
   // 地址栏可手输回车导航：AI 新导航（prop url 变化）会同步进来，用户手输不回写会话
   const [addr, setAddr] = useState(url)
-  /** 面板打开时的目标地址：有值才挂载 webview（空地址挂 webview 行为不可控）；之后的导航全走 loadURL，避免 React 改 src 属性造成二次加载 */
-  const [src, setSrc] = useState(url)
+  /** webview 的首航地址：只在挂载那一刻用，之后导航全走 loadURL，避免 React 改 src 造成二次加载 */
+  const [src] = useState(url || 'about:blank')
   /** 当前页标题：收藏时作显示名（page-title-updated 事件跟踪） */
   const [title, setTitle] = useState('')
   /** 左缘拖出的面板宽度（px）；null = 默认 40% */
@@ -2227,12 +2256,12 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
   useEffect(() => {
     const force = navSeq !== lastNavSeq.current
     lastNavSeq.current = navSeq
-    if (url && (force || url !== addr)) {
-      setAddr(url)
-      if (wvRef.current) wvRef.current.loadURL(url)
-      else setSrc(url) // webview 未挂载：带 src 挂载即完成首航
-    }
-    // 只跟随 AI 的新导航与用户点链（navSeq）；addr 是用户手输值，不作为依赖
+    if (!url) return
+    // 比 webview 的真实地址，而不是 addr：AI 走主进程 loadURL 时消息更新可能早于
+    // did-navigate 事件，只看 addr 会把同一个地址再导航一遍
+    if (!force && samePage(wvRef.current?.getURL(), url)) return
+    setAddr(url)
+    wvRef.current?.loadURL(url)
   }, [url, navSeq])
 
   // webview 由 React 直接管理 src（addr 变化即导航）；这里挂内核事件把页内跳转同步回地址栏
@@ -2268,8 +2297,7 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
     const u = /^\w+:\/\//.test(v.trim()) ? v.trim() : 'https://' + v.trim()
     if (!u) return
     setAddr(u)
-    if (wvRef.current) wvRef.current.loadURL(u)
-    else setSrc(u) // webview 未挂载：带 src 挂载即完成首航
+    wvRef.current?.loadURL(u)
   }
 
   /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
@@ -2339,16 +2367,17 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
 
   return (
     <>
-      {slot && createPortal(head, slot)}
+      {visible && slot && createPortal(head, slot)}
       {dragShield && <div className="drag-shield" />}
       <aside
         ref={panelRef}
-        className={'browser-panel' + (max ? ' max' : '')}
-        style={width != null && !max ? { width, maxWidth: 'none' } : undefined}
+        // 隐藏时连 max 都不挂：CSS 里 :has(.max) 会连带隐藏侧栏，那是「用户正看着」才该有的效果
+        className={'browser-panel' + (visible ? (max ? ' max' : '') : ' hidden')}
+        style={visible && width != null && !max ? { width, maxWidth: 'none' } : undefined}
       >
-        {!max && <div className="bp-resizer" onPointerDown={startResize} />}
+        {visible && !max && <div className="bp-resizer" onPointerDown={startResize} />}
         {/* 全屏时的收藏夹条：点击直达，hover 出现取消收藏；无网址的浏览模式入口也能一键开收藏页 */}
-        {max && marks.length > 0 && (
+        {visible && max && marks.length > 0 && (
           <div className="bp-marks">
             {marks.map((m) => (
               <div
@@ -2372,17 +2401,15 @@ function BrowserPanel({ url, navSeq, max, slot, onUrl, marks, onToggleMark, chat
             ))}
           </div>
         )}
-        {src ? (
-          <webview
-            ref={bindWv}
-            className="bp-wv"
-            src={src}
-            partition="persist:webpanel"
-            allowpopups={false}
-          />
-        ) : (
-          <div className="bp-nourl">在顶部地址栏输入网址后回车打开</div>
-        )}
+        {/* webview 常驻：AI 的 panel_* 要随时能操作它，面板收起也不能卸载 */}
+        <webview
+          ref={bindWv}
+          className="bp-wv"
+          src={src}
+          partition="persist:webpanel"
+          allowpopups={false}
+        />
+        {!addr && <div className="bp-nourl">在顶部地址栏输入网址后回车打开</div>}
       </aside>
     </>
   )
@@ -2797,10 +2824,12 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
 /** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
 function AskModal({
   req,
+  anchorRef,
   onReply,
   onReject
 }: {
   req: QuestionAsk
+  anchorRef: RefObject<HTMLElement | null>
   onReply: (answers: string[][]) => void
   onReject: () => void
 }) {
@@ -2829,7 +2858,7 @@ function AskModal({
   }
 
   return (
-    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} anchor="top" onClose={onReject}>
+    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} anchor="above" anchorRef={anchorRef} onClose={onReject}>
       <div className="ask-q">
         <div className="ask-title">{q.question}</div>
         <div className="ask-opts">

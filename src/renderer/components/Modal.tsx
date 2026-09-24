@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useLayoutEffect, useState, type ReactNode, type RefObject } from 'react'
 import { X } from 'lucide-react'
 
 /**
@@ -11,10 +11,8 @@ import { X } from 'lucide-react'
  *
  * anchor 是垂直落点：
  *  - 不传：屏幕正中，设置类弹窗用（跟背后的整页表单配平，居中最稳）；
- *  - 'top'：贴在对话窗口上方，AI 主动发起的询问（提问 / 权限）用。
- *    这类弹窗是任务中途的卡点，用户视线本来就在对话流上，贴着对话窗口出现才不打断；
- *    居中会飘到屏幕正中、离对话流很远，还得回头找。
- *    加 72px 上边距给标题栏让位，避免压住窗口拖拽区。
+ *  - 'top'：贴在窗口顶部，权限确认 / 模型授权用；
+ *  - 'above'：贴在 anchorRef 指向的输入框上方，AI 等待用户选择回答时用。
  */
 export function Modal({
   title,
@@ -22,17 +20,39 @@ export function Modal({
   wide,
   narrow,
   anchor,
+  anchorRef,
   children
 }: {
   title: string
   onClose: () => void
   wide?: boolean
   narrow?: boolean
-  anchor?: 'top'
+  anchor?: 'top' | 'above'
+  anchorRef?: RefObject<HTMLElement | null>
   children: ReactNode
 }) {
+  const [aboveGap, setAboveGap] = useState(0)
+
+  useLayoutEffect(() => {
+    if (anchor !== 'above' || !anchorRef?.current) return
+    const target = anchorRef.current
+    const update = () => {
+      const top = target.getBoundingClientRect().top
+      setAboveGap(Math.max(12, window.innerHeight - top + 8))
+    }
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(target)
+    window.addEventListener('resize', update)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', update)
+    }
+  }, [anchor, anchorRef])
+
+  const anchorClass = anchor === 'top' ? ' top' : anchor === 'above' ? ' above' : ''
   return (
-    <div className={'mask' + (anchor === 'top' ? ' top' : '')}>
+    <div className={'mask' + anchorClass} style={anchor === 'above' ? { paddingBottom: aboveGap } : undefined}>
       <div className={'modal' + (wide ? ' wide' : narrow ? ' narrow' : '')}>
         <header className="mhead">
           <h3>{title}</h3>

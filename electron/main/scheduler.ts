@@ -7,8 +7,8 @@
  * 会话随即出现在左栏任务列表里，点「计划任务」行可跳回看结果。
  *
  * 进程关窗后驻留托盘（win:close 只隐藏窗口），调度器照跑；
- * 应用完全没在跑导致错过执行时刻的，**跳过本次**：readAll 落盘读入时
- * 已过期的 nextRun 一律重算到下一个周期（不补跑）。
+ * 应用完全没在跑导致错过执行时刻的（nextRun 过期超 3 个 tick 窗口），**跳过本次**：
+ * 读盘归一化时把过期的 nextRun 推进到下一个周期（窗口内的刚过点不算错过，留给 tick 触发）。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,6 +19,11 @@ import type { ScheduleRan, ScheduleSpec, ScheduleTask } from './types.ts'
 const TICK_MS = 30_000
 const DAY_MS = 86_400_000
 const HOUR_MS = 3_600_000
+/**
+ * 「错过」判据：nextRun 过期超过 3 个 tick 才认为当时应用没在跑 → 跳过推进下个周期；
+ * 窗口内（正常 tick 抖动 / 刚过点）保留 nextRun 原值，交给 tick 触发执行。
+ */
+const STALE_MS = 3 * TICK_MS
 /** 内置「任务」目录（startScheduler 注入，= 主进程 index.ts 的 workspace） */
 let workspace = ''
 /** 执行完成通知（index.ts 注入：转发 schedule:ran 给渲染层） */
@@ -56,7 +61,7 @@ function normalizeTask(x: unknown): ScheduleTask | null {
     spec,
     enabled: t.enabled !== false,
     createdAt: Number(t.createdAt) > 0 ? Number(t.createdAt) : now,
-    nextRun: nextRun > now ? nextRun : nextRunAfter(spec, now, lastRun),
+    nextRun: nextRun > now - STALE_MS ? nextRun : nextRunAfter(spec, now, lastRun),
     ...(lastRun ? { lastRun } : {}),
     ...(typeof t.lastSession === 'string' ? { lastSession: t.lastSession } : {}),
     ...(typeof t.lastError === 'string' && t.lastError ? { lastError: t.lastError } : {})
@@ -86,7 +91,8 @@ export function nextRunAfter(spec: ScheduleSpec, from: number, anchor?: number):
   if (spec.kind === 'hourly') {
     const step = spec.everyHours * HOUR_MS
     const base = anchor ?? from
-    return base + Math.max(1, Math.ceil((from - base) / step)) * step
+    // 严格晚于 from 的首个对齐步（from 恰落步上也要 +1 步）；from 早于 base 时即 base 本身
+    return base + (Math.floor((from - base) / step) + 1) * step
   }
   const at = new Date(from)
   at.setHours(spec.hour, spec.minute, 0, 0)

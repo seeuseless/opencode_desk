@@ -2,15 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { FolderPlus, Settings, X } from 'lucide-react'
 import { Sidebar, type AccessLevel, type Project } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
+import { SchedulesView } from './components/SchedulesView'
 import { SettingsView } from './components/SettingsView'
-import { Titlebar } from './components/Titlebar'
+import { Titlebar, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import { load, save } from './store'
 import { CUSTOM_ID, THEMES } from './theme'
 import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
 
-type View = 'chat' | 'settings'
+type View = 'chat' | 'settings' | 'schedules'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
 export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
@@ -37,6 +38,8 @@ export default function App() {
   const [theme, setTheme] = useState<string>(loadTheme)
   const [custom, setCustom] = useState<CustomColors>(() => load('qingniao.themeColors', DEFAULT_CUSTOM))
   const [view, setView] = useState<View>('chat')
+  /** 标题栏左侧的会话标题（首条用户信息）：由 ChatView 上报，切走时它自己清空 */
+  const [head, setHead] = useState<TitleInfo | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [activeId, setActiveId] = useState('')
   /** 每个文件夹独立的展开状态（用户自己点出来的，切视图不影响） */
@@ -260,7 +263,7 @@ export default function App() {
     setView('settings')
   }
 
-  /** 进对话：关闭设置浮层（关闭设置 / 点任务 / 点项目 / 新建会话都用它） */
+  /** 进对话：关闭设置浮层与计划任务列表页（关闭设置 / 点任务 / 点项目 / 新建会话都用它） */
   function toChat() {
     setSettingsReq(null)
     setView('chat')
@@ -332,6 +335,13 @@ export default function App() {
         })
       )
     }
+  }
+
+  /** 打开「计划任务」执行产出的会话：恒在内置「任务」目录里（主进程固定往那写） */
+  function openScheduleSession(sid: string) {
+    const proj = projects.find((x) => x.builtin) ?? projects.find((x) => x.id === 'builtin')
+    if (!proj) return
+    pickSessionFor(proj, sid)
   }
 
   async function deleteSessionOf(proj: Project, sid: string) {
@@ -495,6 +505,29 @@ export default function App() {
     void window.qingniao.mobileSetProjects(projects.map((x) => ({ id: x.id, path: x.path, name: x.name })))
   }, [projects])
 
+  // 计划任务在后台（托盘驻留时）到点执行：主进程推过来后，补拉内置「任务」目录的会话列表，
+  // 新出现的「[计划] xxx」会话展开目录即可见（与 refreshSessions 同样的只补不覆盖合并）；
+  // 同时自增 tick 让计划任务列表页重读一次，「上次执行/失败」不会停在旧值
+  const [schedTick, setSchedTick] = useState(0)
+  useEffect(() => {
+    const off = window.qingniao.onScheduleRan(() => {
+      setSchedTick((t) => t + 1)
+      const path = workspaceRef.current
+      if (!path) return
+      oc.sessions(path)
+        .then((raw) => {
+          const list = sortSessions(raw)
+          setSessionsMap((m) => {
+            const merged = [...(m[path] ?? [])]
+            for (const s of list) if (!merged.some((x) => x.id === s.id)) merged.push(s)
+            return { ...m, [path]: sortSessions(merged) }
+          })
+        })
+        .catch(() => {})
+    })
+    return off
+  }, [])
+
   async function mobileAction(fn: () => Promise<DeskStatus>): Promise<void> {
     setMobileBusy(true)
     try {
@@ -603,22 +636,34 @@ export default function App() {
           onOpenAccount={() => openSettingsAt('account')}
           /** 远程服务总开关（全局配置）：关掉后登录入口与手机图标一并消失 */
           remote={settings.remote}
+          onOpenSchedules={() => setView('schedules')}
         />
         {/* 右列 = 标题栏 + 内容区：侧栏独占左侧全高，标题栏不再横贯整窗 */}
         <div className="rightcol">
         <Titlebar
+          title={view === 'chat' ? head : null}
           onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
           browserOpen={browserUi.open}
           browserMax={browserUi.max}
           onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
         />
         <div className="content">
-        {/* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */}
-        {activeProject ? (
+        {/* 计划任务列表页与对话互斥显示：它是整页管理视图，不是浮层 */}
+        {view === 'schedules' ? (
+          <SchedulesView
+            refreshSignal={schedTick}
+            onOpenSession={openScheduleSession}
+            onNotice={setNotice}
+            onClose={toChat}
+          />
+        ) : (
+        /* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */
+        activeProject ? (
           <ChatView
             project={activeProject}
             projects={orderedProjects}
             sessionId={sessionId}
+            session={activeProject ? sessionsMap[activeProject.path]?.find((s) => s.id === sessionId) : undefined}
             model={model}
             onModelChange={setModel}
             settings={chatProviders(settings)}
@@ -637,6 +682,7 @@ export default function App() {
             browserToggleSignal={browserSignal}
             browserMaxSignal={browserMaxSignal}
             onBrowserUi={setBrowserUi}
+            onHead={setHead}
             onOpenSettings={() => openSettingsAt('providers')}
             onPickDir={addProject}
             access={access}
@@ -652,6 +698,7 @@ export default function App() {
           />
         ) : (
           <Welcome onAddProject={addProject} onOpenSettings={() => openSettingsAt('providers')} />
+        )
         )}
         </div>
         </div>
