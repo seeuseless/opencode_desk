@@ -325,10 +325,17 @@ jobs:
         shell: bash
         run: |
           for ARCH in arm64 x64; do
-            BIN="dist/mac-$ARCH/青鸟.app/Contents/Resources/bin/opencode.exe"
+            # ⚠️ unpacked 目录名规则（getArchSuffix）：默认架构（恒为 x64）不带后缀——
+            #   x64 → dist/mac，arm64 → dist/mac-arm64。2026-09-25 v1.5.1 CI 实测踩坑：
+            #   写成 dist/mac-x64 找不到目录，arm64 校验通过后整个 job 红掉。
+            case "$ARCH" in
+              arm64) APPDIR="dist/mac-arm64" ;;
+              x64)   APPDIR="dist/mac" ;;
+            esac
+            BIN="$APPDIR/青鸟.app/Contents/Resources/bin/opencode.exe"
             # 兼容不同 electron-builder 版本的输出目录命名（mac-arm64 / mac / mac-universal）
             if [ ! -f "$BIN" ]; then
-              BIN=$(find "dist/mac-$ARCH" -path '*/Contents/Resources/bin/opencode.exe' -type f 2>/dev/null | head -1)
+              BIN=$(find "$APPDIR" -path '*/Contents/Resources/bin/opencode.exe' -type f 2>/dev/null | head -1)
             fi
             if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
               echo "::error::[$ARCH] .app 包内找不到内核二进制（Contents/Resources/bin/opencode.exe）"
