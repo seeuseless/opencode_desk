@@ -117,8 +117,9 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'about', label: '关于', icon: Rocket }
 ]
 
-/** 依赖平台接口的两页：关了远程服务就没有存在意义，连同导航一起收起 */
-const REMOTE_TABS: TabId[] = ['account', 'usage']
+/** 依赖平台接口的页：关了远程服务就没有存在意义，连同导航一起收起。
+ *  「使用量」不在此列——本机统计来自内核会话记录，不依赖平台，常驻显示 */
+const REMOTE_TABS: TabId[] = ['account']
 
 interface Draft {
   isNew: boolean
@@ -1177,13 +1178,7 @@ export function SettingsView(p: Props) {
         </section>
         )}
 
-        {tab === 'usage' && (
-          <UsagePanel
-            loggedIn={!!p.platform?.loggedIn}
-            platformBusy={p.platformBusy}
-            onLogin={p.onLogin}
-          />
-        )}
+        {tab === 'usage' && <UsagePanel />}
 
         {tab === 'about' && <UpdatePanel />}
 

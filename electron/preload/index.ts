@@ -3,6 +3,7 @@ import type {
   AccessLevel,
   DepItem,
   DeskStatus,
+  LocalUsage,
   ModelAuthAsk,
   ModelAuthScope,
   ModelUsed,
@@ -182,12 +183,13 @@ const api = {
   platformRefreshModels: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:refresh'),
   /** 账号信息：登录用户、当前授权、积分余额、本机设备名（设置 → 账号） */
   platformAccount: (): Promise<PlatformAccount | null> => ipcRenderer.invoke('platform:account'),
-  /**
-   * 用量汇总：总量 / 今日 / 昨日 + 区间内按天与按模型明细。
-   * 不传区间时平台按最近 30 天算（设置 → 使用量）
-   */
+  /** 用量汇总：总量 / 今日 / 昨日 + 区间内按天与按模型明细。
+   * 不传区间时平台按最近 30 天算（设置 → 使用量） */
   platformUsage: (range?: { from?: string; to?: string }): Promise<UsageSummary | null> =>
     ipcRenderer.invoke('platform:usage', range),
+  /** 本机用量统计：从内核会话存储聚合（不依赖平台），口径是这台电脑 */
+  usageLocal: (range?: { from?: string; to?: string }): Promise<LocalUsage> =>
+    ipcRenderer.invoke('usage:local', range),
   /** 积分流水（发放 / 消耗 / 调整），按页取（一页 20 条） */
   platformUsageLogs: (type?: 'consume' | 'grant' | 'adjust', page?: number): Promise<UsagePage<UsageLog>> =>
     ipcRenderer.invoke('platform:usageLogs', type, page),

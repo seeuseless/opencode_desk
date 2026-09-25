@@ -14,6 +14,7 @@ import { cancelDownload, checkUpdate, downloadUpdate, installUpdate, openRelease
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 import { readSchedules, removeSchedule, reorderSchedules, runScheduleNow, startScheduler, upsertSchedule } from './scheduler.ts'
 import type { ScheduleTask } from './types.ts'
+import { localUsage } from './usage.ts'
 
 /**
  * 主进程职责：
@@ -96,6 +97,9 @@ ipcMain.handle('opencode:api', (_e, path: string, opts?: { method?: string; body
 )
 
 ipcMain.handle('app:info', () => ({ workspace }))
+
+// 本机用量统计（设置 → 使用量）：从内核会话存储聚合，不依赖平台
+ipcMain.handle('usage:local', (_e, range?: { from?: string; to?: string }) => localUsage(range?.from ?? '', range?.to ?? ''))
 
 /**
  * 选目录对话框（左栏「选择文件夹」与对话区项目下拉共用）。

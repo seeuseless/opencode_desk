@@ -3,7 +3,7 @@ import type { McpCfg, Modality, ProviderCfg, Settings, ThinkingMode } from '../.
 import { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from '../../electron/main/types'
 
 export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, GenRole, ThinkingMode } from '../../electron/main/types'
-export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount } from '../../electron/main/types'
+export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount, LocalUsage, LocalUsageBucket, LocalUsageRow, LocalUsageSeries } from '../../electron/main/types'
 export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings

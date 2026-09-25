@@ -473,6 +473,46 @@ export interface UsageSummary {
   series?: UsageSeries
 }
 
+/* ===== 本机统计（来自内核会话记录，不需要平台，见 electron/main/usage.ts） ===== */
+
+/** 本机统计的一组数字：没有积分概念，只有 token 量与调用次数 */
+export interface LocalUsageBucket {
+  calls: number
+  tokens: number
+}
+
+export interface LocalUsageRow extends LocalUsageBucket {
+  label: string
+}
+
+/** 本机趋势：与平台 UsageSeries 同形（points 装 token 量），渲染层图表直接复用 */
+export interface LocalUsageSeries {
+  dates: string[]
+  models: { label: string; tokens: number; points: number[] }[]
+}
+
+/**
+ * 本机用量汇总（设置 → 使用量的「本机统计」块）。
+ * 数据源是内核的会话存储（经 REST 读出），口径是**这台电脑**；
+ * 平台统计是全设备口径，两者并列展示、互不替代。
+ */
+export interface LocalUsage {
+  from: string
+  to: string
+  range: LocalUsageBucket
+  today: LocalUsageBucket
+  yesterday: LocalUsageBucket
+  all: LocalUsageBucket
+  /** 滚动窗口（到今天为止，不随区间筛选变化） */
+  last7: LocalUsageBucket
+  last30: LocalUsageBucket
+  last90: LocalUsageBucket
+  /** 按区间内 token 量降序 */
+  models: LocalUsageRow[]
+  /** 区间内按天 × 按模型（横轴补 0，与平台 UsageSeries 同口径） */
+  series: LocalUsageSeries
+}
+
 /** 积分流水一条（发放 / 消耗 / 调整） */
 export interface UsageLog {
   id: number

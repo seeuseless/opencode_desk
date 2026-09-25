@@ -540,6 +540,12 @@ const TW_SETTINGS: Record<string, string> = {
 }
 
 const TW_PANELS: Record<string, string> = {
+  '统计来自这台电脑的内核会话记录，含全部项目与历史会话；token 量按模型返回的实际用量计。':
+    '統計來自這台電腦的核心工作階段記錄，含全部專案與歷史工作階段；token 量按模型回傳的實際用量計。',
+  '本机统计读取失败：': '本機統計讀取失敗：',
+  '{a} 次调用': '{a} 次呼叫',
+  '{n} 次': '{n} 次',
+  '区间内 {a} token · {b} 次': '區間內 {a} token · {b} 次',
   '登录平台账号后即可使用内置模型（无需自备 API Key），用量与积分都记在这个账号下。登录在系统浏览器里完成，青鸟只会拿到一份可随时吊销的授权，不会保存密码。':
     '登入平台帳號後即可使用內建模型（無需自備 API Key），用量與點數都記在這個帳號下。登入在系統瀏覽器裡完成，青鳥只會拿到一份可隨時撤銷的授權，不會保存密碼。',
   '登录平台账号': '登入平台帳號',
@@ -584,6 +590,7 @@ const TW_PANELS: Record<string, string> = {
   到: '到',
   '近 7 天': '近 7 天',
   '近 30 天': '近 30 天',
+  '近 90 天': '近 90 天',
   查询: '查詢',
   '区间内 {a} token · {b} 次 · {c} 积分': '區間內 {a} token · {b} 次 · {c} 點數',
   各模型用量: '各模型用量',
@@ -1228,6 +1235,12 @@ const EN_SETTINGS: Record<string, string> = {
 }
 
 const EN_PANELS: Record<string, string> = {
+  '统计来自这台电脑的内核会话记录，含全部项目与历史会话；token 量按模型返回的实际用量计。':
+    'Usage is computed from the kernel session records on this machine, covering all projects and history; token counts are the actual usage reported by each model.',
+  '本机统计读取失败：': 'Failed to load local usage: ',
+  '{a} 次调用': '{a} calls',
+  '{n} 次': '{n} calls',
+  '区间内 {a} token · {b} 次': '{a} tokens · {b} calls in range',
   '登录平台账号后即可使用内置模型（无需自备 API Key），用量与积分都记在这个账号下。登录在系统浏览器里完成，青鸟只会拿到一份可随时吊销的授权，不会保存密码。':
     'Sign in to the platform account to use the built-in models (no API key needed); usage and points are billed to this account. Sign-in happens in your system browser: QingNiao only receives a revocable grant and never stores your password.',
   '登录平台账号': 'Sign in',
@@ -1274,6 +1287,7 @@ const EN_PANELS: Record<string, string> = {
   到: 'To',
   '近 7 天': 'Last 7 days',
   '近 30 天': 'Last 30 days',
+  '近 90 天': 'Last 90 days',
   查询: 'Apply',
   '区间内 {a} token · {b} 次 · {c} 积分': '{a} tokens · {b} calls · {c} points in range',
   各模型用量: 'By model',
