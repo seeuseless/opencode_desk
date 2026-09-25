@@ -3,6 +3,17 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.5.2 — 2026-09-25
+
+补丁版本：macOS 停发 zip 安装包，其余内容与 v1.5.1 一致
+（mac Intel 与 Windows ARM64 双架构安装包、项目文件夹排序，详见 v1.5 条目）。
+
+### 移除
+
+- **macOS zip 安装包**（`QingNiao-Setup-<arch>.zip`）：zip 是 electron-updater 做
+  mac 自动更新的专用格式，本项目不使用它，只保留 dmg。已挂在历史 Release 上的
+  zip 附件不删除；应用内更新始终认领 dmg。
+
 ## v1.5.1 — 2026-09-25
 
 补丁版本：把 v1.5 的全部内容以递增版本号正式发布——包含 **mac Intel 与 Windows ARM64
