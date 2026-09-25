@@ -28,6 +28,10 @@ const STALE_MS = 3 * TICK_MS
 let workspace = ''
 /** 执行完成通知（index.ts 注入：转发 schedule:ran 给渲染层） */
 let onRan: ((r: ScheduleRan) => void) | null = null
+/** tick / 手动执行共用的任务锁：防止同一任务并发创建多个会话 */
+const runningTaskIds = new Set<string>()
+/** 防止上一轮 tick 尚未完成时，下一轮 30 秒定时器重入 */
+let ticking = false
 
 const schedulesPath = () => join(qingniaoHome(), 'schedules.json')
 
@@ -152,45 +156,70 @@ async function runTask(task: ScheduleTask): Promise<{ sessionId?: string; error?
   return { sessionId: sid }
 }
 
+/** 领取本轮执行：先推进并落盘 nextRun，避免执行中崩溃/重入后再次创建同一轮会话 */
+function claimSchedule(list: ScheduleTask[], task: ScheduleTask): void {
+  task.lastRun = Date.now()
+  task.nextRun = nextRunAfter(task.spec, task.lastRun, task.lastRun)
+  writeSchedules(list)
+}
+
+/** 回写执行结果；不覆盖执行期间可能被用户编辑的 nextRun */
+function writeRunResult(id: string, res: { sessionId?: string; error?: string }): void {
+  const list = readSchedules()
+  const task = list.find((x) => x.id === id)
+  if (!task) return
+  task.lastRun = Date.now()
+  if (res.sessionId) task.lastSession = res.sessionId
+  if (res.error) task.lastError = res.error
+  else task.lastError = undefined
+  writeSchedules(list)
+}
+
 /** 立即执行（行上「立即执行一次」）：成功/失败都把结果回写清单 */
 export async function runScheduleNow(id: string): Promise<{ ok: boolean; sessionId?: string; error?: string }> {
   const task = readSchedules().find((x) => x.id === id)
   if (!task) return { ok: false, error: '任务不存在' }
-  if (!(await adapter.isHealthy())) return { ok: false, error: '内核未启动，无法执行' }
-  const res = await runTask(task)
-  const list = readSchedules()
-  const t = list.find((x) => x.id === id)
-  if (t) {
-    t.lastRun = Date.now()
-    if (res.sessionId) t.lastSession = res.sessionId
-    if (res.error) t.lastError = res.error
-    else t.lastError = undefined
-    t.nextRun = nextRunAfter(t.spec, Date.now(), t.lastRun)
-    writeSchedules(list)
+  if (runningTaskIds.has(id)) return { ok: false, error: '任务正在执行' }
+  runningTaskIds.add(id)
+  try {
+    if (!(await adapter.isHealthy())) return { ok: false, error: '内核未启动，无法执行' }
+    const list = readSchedules()
+    const claimed = list.find((x) => x.id === id)
+    if (!claimed) return { ok: false, error: '任务不存在' }
+    claimSchedule(list, claimed)
+    const res = await runTask(claimed)
+    writeRunResult(id, res)
+    if (res.sessionId) onRan?.({ taskId: id, sessionId: res.sessionId, name: claimed.name })
+    return res.error ? { ok: false, error: res.error, sessionId: res.sessionId } : { ok: true, sessionId: res.sessionId }
+  } finally {
+    runningTaskIds.delete(id)
   }
-  if (res.sessionId) onRan?.({ taskId: id, sessionId: res.sessionId, name: task.name })
-  return res.error ? { ok: false, error: res.error, sessionId: res.sessionId } : { ok: true, sessionId: res.sessionId }
 }
 
-/** 一轮 tick：到点的执行，错过的（过期超 60 秒）不补、推进周期 */
+/** 一轮 tick：到点的执行，错过的（过期超三个 tick）不补、推进周期 */
 async function tick(): Promise<void> {
-  if (!(await adapter.isHealthy())) return // 内核没起来：本轮全跳过，等下一轮（nextRun 不动）
-  const list = readSchedules()
-  const now = Date.now()
-  let dirty = false
-  for (const task of list) {
-    if (!task.enabled || task.nextRun > now) continue
-    // 到点（或 tick 抖动内）：执行。错过的在 readSchedules 归一化时已推进过，不会落在这里补跑。
-    const res = await runTask(task)
-    task.lastRun = Date.now()
-    if (res.sessionId) task.lastSession = res.sessionId
-    if (res.error) task.lastError = res.error
-    else task.lastError = undefined
-    task.nextRun = nextRunAfter(task.spec, Date.now(), task.lastRun)
-    dirty = true
-    if (res.sessionId) onRan?.({ taskId: task.id, sessionId: res.sessionId, name: task.name })
+  if (ticking) return
+  ticking = true
+  try {
+    if (!(await adapter.isHealthy())) return // 内核没起来：本轮全跳过，等下一轮（nextRun 不动）
+    const list = readSchedules()
+    const now = Date.now()
+    for (const task of list) {
+      if (!task.enabled || task.nextRun > now || runningTaskIds.has(task.id)) continue
+      runningTaskIds.add(task.id)
+      try {
+        // 到点（或 tick 抖动内）：先领取本轮，再执行。错过的在 readSchedules 归一化时已推进过，不会落在这里补跑。
+        claimSchedule(list, task)
+        const res = await runTask(task)
+        writeRunResult(task.id, res)
+        if (res.sessionId) onRan?.({ taskId: task.id, sessionId: res.sessionId, name: task.name })
+      } finally {
+        runningTaskIds.delete(task.id)
+      }
+    }
+  } finally {
+    ticking = false
   }
-  if (dirty) writeSchedules(list)
 }
 
 export function startScheduler(ws: string, notify: (r: ScheduleRan) => void): void {

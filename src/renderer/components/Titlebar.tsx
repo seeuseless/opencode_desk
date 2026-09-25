@@ -40,7 +40,7 @@ export function Titlebar({
         </div>
       )}
       <span className="tb-browser-slot" />
-      {/* 右段窗口按钮整体描一条边，与左侧标题区分开 */}
+      {/* 右段窗口按钮 */}
       <div className="tb-acts">
         {/*
           全屏浏览时这一颗藏起来：面板已占满，关它等于退出全屏，交给右边那颗最大化/还原按钮。
