@@ -30,8 +30,8 @@ yarn install       # 首次会下载 Electron 与 OpenCode 原生二进制
 yarn dev           # 开发模式（桌面窗口）
 yarn build         # 编译 main/preload/renderer
 yarn typecheck     # 类型检查
-yarn dist          # electron-builder 打 Windows 安装包
-yarn dist:mac      # electron-builder 打 macOS dmg/zip
+yarn dist          # electron-builder 打 Windows 安装包（CI 上加 --x64 --arm64 出双架构）
+yarn dist:mac      # electron-builder 打 macOS dmg/zip（CI 上加 --arm64 --x64 出双架构）
 ```
 
 > 用 `npm install` / `npm run xxx` 亦可；仓库内 `yarn.lock` 锁定版本，**推荐 yarn**。
@@ -82,18 +82,24 @@ git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 
 推完 tag 后 **GitHub Actions 自动**（`.github/workflows/release.yml`）：
 
-1. 在 `windows-latest` 与 `macos-latest` 上**并行**构建
-2. 校验产物（安装包名、内核二进制是否为真、dmg 是否可执行）
+1. 在 `windows-latest` 与 `macos-latest` 上**并行**构建，每个平台一次出**双架构**包：
+   Windows x64 + ARM64、macOS Apple Silicon + Intel（共六个附件）
+2. 校验产物（安装包名、包内内核是否为真且与包架构一致、mac 权限位）——
+   交叉架构的包由 beforePack 钩子换入对应架构的 agent 内核，校验读 PE / Mach-O
+   头断言架构没打岔
 3. 把安装包挂到该 tag 对应的 Release 附件上
 
 Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例如无签名证书、runner 环境波动）
-也不会拦下 Windows 的发版，Release 里仍会正常出现 `QingNiao-Setup.exe`。
+也不会拦下 Windows 的发版，Release 里仍会正常出现 Windows 的两个安装包。
 
-用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**。
+用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**；
+应用内更新会按当前机器架构自动认领正确的安装包。
 
-> ⚠️ **附件名是固定的，每次发版覆盖上传同名附件**（不带版本号）。
+> ⚠️ **只有 Windows x64 的附件名是固定的**（`QingNiao-Setup.exe`，每次发版覆盖上传同名附件）。
 > 这是应用内"一键下载"能自动找到地址的前提：它走
 > `releases/latest/download/QingNiao-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
+> CI 上 x64 包构建后重命名回这个固定名再上传；其余附件（Windows ARM64、macOS 两种架构）
+> 都带 `-<arch>` 后缀（`QingNiao-Setup-arm64.exe`、`QingNiao-Setup-x64.dmg` 等），
 > 历史版本靠 git tag 与各自的 Release 页面追溯。
 
 发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
