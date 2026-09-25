@@ -22,7 +22,7 @@
 # 两个平台各自的附件名（都由 electron-builder.yml 决定，改一处即可）：
 #   · Windows：QingNiao-Setup.exe（x64，CI 把 ${arch} 产物重命名回固定名以维持
 #              releases/latest/download 直链）+ QingNiao-Setup-arm64.exe（ARM64）
-#   · macOS  ：QingNiao-Setup-arm64.dmg/.zip + QingNiao-Setup-x64.dmg/.zip
+#   · macOS  ：QingNiao-Setup-arm64.dmg + QingNiao-Setup-x64.dmg
 #              （mac.artifactName 带 ${arch}；--arm64 --x64 双架构出包，覆盖 Apple
 #               Silicon 与 Intel）
 #   双架构出包靠构建命令传 --x64 --arm64（或 --arm64 --x64）两个 flag；交叉架构的
@@ -245,7 +245,7 @@ jobs:
         run: ls -l dist
 
   # ---------------------------------------------------------------------------
-  # macOS：与 Windows 并行构建，产物同样是 dmg / zip。
+  # macOS：与 Windows 并行构建，产物是各架构的 dmg。
   #
   # ⚠️ `continue-on-error: true` 是刻意的：
   #   个人项目没有 Apple Developer 账号，dmg 出的是**未签名**包（用户首次打开需右键→打开
@@ -312,7 +312,8 @@ jobs:
       # dist:mac 里串的是 electron-builder --mac；这里额外关掉签名自动发现，
       # 否则没有钥匙串证书时 electron-builder 会要求签名而失败。
       # --arm64 --x64：一次出双架构包（mac.artifactName 带 ${arch}，互不覆盖）。
-      # 产物：QingNiao-Setup-arm64.dmg/.zip + QingNiao-Setup-x64.dmg/.zip。
+      # 产物：QingNiao-Setup-arm64.dmg + QingNiao-Setup-x64.dmg（不再出 zip：它是
+      # electron-updater 的 mac 自动更新格式，本项目不用，见 electron-builder.yml）。
       # x64 包的内核由 beforePack 钩子从 opencode-darwin-x64-baseline 换入（上一步装好）。
       - name: 构建 macOS 安装包（未签名，arm64 + x64）
         run: yarn dist:mac --arm64 --x64 --publish never
@@ -377,8 +378,8 @@ jobs:
         run: |
           echo "dist 实际内容："
           ls -l dist
-          # dmg 是主产物（应用内更新按 MAC_DMG_NAME 找它）；zip 是补充分发格式
-          for f in dist/*.dmg dist/*.zip; do
+          # dmg 是唯一 mac 产物（应用内更新按 MAC_DMG_NAME 找它）
+          for f in dist/*.dmg; do
             if [ -f "$f" ]; then echo "✓ 找到 $f"; else echo "::warning::未产出 $f"; fi
           done
           if ! ls dist/*.dmg >/dev/null 2>&1; then
@@ -409,9 +410,7 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             dist/QingNiao-Setup-arm64.dmg
-            dist/QingNiao-Setup-arm64.zip
             dist/QingNiao-Setup-x64.dmg
-            dist/QingNiao-Setup-x64.zip
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

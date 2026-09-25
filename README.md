@@ -31,7 +31,7 @@ yarn dev           # 开发模式（桌面窗口）
 yarn build         # 编译 main/preload/renderer
 yarn typecheck     # 类型检查
 yarn dist          # electron-builder 打 Windows 安装包（CI 上加 --x64 --arm64 出双架构）
-yarn dist:mac      # electron-builder 打 macOS dmg/zip（CI 上加 --arm64 --x64 出双架构）
+yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 出双架构）
 ```
 
 > 用 `npm install` / `npm run xxx` 亦可；仓库内 `yarn.lock` 锁定版本，**推荐 yarn**。
@@ -46,8 +46,8 @@ yarn dist:mac      # electron-builder 打 macOS dmg/zip（CI 上加 --arm64 --x6
 > | --- | --- |
 > | Windows（x64） | `QingNiao-Setup.exe`（文件名固定不含版本号） |
 > | Windows（ARM64） | `QingNiao-Setup-arm64.exe` |
-> | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg`（另有 `.zip`） |
-> | macOS（Intel） | `QingNiao-Setup-x64.dmg`（另有 `.zip`） |
+> | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg` |
+> | macOS（Intel） | `QingNiao-Setup-x64.dmg` |
 >
 > 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
 > `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名下载不稳。

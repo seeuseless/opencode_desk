@@ -164,9 +164,10 @@ mac:
   # target 不写 arch：默认只出构建机架构。CI 上用 `--arm64 --x64` 两个 flag 一次出
   # 双架构包（见 release.yml）；本地 dist:mac 不带 flag，仍只出本机架构。
   # 交叉架构的内核替换由顶层 beforePack 钩子处理（见上方说明）。
+  # 只出 dmg 不出 zip：zip 是 electron-updater 做 mac 自动更新的格式，本项目不用它
+  # （更新走 Release 元数据 + dmg），zip 纯属占 Release 空间（2026-09-25 删）。
   target:
     - dmg
-    - zip
   category: public.app-category.productivity
   # mac 上多架构产物同名会互相覆盖，故单独带 arch（与主进程 updater.ts 的 MAC_DMG_NAME 对应）
   artifactName: QingNiao-Setup-${arch}.${ext}

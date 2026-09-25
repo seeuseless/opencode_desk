@@ -70,7 +70,7 @@ function readMeta(): UpdateMeta {
  * 上传，维持 `releases/latest/download/QingNiao-Setup.exe` 固定直链）；arm64 叫
  * QingNiao-Setup-arm64.exe。本常量按当前进程架构取对应名，只做兜底。
  *
- * mac：arm64 / x64 双份 QingNiao-Setup-<arch>.dmg/.zip，按进程架构拼名字：
+ * mac：arm64 / x64 双份 QingNiao-Setup-<arch>.dmg（zip 已停发），按进程架构拼名字：
  * x64 包（含 Rosetta 下运行的场景）认领 x64 附件，arm64 同理。
  *
  * 正常路径是 pickAsset 从 Release 的 assets 里按架构挑（见下方 pickAsset），这些
@@ -220,14 +220,14 @@ function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { 
   // 认领——通用正则会拿到数组里第一个匹配附件，架构随上传顺序碰运气。Rosetta 下
   // process.arch 是 x64，x64 应用认 x64 包，行为也正确。
   // Windows 的期望名要与 CI 重命名约定一致：x64 附件就叫 QingNiao-Setup.exe（不带后缀）。
+  // mac 的认领正则只写 dmg：zip 已停发（electron-builder.yml mac.target 注释），
+  // want 兜底里的 zip 是给还挂着 zip 附件的历史 Release 留的。
   let archHit: GhAsset | undefined
   if (process.platform === 'win32') {
     const expected = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
     archHit = list.find((a) => (a.name ?? '').toLowerCase() === expected.toLowerCase())
   } else if (process.platform === 'darwin') {
-    archHit =
-      list.find((a) => new RegExp(`-${process.arch}\\.dmg$`, 'i').test(a.name ?? '')) ??
-      list.find((a) => new RegExp(`-${process.arch}\\.zip$`, 'i').test(a.name ?? ''))
+    archHit = list.find((a) => new RegExp(`-${process.arch}\\.dmg$`, 'i').test(a.name ?? ''))
   }
   const hit =
     archHit ??
