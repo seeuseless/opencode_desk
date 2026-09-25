@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
@@ -2251,53 +2251,74 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
   const panelRef = useRef<HTMLElement | null>(null)
   /** 调宽拖拽护罩：拖动期间盖住 webview，指针事件留在主文档 */
   const [dragShield, setDragShield] = useState(false)
+  /** Electron 的 webview ref 赋值不等于 guest 已挂载；只有 dom-ready 后才能调用其方法 */
+  const [wvReady, setWvReady] = useState(false)
+  /** webview 尚未就绪时，用户地址栏输入的地址先存这里，ready 后补导航 */
+  const pendingUrlRef = useRef('')
+
+  const syncNav = useCallback(() => {
+    const wv = wvRef.current
+    if (!wv) return
+    setNav({ back: wv.canGoBack(), fwd: wv.canGoForward() })
+  }, [])
+  const onWvReady = useCallback(() => setWvReady(true), [])
+  const onWvNav = useCallback((e: { url: string }): void => {
+    setAddr(e.url)
+    onUrl(e.url)
+    syncNav()
+  }, [onUrl, syncNav])
+  const onWvTitle = useCallback((e: { title: string }): void => {
+    setTitle(e.title)
+  }, [])
+  const bindWv = useCallback((wv: WebviewTag | null) => {
+    const old = wvRef.current
+    if (old === wv) return
+    if (old) {
+      old.removeEventListener('dom-ready', onWvReady)
+      old.removeEventListener('did-navigate', onWvNav)
+      old.removeEventListener('did-navigate-in-page', onWvNav)
+      old.removeEventListener('page-title-updated', onWvTitle)
+    }
+    wvRef.current = wv
+    setWvReady(false)
+    if (wv) {
+      wv.addEventListener('dom-ready', onWvReady)
+      wv.addEventListener('did-navigate', onWvNav)
+      wv.addEventListener('did-navigate-in-page', onWvNav)
+      wv.addEventListener('page-title-updated', onWvTitle)
+    }
+  }, [onWvNav, onWvReady, onWvTitle])
 
   const lastNavSeq = useRef(navSeq)
   useEffect(() => {
     const force = navSeq !== lastNavSeq.current
     lastNavSeq.current = navSeq
-    if (!url) return
+    const wv = wvRef.current
+    if (!wvReady || !wv) return
+    const target = pendingUrlRef.current || url
+    if (!target) return
+    pendingUrlRef.current = ''
     // 比 webview 的真实地址，而不是 addr：AI 走主进程 loadURL 时消息更新可能早于
     // did-navigate 事件，只看 addr 会把同一个地址再导航一遍
-    if (!force && samePage(wvRef.current?.getURL(), url)) return
-    setAddr(url)
-    wvRef.current?.loadURL(url)
-  }, [url, navSeq])
+    if (!force && samePage(wv.getURL(), target)) {
+      setAddr(target)
+      return
+    }
+    setAddr(target)
+    wv.loadURL(target)
+  }, [url, navSeq, wvReady])
 
   // webview 由 React 直接管理 src（addr 变化即导航）；这里挂内核事件把页内跳转同步回地址栏
   /** 每次导航后查一遍历史状态，驱动前进/后退按钮可用性 */
-  const syncNav = () => {
-    const wv = wvRef.current
-    if (!wv) return
-    setNav({ back: wv.canGoBack(), fwd: wv.canGoForward() })
-  }
-  const bindWv = (wv: WebviewTag | null) => {
-    if (wvRef.current) {
-      wvRef.current.removeEventListener('did-navigate', onWvNav)
-      wvRef.current.removeEventListener('did-navigate-in-page', onWvNav)
-      wvRef.current.removeEventListener('page-title-updated', onWvTitle)
-    }
-    wvRef.current = wv
-    if (wv) {
-      wv.addEventListener('did-navigate', onWvNav)
-      wv.addEventListener('did-navigate-in-page', onWvNav)
-      wv.addEventListener('page-title-updated', onWvTitle)
-    }
-  }
-  const onWvNav = (e: { url: string }): void => {
-    setAddr(e.url)
-    onUrl(e.url)
-    syncNav()
-  }
-  const onWvTitle = (e: { title: string }): void => {
-    setTitle(e.title)
-  }
-
   function loadAddr(v: string) {
     const u = /^\w+:\/\//.test(v.trim()) ? v.trim() : 'https://' + v.trim()
     if (!u) return
     setAddr(u)
-    wvRef.current?.loadURL(u)
+    if (!wvReady || !wvRef.current) {
+      pendingUrlRef.current = u
+      return
+    }
+    wvRef.current.loadURL(u)
   }
 
   /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */

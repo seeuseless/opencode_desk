@@ -372,12 +372,21 @@ ipcMain.handle('platform:usageRecords', (_e, page?: number) => platform.usageRec
 // AI 经 panel_* MCP 工具操控右侧面板里的 webview：与用户看的是同一个浏览器（persist:webpanel
 // 分区，登录态共享）。MCP server 是独立进程，通过这个本地 HTTP 端点调用主进程的 webContents。
 let panelWc: WebContents | null = null
+/** web-contents-created 早于 guest attach / 首次 dom-ready，不能仅凭 WebContents 存在就调用页面方法 */
+let panelDomReady = false
 
 app.on('web-contents-created', (_e, wc) => {
   if (wc.getType() === 'webview' && wc.session === session.fromPartition('persist:webpanel')) {
     panelWc = wc
+    panelDomReady = false
+    wc.once('dom-ready', () => {
+      if (panelWc === wc) panelDomReady = true
+    })
     wc.once('destroyed', () => {
-      if (panelWc === wc) panelWc = null
+      if (panelWc === wc) {
+        panelWc = null
+        panelDomReady = false
+      }
     })
   }
 })
@@ -389,13 +398,13 @@ app.on('web-contents-created', (_e, wc) => {
  * 让渲染层挂载（可以隐藏着）webview，不去动任何「打开面板」的状态。
  */
 async function ensurePanel(): Promise<WebContents> {
-  if (panelWc && !panelWc.isDestroyed()) return panelWc
+  if (panelWc && !panelWc.isDestroyed() && panelDomReady) return panelWc
   mainWin?.webContents.send('opencode:event', { type: 'qingniao.browser.wake' })
   // 等待窗口足够久（渲染层要挂载 webview、分区会话要就绪）。太短会让模型拿到
   // 「面板浏览器未打开」后反复重试同一个调用——用户看到的就是「一直在找」。
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 300))
-    if (panelWc && !panelWc.isDestroyed()) return panelWc
+    if (panelWc && !panelWc.isDestroyed() && panelDomReady) return panelWc
   }
   throw new Error('内置浏览器未能初始化：已请求界面挂载面板，但 6 秒内没等到 webview 就绪。请重试，若持续失败请重启应用。')
 }
