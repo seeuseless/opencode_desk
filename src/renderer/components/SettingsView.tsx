@@ -11,6 +11,7 @@ import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
 import type { SettingsTab } from '../App'
+import { CODE_STYLES, CODE_STYLE_PREVIEWS, type CodeStyle } from '../codeStyle'
 
 /**
  * 外部请求的定位（对话框里的「配置模型」等）。tick 自增是为了「用户本来就停在模型页」
@@ -58,6 +59,10 @@ interface Props {
   custom: CustomColors
   onCustom: (key: keyof CustomColors, value: string) => void
   onResetCustom: () => void
+  codeStyle: CodeStyle
+  onCodeStyle: (style: CodeStyle) => void
+  normalChatWidth: number
+  onNormalChatWidth: (width: number) => void
   /** 当前活动项目路径：项目级技能写在 <项目>/.opencode/skills 下（没有项目时该组不可用） */
   projectPath?: string | null
   projectName?: string | null
@@ -85,12 +90,12 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'sideBg', label: '左侧面板底色' },
 ]
 
-/** 设置页左侧导航：账号 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
+/** 设置页左侧导航：账号 / 通用 / 模型 / 技能 / MCP / 使用量 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
   { id: 'account', label: '账号', icon: CircleUser },
-  { id: 'theme', label: '主题', icon: Palette },
+  { id: 'theme', label: '通用', icon: Palette },
   { id: 'providers', label: '模型', icon: Cpu },
   { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Globe },
@@ -852,10 +857,52 @@ export function SettingsView(p: Props) {
         </nav>
         <div className="setbody" ref={body}>
         {tab === 'theme' && (
+        <>
         <section>
           <h3>
-            <Layers size={15} /> 主题
+            <Layers size={15} /> 通用
           </h3>
+          <h4 className="sub-title">聊天宽度</h4>
+          <p className="sec-tip">仅影响非代码模式下的聊天内容宽度，默认使用较宽布局。</p>
+          <div className="chat-width-setting">
+            <input
+              type="range"
+              min={640}
+              max={1100}
+              step={20}
+              value={p.normalChatWidth}
+              onChange={(e) => p.onNormalChatWidth(Number(e.target.value))}
+            />
+            <span>{p.normalChatWidth}px</span>
+          </div>
+          <h4 className="sub-title">代码风格</h4>
+          <p className="sec-tip">统一应用于代码编辑器、聊天代码块与工具详情；随当前主题自动适配明暗。</p>
+          <div className="code-style-grid">
+            {CODE_STYLES.map((style) => {
+              const preview = CODE_STYLE_PREVIEWS[style.id]
+              const on = p.codeStyle === style.id
+              return (
+                <button
+                  type="button"
+                  key={style.id}
+                  className={'code-style-card' + (on ? ' on' : '')}
+                  onClick={() => p.onCodeStyle(style.id)}
+                >
+                  <span className="code-style-preview" style={{ background: preview.bg, color: preview.fg }}>
+                    <b style={{ color: preview.keyword }}>const</b>{' '}
+                    <span style={{ color: preview.string }}>answer</span>{' '}
+                    <i>=</i> <em>42</em>
+                  </span>
+                  <span className="code-style-name">{style.name}</span>
+                  <span className="code-style-desc">{style.desc}</span>
+                  {on && <span className="theme-mark"><Check size={11} strokeWidth={3} /></span>}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+        <section>
+          <h4 className="sub-title">主题</h4>
           <p className="sec-tip">
             内置配色即时切换，实时应用到整个界面；选择「自定义」可用四种基础色自由搭配。
           </p>
@@ -904,6 +951,7 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
+        </>
         )}
 
         {tab === 'providers' && (

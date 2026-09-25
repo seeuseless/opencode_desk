@@ -50,6 +50,8 @@ interface Props {
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
   browserMaxSignal: number
+  /** 纯写代码模式：关闭并隐藏内置浏览器、权限与思考入口 */
+  codeMode: boolean
   /** 上报浏览器面板开合与放大状态（标题栏浏览器按钮与最大化按钮据此决定行为与图标） */
   onBrowserUi: (s: { open: boolean; max: boolean }) => void
   /** 上报会话标题（首条用户信息；计划会话带标记与日期），由 App 转发到标题栏绘制 */
@@ -455,6 +457,7 @@ export function ChatView(p: Props) {
   // 对话里点击需浏览器打开的链接（Markdown 组件派发）：打开面板并导航到该地址
   useEffect(() => {
     const onOpen = (e: Event): void => {
+      if (p.codeMode) return
       const u = (e as CustomEvent).detail
       if (typeof u !== 'string' || !u) return
       setPinnedUrl(u)
@@ -464,7 +467,7 @@ export function ChatView(p: Props) {
     }
     window.addEventListener('qingniao:open-in-browser', onOpen)
     return () => window.removeEventListener('qingniao:open-in-browser', onOpen)
-  }, [])
+  }, [p.codeMode])
 
   // 切会话时清掉用户点开的地址：面板若开着回到新会话的 AI 浏览上下文
   useEffect(() => {
@@ -510,8 +513,13 @@ export function ChatView(p: Props) {
     setChatHidden(false) // 面板都关了，隐藏态一起复位，别再带着回右栏布局
   }
 
+  useEffect(() => {
+    if (p.codeMode) closeBrowserPanel()
+  }, [p.codeMode])
+
   /** 浏览模式：面板放大全屏 + 右下角浮动对话卡，用户自己在地址栏输网址 */
   function openBrowseMode() {
+    if (p.codeMode) return
     setPanelBorn(true)
     setPanelOpen(true)
     setBrowserMax(true)
@@ -526,7 +534,7 @@ export function ChatView(p: Props) {
    * 想退出全屏点标题栏的「还原」；「AI 对话」开关则挪到了地址栏右侧那颗电源图标。
    */
   function toggleBrowserFromHeader() {
-    if (browserMax) return
+    if (p.codeMode || browserMax) return
     if (panelOpen) {
       closeBrowserPanel()
       return
@@ -991,8 +999,13 @@ export function ChatView(p: Props) {
       })
       .catch(() => {})
     oc.messages(p.sessionId, p.project?.path)
-      .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .then((list) => {
+        if (!askAlive) return
+        setMsgs(hydrate(list, shown.current, texts.current))
+      })
+      .catch((e) => {
+        if (askAlive) setError(e instanceof Error ? e.message : String(e))
+      })
     return () => {
       askAlive = false
     }
@@ -2137,23 +2150,25 @@ export function ChatView(p: Props) {
             >
               <Paperclip size={14} />
             </button>
-            <ProjectPicker
-              projects={p.projects}
-              value={p.project?.id}
-              onChange={p.onSwitchProject}
-              onPickDir={p.onPickDir}
-            />
+            {!p.codeMode && (
+              <ProjectPicker
+                projects={p.projects}
+                value={p.project?.id}
+                onChange={p.onSwitchProject}
+                onPickDir={p.onPickDir}
+              />
+            )}
             {/* 访问权限：独立一颗按钮，紧挨「选择文件夹」右侧。放这儿才能常显当前档位。
                 它是**全局**一档（对所有文件夹生效），与左边选哪个项目无关。
                 全屏浏览时不显示：浏览场景不需要切权限档位 */}
-            {!browserMax && <AccessPicker access={p.access} onAccess={p.onAccess} />}
+            {!p.codeMode && !browserMax && <AccessPicker access={p.access} onAccess={p.onAccess} />}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
                 {terms.filter((x) => x.status === 'running').length}
               </button>
             )}
-            {!browserMax && (
+            {!p.codeMode && !browserMax && (
               <button className="icon-btn globe" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
                 <Globe size={14} />
               </button>
@@ -2162,13 +2177,14 @@ export function ChatView(p: Props) {
             <ModelPicker
               groups={groups}
               value={p.model}
+              codeMode={p.codeMode}
               onChange={p.onModelChange}
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
-            {!browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
+            {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
             {/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
             {busy ? (
               <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopCurrent()}>
@@ -2186,7 +2202,7 @@ export function ChatView(p: Props) {
     {/* webview 挂上就不再卸载（AI 要一直能操作它），显不显示只看 visible */}
     {(panelOpen || panelBorn) && (
       <BrowserPanel
-        visible={panelOpen}
+        visible={panelOpen && !p.codeMode}
         url={pinnedUrl || aiBrowseUrl}
         navSeq={pinSeq}
         max={browserMax}
@@ -2214,7 +2230,7 @@ export function ChatView(p: Props) {
     </div>
   )
 }
-/** 右侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
+/** 左侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，右缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
 function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onToggleChat }: {
   /** 面板是否可见：false 时只隐藏 UI，webview 继续挂着，AI 照常能操作 */
   visible: boolean
@@ -2241,7 +2257,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
   const [src] = useState(url || 'about:blank')
   /** 当前页标题：收藏时作显示名（page-title-updated 事件跟踪） */
   const [title, setTitle] = useState('')
-  /** 左缘拖出的面板宽度（px）；null = 默认 40% */
+  /** 右缘拖出的面板宽度（px）；null = 默认 40% */
   const [width, setWidth] = useState<number | null>(null)
   /** webview 历史状态：驱动前进/后退按钮可用性 */
   const [nav, setNav] = useState({ back: false, fwd: false })
@@ -2321,7 +2337,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
     wvRef.current.loadURL(u)
   }
 
-  /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
+  /** 拖右缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
   function startResize(e: ReactPointerEvent) {
     e.preventDefault()
     setDragShield(true)
@@ -2331,7 +2347,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
     const x0 = e.clientX
     const w0 = panel.offsetWidth
     const move = (ev: PointerEvent) =>
-      setWidth(Math.min(Math.max(280, w0 + (x0 - ev.clientX)), row.clientWidth - 320))
+      setWidth(Math.min(Math.max(240, w0 + (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -3491,7 +3507,7 @@ function CodeBlock({ text, file, diff }: { text: string; file?: string; diff?: b
     const hasColor = lines.some((l) => l.kind !== 'ctx')
     if (!hasColor) {
       return (
-        <pre className="step-code">
+        <pre className="step-code hljs">
           <code>{text}</code>
         </pre>
       )
@@ -3519,7 +3535,7 @@ function CodeBlock({ text, file, diff }: { text: string; file?: string; diff?: b
     /* 高亮失败回退纯文本 */
   }
   return (
-    <pre className="step-code">
+    <pre className="step-code hljs">
       <code dangerouslySetInnerHTML={{ __html: html }} />
     </pre>
   )

@@ -1,8 +1,8 @@
 import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, session, shell, type OpenDialogOptions, type WebContents } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, appendFileSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, appendFileSync, statSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
-import { join, resolve, basename } from 'node:path'
+import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
@@ -131,6 +131,107 @@ ipcMain.handle('folder:open', async (_e, target: string) => {
   if (!p) return '路径为空'
   if (!existsSync(p)) return '文件夹不存在或已被移动'
   return shell.openPath(p)
+})
+
+const CODE_EXTENSIONS = new Set([
+  '.c', '.cc', '.cpp', '.cs', '.css', '.go', '.h', '.hpp', '.htm', '.html', '.java',
+  '.js', '.jsx', '.json', '.jsonc', '.kt', '.kts', '.less', '.lua', '.md', '.mjs',
+  '.mts', '.php', '.pl', '.py', '.r', '.rb', '.rs', '.sass', '.scss', '.sh', '.sql',
+  '.svelte', '.swift', '.toml', '.ts', '.tsx', '.vue', '.xml', '.yaml', '.yml'
+])
+const CODE_FILE_NAMES = new Set(['Dockerfile', 'Gemfile', 'Makefile', 'Procfile'])
+const CODE_IGNORED_DIRS = new Set([
+  '.git', '.gradle', '.idea', '.next', '.nuxt', '.pytest_cache', '.venv', '__pycache__',
+  'build', 'coverage', 'dist', 'node_modules', 'out', 'target', 'venv'
+])
+const MAX_CODE_BYTES = 2 * 1024 * 1024
+
+function workspaceRoot(projectPath: string): string {
+  const root = realpathSync(resolve(String(projectPath ?? '').trim()))
+  if (!statSync(root).isDirectory()) throw new Error('项目目录不存在')
+  return root
+}
+
+function insideWorkspace(root: string, target: string): boolean {
+  const rel = relative(root, target)
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
+}
+
+function workspaceFile(projectPath: string, filePath: string): { root: string; target: string } {
+  const root = workspaceRoot(projectPath)
+  const rel = String(filePath ?? '').trim()
+  const target = resolve(root, rel)
+  if (!insideWorkspace(root, target)) throw new Error('文件路径超出项目目录')
+  return { root, target }
+}
+
+function workspaceTargetRealPath(root: string, target: string): string {
+  if (existsSync(target)) {
+    const real = realpathSync(target)
+    if (!insideWorkspace(root, real)) throw new Error('文件已指向项目目录之外')
+    return real
+  }
+  const parent = realpathSync(dirnameOf(target))
+  if (!insideWorkspace(root, parent)) throw new Error('文件路径超出项目目录')
+  return target
+}
+
+function dirnameOf(filePath: string): string {
+  const i = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+  return i > 0 ? filePath.slice(0, i) : filePath
+}
+
+function isCodeFile(name: string): boolean {
+  const dot = name.lastIndexOf('.')
+  return CODE_FILE_NAMES.has(name) || (dot > 0 && CODE_EXTENSIONS.has(name.slice(dot).toLowerCase()))
+}
+
+ipcMain.handle('workspace:list', (_e, req: { projectPath: string; dirPath?: string }) => {
+  const { root, target } = workspaceFile(req?.projectPath, req?.dirPath ?? '')
+  const real = workspaceTargetRealPath(root, target)
+  if (!statSync(real).isDirectory()) throw new Error('所选路径不是目录')
+  return readdirSync(real, { withFileTypes: true })
+    .filter((entry) => !entry.isSymbolicLink() && !CODE_IGNORED_DIRS.has(entry.name))
+    .map((entry) => ({
+      name: entry.name,
+      path: relative(root, join(real, entry.name)).split(sep).join('/'),
+      type: entry.isDirectory() ? 'directory' as const : 'file' as const
+    }))
+    .filter((entry) => entry.type === 'directory' || isCodeFile(entry.name))
+    .sort((a, b) =>
+      a.type === b.type ? a.name.localeCompare(b.name) : a.type === 'directory' ? -1 : 1
+    )
+})
+
+ipcMain.handle('workspace:read', (_e, req: { projectPath: string; filePath: string }) => {
+  const { root, target } = workspaceFile(req?.projectPath, req?.filePath)
+  const real = workspaceTargetRealPath(root, target)
+  const stat = statSync(real)
+  if (!stat.isFile()) throw new Error('所选路径不是文件')
+  if (stat.size > MAX_CODE_BYTES) throw new Error('文件超过 2 MB，暂不支持编辑查看')
+  const content = readFileSync(real)
+  if (content.includes(0)) throw new Error('这是二进制文件，暂不支持代码编辑')
+  return { content: content.toString('utf8'), mtimeMs: stat.mtimeMs }
+})
+
+ipcMain.handle('workspace:write', (_e, req: {
+  projectPath: string
+  filePath: string
+  content: string
+  expectedMtimeMs: number
+}) => {
+  const { root, target } = workspaceFile(req?.projectPath, req?.filePath)
+  const real = workspaceTargetRealPath(root, target)
+  const current = existsSync(real) ? statSync(real) : null
+  if (current && Math.abs(current.mtimeMs - req.expectedMtimeMs) > 0.5) {
+    throw new Error('文件已被其他程序修改，请重新打开后再保存')
+  }
+  if (!current) throw new Error('文件已被删除，请重新打开后再保存')
+  const content = Buffer.from(req.content, 'utf8')
+  if (content.includes(0)) throw new Error('不能把二进制内容保存为代码文件')
+  if (content.length > MAX_CODE_BYTES) throw new Error('文件超过 2 MB，暂不支持保存')
+  writeFileSync(real, content)
+  return { mtimeMs: statSync(real).mtimeMs }
 })
 
 // 聊天里图片/视频的「保存」：远程地址先下载到内存，本地路径直接读文件，再弹系统另存为对话框

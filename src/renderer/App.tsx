@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { FolderPlus, Settings, X } from 'lucide-react'
 import { Sidebar, type AccessLevel, type Project } from './components/Sidebar'
 import { ChatView } from './components/ChatView'
+import { CodeWorkspace, type CodeControls } from './components/CodeWorkspace'
 import { SchedulesView } from './components/SchedulesView'
 import { SettingsView } from './components/SettingsView'
-import { Titlebar, type TitleInfo } from './components/Titlebar'
+import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import { load, save } from './store'
 import { CUSTOM_ID, THEMES } from './theme'
 import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
+import { CODE_STYLES, type CodeStyle } from './codeStyle'
 
 type View = 'chat' | 'settings' | 'schedules'
 
@@ -24,6 +26,8 @@ export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | '
  */
 type SettingsReq = { tab: SettingsTab; tick: number }
 
+type ProjectFiles = { files: string[]; active: string }
+
 const sortSessions = (list: Session[]) =>
   [...list].sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))
 
@@ -34,18 +38,58 @@ function loadTheme(): string {
   return THEMES.some((x) => x.id === t) ? t : 'light'
 }
 
+function isDarkColor(hex: string): boolean {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m) return false
+  const n = parseInt(m[1], 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return r * 299 + g * 587 + b * 114 < 140000
+}
+
 export default function App() {
   const [theme, setTheme] = useState<string>(loadTheme)
   const [custom, setCustom] = useState<CustomColors>(() => load('qingniao.themeColors', DEFAULT_CUSTOM))
+  const [codeStyle, setCodeStyle] = useState<CodeStyle>(() => {
+    const value = load<string>('qingniao.codeStyle', 'github')
+    return CODE_STYLES.some((x) => x.id === value) ? value as CodeStyle : 'github'
+  })
   const [view, setView] = useState<View>('chat')
   /** 标题栏左侧的会话标题（首条用户信息）：由 ChatView 上报，切走时它自己清空 */
   const [head, setHead] = useState<TitleInfo | null>(null)
+  const [codeInfo, setCodeInfo] = useState<CodeTitleInfo | null>(null)
+  const [codeControls, setCodeControls] = useState<CodeControls | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
   const [activeId, setActiveId] = useState('')
   /** 每个文件夹独立的展开状态（用户自己点出来的，切视图不影响） */
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => load('qingniao.expanded', {}))
   /** 项目路径 → 会话列表（展开过的项目才有数据） */
   const [sessionsMap, setSessionsMap] = useState<Record<string, Session[]>>({})
+  /** 代码模式：普通项目展开后显示文件树，并把编辑器放在对话左侧 */
+  const [codeMode, setCodeMode] = useState<boolean>(() => load('qingniao.codeMode', false))
+  const [codeFiles, setCodeFiles] = useState<Record<string, ProjectFiles>>(() => load('qingniao.codeFiles', {}))
+  const [selectedFile, setSelectedFile] = useState('')
+  const [sidebarWidths, setSidebarWidths] = useState(() => {
+    const legacy = load<number>('qingniao.sidebarWidth', 260)
+    const clampWidth = (value: number) => Math.max(200, Math.min(value, 420))
+    return {
+      normal: clampWidth(load<number>('qingniao.sidebarWidth.normal', legacy)),
+      code: clampWidth(load<number>('qingniao.sidebarWidth.code', legacy))
+    }
+  })
+  const sidebarWidth = sidebarWidths[codeMode ? 'code' : 'normal']
+  const [normalChatWidth, setNormalChatWidth] = useState(() => {
+    const value = load<number>('qingniao.normalChatWidth', 960)
+    return Math.max(640, Math.min(value, 1100))
+  })
+  const [chatWidth, setChatWidth] = useState(() => {
+    const saved = load<number | null>('qingniao.chatWidth', null)
+    return typeof saved === 'number'
+      ? Math.max(320, saved)
+      : Math.max(320, Math.round((window.innerWidth - sidebarWidth - 24) * 0.36))
+  })
+  const [codeHeadWidth, setCodeHeadWidth] = useState(0)
   /** 项目 id → 最近活动时间（最后一条会话的更新时间，用于左栏排序） */
   const [lastActive, setLastActive] = useState<Record<string, number>>({})
   /** 自增计数：触发 ChatView 聚焦输入框 */
@@ -119,6 +163,41 @@ export default function App() {
   useEffect(() => save('qingniao.model', model), [model])
 
   useEffect(() => save('qingniao.expanded', expanded), [expanded])
+
+  useEffect(() => save('qingniao.codeMode', codeMode), [codeMode])
+
+  useEffect(() => save('qingniao.codeFiles', codeFiles), [codeFiles])
+
+  useEffect(() => {
+    document.documentElement.dataset.codeStyle = codeStyle
+    const dark = theme === CUSTOM_ID
+      ? isDarkColor(custom.bg)
+      : THEMES.some((x) => x.id === theme && x.dark)
+    document.documentElement.dataset.codeDark = dark ? 'true' : 'false'
+    save('qingniao.codeStyle', codeStyle)
+  }, [codeStyle, theme, custom.bg])
+
+  useEffect(() => save('qingniao.sidebarWidth.normal', sidebarWidths.normal), [sidebarWidths.normal])
+
+  useEffect(() => save('qingniao.sidebarWidth.code', sidebarWidths.code), [sidebarWidths.code])
+
+  useEffect(() => save('qingniao.normalChatWidth', normalChatWidth), [normalChatWidth])
+
+  useEffect(() => save('qingniao.chatWidth', chatWidth), [chatWidth])
+
+  useEffect(() => {
+    if (!codeMode || view !== 'chat') {
+      setCodeHeadWidth(0)
+      return
+    }
+    const pane = document.querySelector<HTMLElement>('.code-pane')
+    if (!pane) return
+    const update = () => setCodeHeadWidth(pane.getBoundingClientRect().width)
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(pane)
+    return () => observer.disconnect()
+  }, [codeMode, view, activeId])
 
   useEffect(() => {
     if (view !== 'settings') return
@@ -212,6 +291,8 @@ export default function App() {
       const stored = load<string>('qingniao.activeProject', '')
       const act = ps.some((x) => x.id === stored) ? stored : builtin.id
       setActiveId(act)
+      const activePath = ps.find((x) => x.id === act)?.path ?? ''
+      setSelectedFile(codeFiles[activePath]?.active ?? '')
       const exp = load<Record<string, boolean>>('qingniao.expanded', {})
       if (!Object.keys(exp).length && act) setExpanded({ [act]: true })
       setSettings(await window.qingniao.getSettings())
@@ -244,10 +325,10 @@ export default function App() {
     })()
   }, [projects])
 
-  // 项目数据按需加载：首次展开才拉
+  // 项目会话按需加载；代码树由 Sidebar 在普通项目展开时独立懒加载
   useEffect(() => {
     const proj = projects.find((x) => x.id === activeId)
-    if (proj && expanded[proj.id] && !(proj.path in sessionsMap)) loadProjectSessions(proj)
+    if (proj && expanded[proj.id] && !(proj.path in sessionsMap)) void loadProjectSessions(proj)
   }, [projects, expanded, activeId])
 
   const activeProject = projects.find((x) => x.id === activeId)
@@ -269,6 +350,85 @@ export default function App() {
     setView('chat')
   }
 
+  function toggleCodeMode() {
+    const next = !codeMode
+    setCodeMode(next)
+    toChat()
+    if (!next) return
+    const proj = projects.find((x) => x.id === activeId)
+    if (!proj) return
+    setExpanded((e) => ({ ...e, [proj.id]: true }))
+  }
+
+  function startColumnResize(e: ReactPointerEvent<HTMLDivElement>, target: 'sidebar' | 'chat'): void {
+    e.preventDefault()
+    const resizer = e.currentTarget
+    const pointerId = e.pointerId
+    resizer.setPointerCapture(pointerId)
+    const shield = document.createElement('div')
+    shield.className = 'drag-shield'
+    document.body.appendChild(shield)
+    const startX = e.clientX
+    const mode = codeMode ? 'code' : 'normal'
+    const startWidth = target === 'sidebar' ? sidebarWidths[mode] : chatWidth
+    const content = document.querySelector<HTMLElement>('.content')
+    const contentWidth = content?.getBoundingClientRect().width ?? window.innerWidth
+    const move = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX
+      if (target === 'sidebar') {
+        setSidebarWidths((current) => ({
+          ...current,
+          [mode]: Math.max(200, Math.min(startWidth + delta, 420))
+        }))
+      } else {
+        setChatWidth(Math.max(320, Math.min(startWidth - delta, contentWidth - 260)))
+      }
+    }
+    const stop = (ev: PointerEvent) => {
+      resizer.removeEventListener('pointermove', move)
+      resizer.removeEventListener('pointerup', stop)
+      resizer.removeEventListener('pointercancel', stop)
+      if (resizer.hasPointerCapture(ev.pointerId)) resizer.releasePointerCapture(ev.pointerId)
+      shield.remove()
+    }
+    resizer.addEventListener('pointermove', move)
+    resizer.addEventListener('pointerup', stop)
+    resizer.addEventListener('pointercancel', stop)
+  }
+
+  function rememberFile(projectPath: string, filePath: string) {
+    setCodeFiles((current) => {
+      const previous = current[projectPath] ?? { files: [], active: '' }
+      const files = previous.files.includes(filePath) ? previous.files : [...previous.files, filePath]
+      return { ...current, [projectPath]: { files, active: filePath } }
+    })
+  }
+
+  function selectCodeFile(filePath: string) {
+    setSelectedFile(filePath)
+    if (activeProject) {
+      setCodeFiles((current) => {
+        const previous = current[activeProject.path] ?? { files: [], active: '' }
+        const files = filePath && !previous.files.includes(filePath)
+          ? [...previous.files, filePath]
+          : previous.files
+        return { ...current, [activeProject.path]: { files, active: filePath } }
+      })
+    }
+  }
+
+  function setProjectFiles(projectPath: string, files: string[], active: string) {
+    setCodeFiles((current) => ({ ...current, [projectPath]: { files, active } }))
+  }
+
+  function pickFile(proj: Project, filePath: string) {
+    setActiveId(proj.id)
+    save('qingniao.activeProject', proj.id)
+    rememberFile(proj.path, filePath)
+    setSelectedFile(filePath)
+    toChat()
+  }
+
   /**
    * 点击文件夹：切换展开状态；点到别的项目时同步激活并进草稿态——
    * 否则右侧还挂着旧项目的会话（sessionId 未清），发消息会串进别的任务里。
@@ -277,11 +437,12 @@ export default function App() {
     const willExpand = !expanded[id]
     setExpanded((e) => ({ ...e, [id]: willExpand }))
     const proj = projects.find((x) => x.id === id)
-    if (proj && !(proj.path in sessionsMap)) loadProjectSessions(proj)
+    if (proj && !(proj.path in sessionsMap)) void loadProjectSessions(proj)
     if (id !== activeId) {
       setActiveId(id)
       save('qingniao.activeProject', id)
       setSessionId('')
+      setSelectedFile(proj ? codeFiles[proj.path]?.active ?? '' : '')
       toChat()
     }
   }
@@ -313,6 +474,7 @@ export default function App() {
     // 不展开时连 setExpanded 都不调用：给个同值新对象也会触发一次存档写入，没意义
     if (expand) setExpanded((e) => ({ ...e, [id]: true }))
     setSessionId('')
+    if (id !== activeId) setSelectedFile(codeFiles[proj.path]?.active ?? '')
     toChat()
     setFocusTick((t) => t + 1)
   }
@@ -322,6 +484,7 @@ export default function App() {
     setActiveId(proj.id)
     save('qingniao.activeProject', proj.id)
     setSessionId(sid)
+    if (proj.id !== activeId) setSelectedFile(codeFiles[proj.path]?.active ?? '')
     toChat()
     setFocusTick((t) => t + 1)
     const projList = sessionsMap[proj.path]
@@ -377,6 +540,7 @@ export default function App() {
       save('qingniao.activeProject', exist.id)
       setExpanded((e) => ({ ...e, [exist.id]: true }))
       setSessionId('')
+      if (exist.id !== activeId) setSelectedFile(codeFiles[exist.path]?.active ?? '')
       toChat()
       setFocusTick((t) => t + 1)
       return
@@ -393,6 +557,7 @@ export default function App() {
     save('qingniao.activeProject', proj.id)
     setExpanded((e) => ({ ...e, [proj.id]: true }))
     setSessionId('')
+    setSelectedFile('')
     toChat()
   }
 
@@ -411,11 +576,17 @@ export default function App() {
       const { [id]: _drop, ...rest } = e
       return rest
     })
+    setCodeFiles((current) => {
+      const { [target.path]: _drop, ...rest } = current
+      return rest
+    })
     if (activeId === id) {
       const nid = next[0]?.id ?? 'builtin'
+      const nextProject = next.find((x) => x.id === nid)
       setActiveId(nid)
       save('qingniao.activeProject', nid)
       setSessionId('')
+      setSelectedFile(nextProject ? codeFiles[nextProject.path]?.active ?? '' : '')
     }
   }
 
@@ -598,11 +769,19 @@ export default function App() {
 
   // 展示顺序：最近有对话活动的文件夹排最前，但「任务」目录（builtin）永远钉在最上面
   // （「选择文件夹」下拉与左栏共用这一份顺序，见 Sidebar.tsx 的同款排序）
+  const codeWorkspaceVisible = view === 'chat' && codeMode && !!activeProject && !activeProject.builtin
+
   const orderedProjects = [...projects].sort(
     (a, b) =>
       Number(!!b.builtin) - Number(!!a.builtin) ||
       (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
   )
+  const rightcolStyle = codeWorkspaceVisible
+    ? ({ '--code-head-width': `${codeHeadWidth}px` } as CSSProperties)
+    : undefined
+  const chatPaneStyle = codeWorkspaceVisible
+    ? { flex: `0 1 ${chatWidth}px`, width: chatWidth, minWidth: 320 }
+    : ({ '--chat-content-width': `${normalChatWidth}px` } as CSSProperties)
 
   return (
     <div className="shell">
@@ -616,6 +795,11 @@ export default function App() {
           busyIds={busyIds}
           loadingSids={loadingSids}
           view={view}
+          codeMode={codeMode}
+          width={sidebarWidth}
+          selectedFile={selectedFile}
+          onToggleCodeMode={toggleCodeMode}
+          onPickFile={pickFile}
           onToggleProject={toggleProject}
           onRemoveProject={removeProject}
           onNewSession={newSessionFor}
@@ -623,7 +807,7 @@ export default function App() {
           onAddProject={addProject}
           onPickSession={pickSessionFor}
           onDeleteSession={deleteSessionOf}
-          onOpenSettings={() => openSettingsAt('providers')}
+          onOpenSettings={() => openSettingsAt('theme')}
           onOpenFolder={openFolder}
           mobile={mobile}
           mobileBusy={mobileBusy}
@@ -637,67 +821,102 @@ export default function App() {
           remote={settings.remote}
           onOpenSchedules={() => setView('schedules')}
         />
+        <div
+          className="side-resizer"
+          title="拖拽调整侧栏宽度"
+          onPointerDown={(e) => startColumnResize(e, 'sidebar')}
+        />
         {/* 右列 = 标题栏 + 内容区：侧栏独占左侧全高，标题栏不再横贯整窗 */}
-        <div className="rightcol">
+        <div className={'rightcol' + (codeWorkspaceVisible ? ' code-mode-layout' : '')} style={rightcolStyle}>
         <Titlebar
-          title={view === 'chat' ? head : null}
+          title={view === 'chat' && !codeWorkspaceVisible ? head : null}
           onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
           browserOpen={browserUi.open}
           browserMax={browserUi.max}
+          showBrowser={!codeMode}
+          codeInfo={codeWorkspaceVisible ? codeInfo : null}
+          codeControls={codeWorkspaceVisible ? codeControls : null}
           onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
         />
         <div className="content">
-        {/* 计划任务列表页与对话互斥显示：它是整页管理视图，不是浮层 */}
-        {view === 'schedules' ? (
-          <SchedulesView
-            refreshSignal={schedTick}
-            onTaskSessionCreated={showScheduleSessionInSidebar}
-            onNotice={setNotice}
-          />
-        ) : (
-        /* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */
-        activeProject ? (
-          <ChatView
-            project={activeProject}
-            projects={orderedProjects}
-            sessionId={sessionId}
-            session={activeProject ? sessionsMap[activeProject.path]?.find((s) => s.id === sessionId) : undefined}
-            model={model}
-            onModelChange={setModel}
-            settings={chatProviders(settings)}
-            settingsReady={settingsReady}
-            onDraftCreated={onDraftCreated}
-            onRefreshSessions={refreshSessions}
-            onBusy={(sid, running) =>
-              setBusyIds((m) => {
-                if (running) return { ...m, [sid]: true }
-                if (!(sid in m)) return m
-                const { [sid]: _drop, ...rest } = m
-                return rest
-              })
-            }
-            focusSignal={focusTick}
-            browserToggleSignal={browserSignal}
-            browserMaxSignal={browserMaxSignal}
-            onBrowserUi={setBrowserUi}
-            onHead={setHead}
-            onOpenSettings={() => openSettingsAt('providers')}
-            onPickDir={addProject}
-            access={access}
-            onAccess={setAccess}
-            onSwitchProject={(id) => {
-              if (id === activeId) return
-              setActiveId(id)
-              save('qingniao.activeProject', id)
-              setSessionId('')
-              toChat()
-              setFocusTick((t) => t + 1)
-            }}
-          />
-        ) : (
-          <Welcome onAddProject={addProject} onOpenSettings={() => openSettingsAt('providers')} />
-        )
-        )}
+          {view === 'schedules' ? (
+            <SchedulesView
+              refreshSignal={schedTick}
+              onTaskSessionCreated={showScheduleSessionInSidebar}
+              onNotice={setNotice}
+            />
+          ) : codeWorkspaceVisible && activeProject ? (
+            <CodeWorkspace
+              key={activeProject.id}
+              project={activeProject}
+              filePath={selectedFile}
+              openFiles={codeFiles[activeProject.path]?.files ?? []}
+              onActiveFile={selectCodeFile}
+              onStatusChange={setCodeInfo}
+              onControlsChange={setCodeControls}
+              onOpenFilesChange={(paths) => {
+                const active = paths.includes(selectedFile) ? selectedFile : paths[paths.length - 1] ?? ''
+                setProjectFiles(activeProject.path, paths, active)
+              }}
+            />
+          ) : null}
+          {codeWorkspaceVisible && (
+            <div
+              className="work-resizer"
+              title="拖拽调整代码与对话宽度"
+              onPointerDown={(e) => startColumnResize(e, 'chat')}
+            />
+          )}
+          <div
+            className="chat-pane"
+            style={chatPaneStyle}
+          >
+            {/* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */}
+            {activeProject ? (
+              <ChatView
+                project={activeProject}
+                projects={orderedProjects}
+                sessionId={sessionId}
+                session={activeProject ? sessionsMap[activeProject.path]?.find((s) => s.id === sessionId) : undefined}
+                model={model}
+                onModelChange={setModel}
+                settings={chatProviders(settings)}
+                settingsReady={settingsReady}
+                onDraftCreated={onDraftCreated}
+                onRefreshSessions={refreshSessions}
+                onBusy={(sid, running) =>
+                  setBusyIds((m) => {
+                    if (running) return { ...m, [sid]: true }
+                    if (!(sid in m)) return m
+                    const { [sid]: _drop, ...rest } = m
+                    return rest
+                  })
+                }
+                focusSignal={focusTick}
+                browserToggleSignal={browserSignal}
+                browserMaxSignal={browserMaxSignal}
+                codeMode={codeMode}
+                onBrowserUi={setBrowserUi}
+                onHead={setHead}
+                onOpenSettings={() => openSettingsAt('providers')}
+                onPickDir={addProject}
+                access={access}
+                onAccess={setAccess}
+                onSwitchProject={(id) => {
+                  if (id === activeId) return
+                  setActiveId(id)
+                  save('qingniao.activeProject', id)
+                  setSessionId('')
+                  const nextProject = projects.find((x) => x.id === id)
+                  setSelectedFile(nextProject ? codeFiles[nextProject.path]?.active ?? '' : '')
+                  toChat()
+                  setFocusTick((t) => t + 1)
+                }}
+              />
+            ) : (
+              <Welcome onAddProject={addProject} onOpenSettings={() => openSettingsAt('providers')} />
+            )}
+          </div>
         </div>
         </div>
       </div>
@@ -725,6 +944,10 @@ export default function App() {
               custom={custom}
               onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
               onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
+              codeStyle={codeStyle}
+              onCodeStyle={setCodeStyle}
+              normalChatWidth={normalChatWidth}
+              onNormalChatWidth={setNormalChatWidth}
               projectPath={activeProject?.path ?? null}
               projectName={activeProject?.name ?? null}
               model={model}

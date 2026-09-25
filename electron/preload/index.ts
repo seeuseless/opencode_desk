@@ -103,6 +103,23 @@ const api = {
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke('openExternal', url),
   /** 在系统文件管理器里打开某个文件夹（左栏项目右键菜单「打开文件夹」）；返回空串表示成功 */
   openFolder: (path: string): Promise<string> => ipcRenderer.invoke('folder:open', path),
+  /** 读取项目某一层目录：目录在前、代码文件在后，忽略依赖目录、构建目录与符号链接 */
+  workspaceList: (
+    projectPath: string,
+    dirPath?: string
+  ): Promise<{ path: string; name: string; type: 'directory' | 'file' }[]> =>
+    ipcRenderer.invoke('workspace:list', { projectPath, dirPath }),
+  /** 读取项目内文本代码；返回内容与磁盘修改时间，保存时用于检查外部改动 */
+  workspaceRead: (projectPath: string, filePath: string): Promise<{ content: string; mtimeMs: number }> =>
+    ipcRenderer.invoke('workspace:read', { projectPath, filePath }),
+  /** 保存项目内代码；磁盘文件已变化时主进程会拒绝覆盖 */
+  workspaceWrite: (
+    projectPath: string,
+    filePath: string,
+    content: string,
+    expectedMtimeMs: number
+  ): Promise<{ mtimeMs: number }> =>
+    ipcRenderer.invoke('workspace:write', { projectPath, filePath, content, expectedMtimeMs }),
   /** 计划任务清单（左栏「计划任务」区块）；数据与调度器都在主进程 */
   scheduleList: (): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:list'),
   /** 新建/保存计划任务（同一 id 即覆盖），返回落盘后的最新清单 */

@@ -25,6 +25,11 @@ export interface ModelGroup {
   models: ModelGroupModel[]
 }
 
+function shortModelName(name: string): string {
+  const i = name.lastIndexOf('/')
+  return i >= 0 ? name.slice(i + 1) : name
+}
+
 interface Props {
   groups: ModelGroup[]
   /** 'providerID/modelID' */
@@ -32,6 +37,8 @@ interface Props {
   onChange: (v: string) => void
   /** 点击「去配置模型」跳转到设置页 */
   onOpenSettings?: () => void
+  /** 代码模式右侧较窄，只显示模型名；普通模式显示 provider/model */
+  codeMode?: boolean
   /**
    * 展开某个分组时触发（只在「从收起到展开」那一下调）。
    * 平台「内置模型」靠它按需刷新计价——限免/折扣是平台随时会改的，不能拿旧快照当事实。
@@ -42,7 +49,7 @@ interface Props {
 }
 
 /** 二级级联模型菜单：默认只显示一级提供商，点击后展开二级模型列 */
-export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandGroup, refreshingGroup }: Props) {
+export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup }: Props) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
@@ -52,12 +59,14 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
   const [subTop, setSubTop] = useState(0)
   /** 夹回窗口内的二次修正量：长列表展开后可能顶出屏幕上下沿 */
   const [subShift, setSubShift] = useState(0)
+  const [panelShift, setPanelShift] = useState(0)
 
   useEffect(() => {
     if (!open) return
     setExpanded('')
     setSubTop(0)
     setSubShift(0)
+    setPanelShift(0)
     const onDown = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false)
     }
@@ -71,11 +80,27 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
   // 列表尚未命中（如存档值待校正）时，直接按 'pid/mid' 原样显示，保证选中态始终是 模型/模型 格式
   const display =
     curGroup && curModel
-      ? `${curGroup.label}/${curModel.mid}`
+      ? codeMode
+        ? shortModelName(curModel.name || curModel.mid)
+        : value
       : i > 0
-        ? `${value.slice(0, i)}/${value.slice(i + 1)}`
+        ? codeMode
+          ? shortModelName(value)
+          : value
         : '选择模型'
   const active = groups.find((g) => g.id === expanded)
+
+  /** 代码模式右侧聊天变窄时，模型菜单也不能从窗口边缘溢出去。 */
+  useLayoutEffect(() => {
+    const el = panel.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const pad = 8
+    let shift = 0
+    if (r.left < pad) shift = pad - r.left
+    if (r.right + shift > window.innerWidth - pad) shift = window.innerWidth - pad - r.right
+    setPanelShift((current) => Math.abs(current - shift) > 0.5 ? shift : current)
+  }, [open, expanded])
 
   /**
    * 二级模型列**浮在面板左侧**，顶边必须跟被点中的一级行对齐：
@@ -101,13 +126,13 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
       </button>
       {open && (
-        <div className="menu-panel mp up" ref={panel}>
+        <div className="menu-panel mp up" ref={panel} style={{ transform: `translateX(calc(-50% + ${panelShift}px))` }}>
           <div className="mp-col">
             {groups.map((g) => (
               <button
                 key={g.id}
                 type="button"
-                className={'mp-item' + (g.id === active?.id ? ' on' : '')}
+                className={'mp-item' + (g.id === active?.id || g.id === curGroup?.id ? ' on' : '')}
                 onClick={(e) => {
                   const willExpand = active?.id !== g.id
                   const p = panel.current
@@ -152,7 +177,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, onExpandG
                   }}
                 >
                   <span className="mi-check">{`${active.id}/${m.mid}` === value && <Check size={13} />}</span>
-                  <span className="mp-name">{m.name || m.mid}</span>
+                  <span className="mp-name">{shortModelName(m.name || m.mid)}</span>
                   <Tag m={m} />
                   <Rate m={m} />
                 </button>

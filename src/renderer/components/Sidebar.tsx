@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
   CircleUser,
+  Code2,
+  FileCode2,
   Folder,
   FolderOpen,
   FolderPlus,
   LoaderCircle,
+  ListTodo,
   LogIn,
   MessageSquarePlus,
   RefreshCw,
@@ -40,6 +43,12 @@ export interface Project {
 
 const COLLAPSE_AT = 5
 
+interface WorkspaceNode {
+  name: string
+  path: string
+  type: 'directory' | 'file'
+}
+
 /**
  * 是不是内置的「任务」目录（列表面板与右键菜单共用同一判据）。
  * 既认 builtin 标记，也认 id —— 标记万一在存档里丢了（手改存档、旧版本写过），
@@ -61,6 +70,12 @@ interface Props {
   /** 正在拉取历史的会话集合（sid → true）：点击当帧高亮，不用等数据回来 */
   loadingSids: Record<string, boolean>
   view: 'chat' | 'settings' | 'schedules'
+  /** 普通项目展开区显示代码目录树；内置任务仍显示会话 */
+  codeMode: boolean
+  width: number
+  selectedFile: string
+  onToggleCodeMode: () => void
+  onPickFile: (proj: Project, filePath: string) => void
   onToggleProject: (id: string) => void
   onRemoveProject: (id: string) => void
   onNewSession: (id: string) => void
@@ -109,10 +124,87 @@ export function Sidebar(p: Props) {
    * 而他要的是「一打开就只看到最近 5 个」。所以每次启动都从 5 开始。
    */
   const [shownCount, setShownCount] = useState<Record<string, number>>({})
+  /** 项目路径 + 目录相对路径 → 该层节点；根目录用空字符串 */
+  const [treeMap, setTreeMap] = useState<Record<string, WorkspaceNode[]>>({})
+  const [treeLoading, setTreeLoading] = useState<Record<string, boolean>>({})
+  const [treeError, setTreeError] = useState<Record<string, string>>({})
+  /** 每个项目单独记住已展开目录 */
+  const [openDirs, setOpenDirs] = useState<Record<string, string[]>>({})
   const [confirmDel, setConfirmDel] = useState<Project | null>(null)
   const [confirmDelSess, setConfirmDelSess] = useState<{ proj: Project; sess: Session } | null>(null)
   /** 项目行右键菜单（自绘，位置跟鼠标）；记录坐标与目标项目 */
   const [menu, setMenu] = useState<{ x: number; y: number; proj: Project } | null>(null)
+
+  const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
+
+  async function loadDir(proj: Project, dirPath = ''): Promise<void> {
+    const key = treeKey(proj.path, dirPath)
+    if (treeLoading[key]) return
+    setTreeLoading((m) => ({ ...m, [key]: true }))
+    setTreeError((m) => ({ ...m, [key]: '' }))
+    try {
+      const nodes = await window.qingniao.workspaceList(proj.path, dirPath)
+      setTreeMap((m) => ({ ...m, [key]: nodes }))
+    } catch (e) {
+      setTreeError((m) => ({ ...m, [key]: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setTreeLoading((m) => ({ ...m, [key]: false }))
+    }
+  }
+
+  function toggleDir(proj: Project, dirPath: string): void {
+    const opened = openDirs[proj.id] ?? []
+    const isOpen = opened.includes(dirPath)
+    setOpenDirs((m) => ({
+      ...m,
+      [proj.id]: isOpen ? opened.filter((x) => x !== dirPath) : [...opened, dirPath]
+    }))
+    if (!isOpen && !(treeKey(proj.path, dirPath) in treeMap)) void loadDir(proj, dirPath)
+  }
+
+  useEffect(() => {
+    if (!p.codeMode) return
+    for (const proj of p.projects) {
+      if (isBuiltinProj(proj) || !p.expanded[proj.id] || treeKey(proj.path, '') in treeMap) continue
+      void loadDir(proj)
+    }
+  }, [p.codeMode, p.projects, p.expanded])
+
+  function renderTree(proj: Project, nodes: WorkspaceNode[], depth: number): React.ReactNode {
+    const opened = openDirs[proj.id] ?? []
+    return nodes.map((node) => {
+      const rowStyle = { marginLeft: `${14 + depth * 14}px` }
+      if (node.type === 'directory') {
+        const isOpen = opened.includes(node.path)
+        const key = treeKey(proj.path, node.path)
+        return (
+          <div key={node.path}>
+            <div className="sess code-tree-row" style={rowStyle} onClick={() => toggleDir(proj, node.path)} title={node.path}>
+              {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              {isOpen ? <FolderOpen size={14} className="code-file-ico" /> : <Folder size={14} className="code-file-ico" />}
+              <span className="sess-title">{node.name}</span>
+            </div>
+            {isOpen && treeLoading[key] && <div className="code-list-empty" style={rowStyle}>读取中…</div>}
+            {isOpen && treeError[key] && <div className="code-list-error" style={rowStyle}>{treeError[key]}</div>}
+            {isOpen && treeMap[key]?.length === 0 && <div className="code-list-empty" style={rowStyle}>空目录</div>}
+            {isOpen && treeMap[key] && renderTree(proj, treeMap[key], depth + 1)}
+          </div>
+        )
+      }
+      return (
+        <div
+          key={node.path}
+          className={'sess code-tree-row code-file' + (proj.id === p.activeId && node.path === p.selectedFile ? ' on' : '')}
+          style={rowStyle}
+          onClick={() => p.onPickFile(proj, node.path)}
+          title={node.path}
+        >
+          <FileCode2 size={13} className="code-file-ico" />
+          <span className="sess-title">{node.name}</span>
+        </div>
+      )
+    })
+  }
 
   function openMenu(proj: Project, e: React.MouseEvent): void {
     e.preventDefault()
@@ -140,24 +232,29 @@ export function Sidebar(p: Props) {
 
   return (
     <>
-      <aside className="side">
-        {/* 顶部常驻的「新建任务」：落在内置的「任务」目录（默认落脚点）。
-            放在列表上方而不是塞进某一行里——它是全局动作，不属于任何单个文件夹。 */}
-        <button
-          className="side-newtask"
-          title="在「任务」目录里新建一个任务"
-          onClick={p.onNewTask}
-        >
-          新建任务
-        </button>
+      <aside className="side" style={{ width: p.width, minWidth: p.width }}>
+        {/* 顶部工作区栏：名称固定，右侧两个动作分别是打开文件夹和添加任务。 */}
+        <div className="side-workspace-head">
+          <span>工作区</span>
+          <div className="workspace-actions">
+            <button className="icon-btn" title="打开文件夹" onClick={p.onAddProject}>
+              <FolderOpen size={15} />
+            </button>
+            <button className="icon-btn" title="在「任务」目录里新建一个任务" onClick={p.onNewTask}>
+              <MessageSquarePlus size={15} />
+            </button>
+          </div>
+        </div>
         <div className="projlist">
           {p.projects.length === 0 && (
             <div className="proj-empty">
               <FolderPlus size={22} />
               <span>还没有项目</span>
-            <button className="ghost pick-dir" onClick={p.onAddProject}>
-              选择文件夹
-            </button>
+            {!p.codeMode && (
+              <button className="ghost pick-dir" onClick={p.onAddProject}>
+                选择文件夹
+              </button>
+            )}
             </div>
           )}
           {/*
@@ -178,8 +275,9 @@ export function Sidebar(p: Props) {
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
                 >
-                  {/* 内置「任务」目录不是真实文件夹，不画文件夹图标；用户自加的项目保留 */}
-                  {!isBuiltinProj(proj) && <Folder size={15} className="proj-ico" />}
+                  {isBuiltinProj(proj)
+                    ? <ListTodo size={15} className="proj-ico" />
+                    : <FolderOpen size={15} className="proj-ico" />}
                   <span className="proj-name">{proj.name}</span>
                   {/* hover 只留「添加任务」一个：打开文件夹/从列表移除都归右键菜单，
                       图标堆在行右端反而容易点错 */}
@@ -196,7 +294,16 @@ export function Sidebar(p: Props) {
                     </button>
                   </span>
                 </div>
-                {isOpen && (
+                {isOpen && p.codeMode && !isBuiltinProj(proj) ? (
+                  <>
+                    {treeLoading[treeKey(proj.path, '')] && <div className="code-list-empty">正在读取目录…</div>}
+                    {treeError[treeKey(proj.path, '')] && (
+                      <div className="code-list-error">{treeError[treeKey(proj.path, '')]}</div>
+                    )}
+                    {treeMap[treeKey(proj.path, '')]?.length === 0 && <div className="code-list-empty">没有代码文件</div>}
+                    {renderTree(proj, treeMap[treeKey(proj.path, '')] ?? [], 0)}
+                  </>
+                ) : isOpen && (
                   <>
                     {shown.map((s) => (
                       <div
@@ -284,6 +391,13 @@ export function Sidebar(p: Props) {
               <span className="fu-name">登录</span>
             </button>
           ))}
+          <div
+            className={'foot-btn' + (p.codeMode ? ' on' : '')}
+            title={p.codeMode ? '关闭代码模式' : '开启代码模式'}
+            onClick={p.onToggleCodeMode}
+          >
+            <Code2 size={16} />
+          </div>
           <div
             className={'foot-btn' + (p.view === 'schedules' ? ' on' : '')}
             title="计划任务"
