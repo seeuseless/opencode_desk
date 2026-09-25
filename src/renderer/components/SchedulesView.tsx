@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GripVertical, LoaderCircle, Pencil, Play, Plus, Trash2 } from 'lucide-react'
+import { LoaderCircle, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
@@ -30,10 +30,12 @@ interface Props {
   onTaskSessionCreated: () => void
   /** 保存 / 执行 / 删除失败时弹全局提示 */
   onNotice: (msg: string) => void
+  /** 关闭计划任务弹层 */
+  onClose: () => void
 }
 
 /**
- * 计划任务列表页（内容区整页，非弹层）。
+ * 计划任务列表（弹层内容）。
  *
  * 数据与到点触发都在主进程（~/.qingniaoai/schedules.json + 30 秒 tick），
  * 这里只管展示与增删改——每次操作后以主进程返回的清单为准，本地不留第二份事实。
@@ -104,10 +106,13 @@ export function SchedulesView(p: Props) {
     <>
       <div className="spage">
         <div className="spage-head">
-          <h3>计划任务</h3>
-          <button className="primary" onClick={() => setEditing('new')}>
-            <Plus size={14} />
-            新建计划任务
+          <h3 style={{ flex: 'none' }}>计划任务</h3>
+          <button className="icon-btn" onClick={() => setEditing('new')} title="新建计划任务">
+            <Plus size={16} />
+          </button>
+          <span className="spacer" />
+          <button className="icon-btn" onClick={p.onClose} title="关闭计划任务">
+            <X size={16} />
           </button>
         </div>
         <div className="spage-body">
@@ -117,6 +122,7 @@ export function SchedulesView(p: Props) {
             tasks.map((t, i) => (
               <div
                 {...taskSort.rowProps(i)}
+                {...taskSort.handleProps(i)}
                 key={t.id}
                 className={
                   'scard'
@@ -125,9 +131,6 @@ export function SchedulesView(p: Props) {
                   + (taskSort.overIdx === i ? ' dragover ' + taskSort.overPos : '')
                 }
               >
-                <span {...taskSort.handleProps(i)} className="scard-grip" title="拖动调整顺序">
-                  <GripVertical size={15} />
-                </span>
                 <div className="scard-main" onClick={() => setEditing(t)}>
                   <div className="scard-name">
                     <span className="scard-title">{t.name}</span>

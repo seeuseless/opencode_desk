@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { FolderPlus, Settings, X } from 'lucide-react'
 import { Sidebar, type AccessLevel, type Project } from './components/Sidebar'
+import { moveItem } from './components/useDragSort'
 import { ChatView } from './components/ChatView'
 import { CodeWorkspace, type CodeControls } from './components/CodeWorkspace'
 import { SchedulesView } from './components/SchedulesView'
@@ -17,6 +18,7 @@ type View = 'chat' | 'settings' | 'schedules'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
 export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
+export type ProjectSortMode = 'activity' | 'fixed'
 
 /**
  * 外部（对话框里的「配置模型」等）请求打开设置页时带的目标页。
@@ -61,6 +63,11 @@ export default function App() {
   const [codeInfo, setCodeInfo] = useState<CodeTitleInfo | null>(null)
   const [codeControls, setCodeControls] = useState<CodeControls | null>(null)
   const [projects, setProjects] = useState<Project[]>([])
+  const [projectSortMode, setProjectSortMode] = useState<ProjectSortMode>(() => {
+    const value = load<string>('qingniao.projectSortMode', 'activity')
+    return value === 'fixed' ? 'fixed' : 'activity'
+  })
+  const [projectOrder, setProjectOrder] = useState<string[]>(() => load<string[]>('qingniao.projectOrder', []))
   const [activeId, setActiveId] = useState('')
   /** 每个文件夹独立的展开状态（用户自己点出来的，切视图不影响） */
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => load('qingniao.expanded', {}))
@@ -164,6 +171,10 @@ export default function App() {
 
   useEffect(() => save('qingniao.expanded', expanded), [expanded])
 
+  useEffect(() => save('qingniao.projectSortMode', projectSortMode), [projectSortMode])
+
+  useEffect(() => save('qingniao.projectOrder', projectOrder), [projectOrder])
+
   useEffect(() => save('qingniao.codeMode', codeMode), [codeMode])
 
   useEffect(() => save('qingniao.codeFiles', codeFiles), [codeFiles])
@@ -200,7 +211,7 @@ export default function App() {
   }, [codeMode, view, activeId])
 
   useEffect(() => {
-    if (view !== 'settings') return
+    if (view !== 'settings' && view !== 'schedules') return
     const close = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       setSettingsReq(null)
@@ -288,6 +299,9 @@ export default function App() {
           .map((x) => (x.builtin ? { ...x, builtin: undefined } : x))
       ]
       setProjects(ps)
+      if (projectSortMode === 'fixed' && projectOrder.length === 0) {
+        setProjectOrder(ps.filter((x) => !x.builtin && x.id !== 'builtin').map((x) => x.id))
+      }
       const stored = load<string>('qingniao.activeProject', '')
       const act = ps.some((x) => x.id === stored) ? stored : builtin.id
       setActiveId(act)
@@ -519,6 +533,13 @@ export default function App() {
     save('qingniao.projects', ps)
   }
 
+  function changeProjectSortMode(mode: ProjectSortMode) {
+    setProjectSortMode(mode)
+    if (mode === 'fixed' && projectOrder.length === 0) {
+      setProjectOrder(projects.filter((x) => !x.builtin && x.id !== 'builtin').map((x) => x.id))
+    }
+  }
+
   async function addProject() {
     // 允许访问的范围由系统权限对话框决定（macOS 在那里勾「完全访问」即可；Windows/Linux
     // 的 showOpenDialog 本身就是完整授权），所以这里不做二次校验、也不因为"访问受限"就拒绝加入——
@@ -551,6 +572,9 @@ export default function App() {
     // 用 now 与「已有最大活动时间 + 1」取大值，避免刚加完就被一个刚聊过的老项目挤下去
     const top = Math.max(Date.now(), ...projects.map((x) => lastActive[x.id] ?? x.added ?? 0)) + 1
     proj.added = top
+    if (projectSortMode === 'fixed') {
+      setProjectOrder((order) => [proj.id, ...order.filter((id) => id !== proj.id)])
+    }
     setProjectsPersisted([...projects, proj])
     setLastActive((a) => ({ ...a, [proj.id]: top }))
     setActiveId(proj.id)
@@ -571,6 +595,7 @@ export default function App() {
     const target = projects.find((x) => x.id === id)
     if (!target || target.builtin || target.id === 'builtin') return
     const next = projects.filter((x) => x.id !== id)
+    setProjectOrder((order) => order.filter((x) => x !== id))
     setProjectsPersisted(next)
     setExpanded((e) => {
       const { [id]: _drop, ...rest } = e
@@ -767,15 +792,25 @@ export default function App() {
     setNotice('已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。')
   }
 
-  // 展示顺序：最近有对话活动的文件夹排最前，但「任务」目录（builtin）永远钉在最上面
-  // （「选择文件夹」下拉与左栏共用这一份顺序，见 Sidebar.tsx 的同款排序）
+  // 展示顺序：自动模式按最近有对话活动的文件夹排最前，固定模式按用户拖拽的顺序；
+  // 「任务」目录（builtin）无论哪种模式都永远钉在最上面。
   const codeWorkspaceVisible = view === 'chat' && codeMode && !!activeProject && !activeProject.builtin
+  const projectOrderIndex = new Map(projectOrder.map((id, i) => [id, i]))
 
-  const orderedProjects = [...projects].sort(
-    (a, b) =>
-      Number(!!b.builtin) - Number(!!a.builtin) ||
-      (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
-  )
+  const orderedProjects = [...projects].sort((a, b) => {
+    const builtin = Number(!!b.builtin || b.id === 'builtin') - Number(!!a.builtin || a.id === 'builtin')
+    if (builtin) return builtin
+    if (projectSortMode === 'fixed') {
+      return (projectOrderIndex.get(a.id) ?? projectOrder.length) - (projectOrderIndex.get(b.id) ?? projectOrder.length)
+    }
+    return (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
+  })
+
+  function reorderProjects(from: number, to: number) {
+    if (projectSortMode !== 'fixed') return
+    const current = orderedProjects.filter((x) => !x.builtin && x.id !== 'builtin').map((x) => x.id)
+    setProjectOrder(moveItem(current, from, to))
+  }
   const rightcolStyle = codeWorkspaceVisible
     ? ({ '--code-head-width': `${codeHeadWidth}px` } as CSSProperties)
     : undefined
@@ -809,6 +844,8 @@ export default function App() {
           onDeleteSession={deleteSessionOf}
           onOpenSettings={() => openSettingsAt('theme')}
           onOpenFolder={openFolder}
+          projectSortMode={projectSortMode}
+          onReorderProjects={reorderProjects}
           mobile={mobile}
           mobileBusy={mobileBusy}
           onMobileToggle={(on) => void mobileAction(() => window.qingniao.mobileSet(on))}
@@ -839,13 +876,7 @@ export default function App() {
           onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
         />
         <div className="content">
-          {view === 'schedules' ? (
-            <SchedulesView
-              refreshSignal={schedTick}
-              onTaskSessionCreated={showScheduleSessionInSidebar}
-              onNotice={setNotice}
-            />
-          ) : codeWorkspaceVisible && activeProject ? (
+          {codeWorkspaceVisible && activeProject ? (
             <CodeWorkspace
               key={activeProject.id}
               project={activeProject}
@@ -921,6 +952,24 @@ export default function App() {
         </div>
       </div>
 
+      {view === 'schedules' && (
+        <div
+          className="settings-mask"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setView('chat')
+          }}
+        >
+          <div className="schedules-layer" role="dialog" aria-modal="true" aria-label="计划任务">
+            <SchedulesView
+              refreshSignal={schedTick}
+              onTaskSessionCreated={showScheduleSessionInSidebar}
+              onNotice={setNotice}
+              onClose={() => setView('chat')}
+            />
+          </div>
+        </div>
+      )}
+
       {view === 'settings' && (
         <div
           className="settings-mask"
@@ -946,9 +995,11 @@ export default function App() {
               onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
               codeStyle={codeStyle}
               onCodeStyle={setCodeStyle}
-              normalChatWidth={normalChatWidth}
-              onNormalChatWidth={setNormalChatWidth}
-              projectPath={activeProject?.path ?? null}
+               normalChatWidth={normalChatWidth}
+               onNormalChatWidth={setNormalChatWidth}
+               projectSortMode={projectSortMode}
+               onProjectSortMode={changeProjectSortMode}
+               projectPath={activeProject?.path ?? null}
               projectName={activeProject?.name ?? null}
               model={model}
               tab={settingsTab}

@@ -19,8 +19,10 @@ import {
   Trash2
 } from 'lucide-react'
 import { Modal } from './Modal'
+import { useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { SCHEDULE_PREFIX, fmtYmd } from '../oc'
+import type { ProjectSortMode } from '../App'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
 
 /** 项目的访问权限档位（定义在主进程 types.ts，这里 re-export 给渲染层各处引用） */
@@ -93,6 +95,8 @@ interface Props {
   onOpenSettings: () => void
   /** 在系统文件管理器里打开项目目录（右键菜单第一项，为了快速定位项目文件夹） */
   onOpenFolder: (proj: Project) => void
+  projectSortMode: ProjectSortMode
+  onReorderProjects: (from: number, to: number) => void
   /** 移动端接入状态；null = 还没问过主进程 */
   mobile: DeskStatus | null
   mobileBusy: boolean
@@ -134,6 +138,7 @@ export function Sidebar(p: Props) {
   const [confirmDelSess, setConfirmDelSess] = useState<{ proj: Project; sess: Session } | null>(null)
   /** 项目行右键菜单（自绘，位置跟鼠标）；记录坐标与目标项目 */
   const [menu, setMenu] = useState<{ x: number; y: number; proj: Project } | null>(null)
+  const projectSort = useDragSort((from, to) => p.onReorderProjects(from, to))
 
   const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
 
@@ -262,7 +267,9 @@ export function Sidebar(p: Props) {
             排序放在渲染层而不是 setProjects 时——存档里它本来就在最前，但用户若手动改过
             存档、或将来加了项目拖拽排序，渲染层这一句是唯一能保证「永远在最上面」的地方。
           */}
-          {[...p.projects].sort((a, b) => Number(isBuiltinProj(b)) - Number(isBuiltinProj(a))).map((proj) => {
+          {[...p.projects].sort((a, b) => Number(isBuiltinProj(b)) - Number(isBuiltinProj(a))).map((proj, projectIndex) => {
+            const sortIndex = isBuiltinProj(proj) ? -1 : projectIndex - 1
+            const sortRowProps = sortIndex >= 0 ? projectSort.rowProps(sortIndex) : {}
             const isOpen = !!p.expanded[proj.id]
             const list = p.sessionsMap[proj.path] ?? []
             const count = shownCount[proj.id] ?? COLLAPSE_AT
@@ -270,10 +277,21 @@ export function Sidebar(p: Props) {
             return (
               <div key={proj.id}>
                 <div
-                  className={'proj' + (isBuiltinProj(proj) ? ' builtin' : '')}
+                  className={
+                    'proj' +
+                    (isBuiltinProj(proj) ? ' builtin' : '') +
+                    (p.projectSortMode === 'fixed' && sortIndex >= 0 && projectSort.dragIdx === sortIndex ? ' dragging' : '') +
+                    (p.projectSortMode === 'fixed' && sortIndex >= 0 && projectSort.overIdx === sortIndex && projectSort.dragIdx !== sortIndex
+                      ? ' dragover ' + projectSort.overPos
+                      : '')
+                  }
                   title={proj.path}
                   onClick={() => p.onToggleProject(proj.id)}
                   onContextMenu={(e) => openMenu(proj, e)}
+                  {...sortRowProps}
+                  {...(p.projectSortMode === 'fixed' && !isBuiltinProj(proj)
+                    ? projectSort.handleProps(sortIndex)
+                    : {})}
                 >
                   {isBuiltinProj(proj)
                     ? <ListTodo size={15} className="proj-ico" />

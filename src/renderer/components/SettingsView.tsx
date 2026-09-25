@@ -10,7 +10,7 @@ import { getThemeList, CUSTOM_ID } from '../theme'
 import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
-import type { SettingsTab } from '../App'
+import type { ProjectSortMode, SettingsTab } from '../App'
 import { CODE_STYLES, CODE_STYLE_PREVIEWS, type CodeStyle } from '../codeStyle'
 
 /**
@@ -63,6 +63,8 @@ interface Props {
   onCodeStyle: (style: CodeStyle) => void
   normalChatWidth: number
   onNormalChatWidth: (width: number) => void
+  projectSortMode: ProjectSortMode
+  onProjectSortMode: (mode: ProjectSortMode) => void
   /** 当前活动项目路径：项目级技能写在 <项目>/.opencode/skills 下（没有项目时该组不可用） */
   projectPath?: string | null
   projectName?: string | null
@@ -875,6 +877,27 @@ export function SettingsView(p: Props) {
             />
             <span>{p.normalChatWidth}px</span>
           </div>
+          <h4 className="sub-title">项目文件夹排序</h4>
+          <p className="sec-tip">默认按最近任务先后排列，也可以固定顺序后手动调整。</p>
+          <div className="acct-tabs">
+            <button
+              type="button"
+              className={'seg-btn' + (p.projectSortMode === 'activity' ? ' on' : '')}
+              onClick={() => p.onProjectSortMode('activity')}
+            >
+              自动（按任务先后）
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (p.projectSortMode === 'fixed' ? ' on' : '')}
+              onClick={() => p.onProjectSortMode('fixed')}
+            >
+              固定顺序
+            </button>
+          </div>
+          {p.projectSortMode === 'fixed' && (
+            <p className="sec-tip">固定后可在左侧直接拖动项目文件夹调整顺序；内置「任务」目录始终置顶。</p>
+          )}
           <h4 className="sub-title">代码风格</h4>
           <p className="sec-tip">统一应用于代码编辑器、聊天代码块与工具详情；随当前主题自动适配明暗。</p>
           <div className="code-style-grid">

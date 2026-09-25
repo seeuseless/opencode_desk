@@ -450,6 +450,11 @@ input, textarea { font: inherit; }
   min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background: var(--content); border-radius: 16px; box-shadow: 0 18px 60px var(--shadow);
 }
+.schedules-layer {
+  width: min(960px, 100%); height: min(760px, 100%);
+  min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--content); border-radius: 16px; box-shadow: 0 18px 60px var(--shadow);
+}
 .settings-head {
   display: flex; align-items: center; flex-shrink: 0;
   height: 50px; padding: 0 14px 0 20px; border-bottom: 1px solid var(--line);
@@ -492,13 +497,6 @@ input, textarea { font: inherit; }
 .scard-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scard-err { font-size: 12px; font-weight: 400; color: var(--err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scard-sub { margin-top: 3px; font-size: 12px; color: var(--fg2); }
-.scard-grip {
-  display: inline-flex; align-items: center; flex-shrink: 0;
-  color: var(--fg2); cursor: grab; border-radius: 6px; padding: 2px 0;
-  transition: color .12s, background .12s;
-}
-.scard-grip:hover { color: var(--fg); background: var(--bg3); }
-.scard-grip:active { cursor: grabbing; }
 .scard-acts { display: flex; gap: 2px; flex: none; }
 
 
@@ -1405,11 +1403,13 @@ input, textarea { font: inherit; }
 body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 /* 被拖的行：留个淡淡的"取走了"的痕迹，但不要太透明——45% 那档看起来像出了 bug 而不是"拿起来了" */
 .prow.dragging,
+.proj.dragging,
 .scard.dragging,
 .model-row.dragging { opacity: .4; outline: 1px dashed var(--line); outline-offset: -2px; }
 /* 落点指示：贴一条粗的强调色边线在上沿或下沿，明确"松手会插到这里"。
    原来的做法是整行描边（box-shadow 环），看不出要插到上方还是下方，用户以为没生效 */
 .prow.dragover,
+.proj.dragover,
 .scard.dragover,
 .model-row.dragover { position: relative; }
 .prow.dragover.top::before,
@@ -1427,13 +1427,16 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
   z-index: 2;
 }
 .prow.dragover.top::before,
+.proj.dragover.top::before,
 .scard.dragover.top::before,
 .model-row.dragover.top::before { top: -1px; }
 .prow.dragover.bottom::after,
+.proj.dragover.bottom::after,
 .scard.dragover.bottom::after,
 .model-row.dragover.bottom::after { bottom: -1px; }
 /* 目标行本身也给一点底色，避免插入线落在和背景接近的位置上看不清 */
 .prow.dragover,
+.proj.dragover { background: color-mix(in srgb, var(--accent) 7%, var(--side-bg)); }
 .model-row.dragover { background: color-mix(in srgb, var(--accent) 7%, var(--bg2)); }
 .scard.dragover { background: color-mix(in srgb, var(--accent) 7%, var(--content)); }
 /* 内置能力没有开关、也不给编辑删除，整行置灰并去掉 hover 反馈，看起来就知道不可点 */
@@ -2054,7 +2057,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .ud-card {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   margin-top: 16px; padding: 16px 18px;
-  border-radius: 12px; background: var(--bg3);
+  border-radius: 12px; background: var(--bg2);
   box-shadow: 0 0 0 1px var(--line);
 }
 .ud-ver { display: flex; flex-direction: column; gap: 3px; }
@@ -2073,7 +2076,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .ud-note {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-top: 12px; padding: 10px 14px; border-radius: 10px;
-  background: var(--bg3); color: var(--fg2); font-size: 12.5px; line-height: 1.55;
+  background: var(--bg2); color: var(--fg2); font-size: 12.5px; line-height: 1.55;
 }
 .ud-note > svg { flex-shrink: 0; }
 .ud-note.err { background: color-mix(in srgb, var(--err) 10%, transparent); color: var(--err); }
@@ -2082,7 +2085,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 /* 新版本区块：说明正文 + 进度 + 操作按钮，三层叠起来 */
 .ud-upd {
   margin-top: 14px; padding: 16px 18px; border-radius: 12px;
-  background: var(--bg3); box-shadow: 0 0 0 1px var(--line);
+  background: var(--bg2); box-shadow: 0 0 0 1px var(--line);
 }
 .ud-upd-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
 .ud-upd-head > svg { color: var(--accent); flex-shrink: 0; }
@@ -2116,7 +2119,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .ud-terms {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
   margin-top: 18px; padding: 10px 14px; border-radius: 10px;
-  background: var(--bg3); color: var(--fg2); font-size: 12.5px;
+  background: var(--bg2); color: var(--fg2); font-size: 12.5px;
 }
 .ud-terms > svg { flex-shrink: 0; }
 .ud-term-link {
