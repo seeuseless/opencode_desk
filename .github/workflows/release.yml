@@ -137,15 +137,19 @@ jobs:
       # optionalDependencies 里 os/cpu 校验拒装的包（npm install 直接 EBADPLATFORM，
       # 见 mac job 里同款步骤的长注释），走 npm pack 下载 tarball 解压到 node_modules。
       # 版本必须与 opencode-ai 声明的一致，从它的 package.json 读。
+      # ⚠️ tarball 下到工作区用**相对路径**解压：$RUNNER_TEMP 在 Windows runner 上是
+      #   D:\a\_temp 风格，GNU tar 把盘符 "D:" 当远程主机名直接连不上
+      #   （"Cannot connect to D: resolve failed"，2026-09-25 v1.5.1 CI 实测）。
       - name: 安装 arm64 内核平台包（Windows ARM64 支持）
         shell: bash
         run: |
           set -e
           VER=$(node -p "require('./node_modules/opencode-ai/package.json').optionalDependencies['opencode-windows-arm64']")
           echo "opencode-windows-arm64@$VER"
-          npm pack "opencode-windows-arm64@$VER" --pack-destination "$RUNNER_TEMP"
+          npm pack "opencode-windows-arm64@$VER" --pack-destination .
           mkdir -p node_modules/opencode-windows-arm64
-          tar -xzf "$RUNNER_TEMP/opencode-windows-arm64-$VER.tgz" -C node_modules/opencode-windows-arm64 --strip-components 1
+          tar -xzf "opencode-windows-arm64-$VER.tgz" -C node_modules/opencode-windows-arm64 --strip-components 1
+          rm "opencode-windows-arm64-$VER.tgz"
           ls -l node_modules/opencode-windows-arm64/bin
 
       # dist 里已经串了 gen-update-meta → electron-vite build → check-kernel → electron-builder
@@ -290,15 +294,19 @@ jobs:
       # ⚠️ 不能用 npm install 装：平台包声明了 os/cpu，机器不匹配直接 EBADPLATFORM 拒装
       #   （--force 又会重整依赖树、动到 electron 二进制）。npm pack 只下载 tarball、
       #   不做平台检查也不碰依赖树，解压到 node_modules 即可（electron-builder 按目录找包）。
+      #   tarball 下到工作区用**相对路径**解压，与 win job 同款写法——$RUNNER_TEMP 在
+      #   Windows runner 上是 D:\a\_temp 风格，GNU tar 会把盘符当远程主机名连不上
+      #   （mac 无此坑，但两处写法保持一致，免得将来来回改踩坑）。
       - name: 安装 x64 内核平台包（Intel mac 支持）
         shell: bash
         run: |
           set -e
           VER=$(node -p "require('./node_modules/opencode-ai/package.json').optionalDependencies['opencode-darwin-x64-baseline']")
           echo "opencode-darwin-x64-baseline@$VER"
-          npm pack "opencode-darwin-x64-baseline@$VER" --pack-destination "$RUNNER_TEMP"
+          npm pack "opencode-darwin-x64-baseline@$VER" --pack-destination .
           mkdir -p node_modules/opencode-darwin-x64-baseline
-          tar -xzf "$RUNNER_TEMP/opencode-darwin-x64-baseline-$VER.tgz" -C node_modules/opencode-darwin-x64-baseline --strip-components 1
+          tar -xzf "opencode-darwin-x64-baseline-$VER.tgz" -C node_modules/opencode-darwin-x64-baseline --strip-components 1
+          rm "opencode-darwin-x64-baseline-$VER.tgz"
           ls -l node_modules/opencode-darwin-x64-baseline/bin
 
       # dist:mac 里串的是 electron-builder --mac；这里额外关掉签名自动发现，
