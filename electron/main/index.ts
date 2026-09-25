@@ -12,7 +12,7 @@ import { AUTH_PROTOCOL, platform } from './platform.ts'
 import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
 import { cancelDownload, checkUpdate, downloadUpdate, installUpdate, openReleasePage, setUpdateSink, updateState } from './updater.ts'
 import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
-import { readSchedules, removeSchedule, runScheduleNow, startScheduler, upsertSchedule } from './scheduler.ts'
+import { readSchedules, removeSchedule, reorderSchedules, runScheduleNow, startScheduler, upsertSchedule } from './scheduler.ts'
 import type { ScheduleTask } from './types.ts'
 
 /**
@@ -1083,6 +1083,7 @@ ipcMain.handle('skills:openDir', (_e, req: { scope: SkillScope; projectPath?: st
 ipcMain.handle('schedule:list', () => readSchedules())
 ipcMain.handle('schedule:save', (_e, t: ScheduleTask) => upsertSchedule(t))
 ipcMain.handle('schedule:remove', (_e, id: string) => removeSchedule(id))
+ipcMain.handle('schedule:reorder', (_e, ids: string[]) => reorderSchedules(ids))
 ipcMain.handle('schedule:runNow', (_e, id: string) => runScheduleNow(id))
 
 // 自绘标题栏的窗口控制

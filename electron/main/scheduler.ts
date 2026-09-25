@@ -65,6 +65,7 @@ function normalizeTask(x: unknown): ScheduleTask | null {
     spec,
     enabled: t.enabled !== false,
     createdAt: Number(t.createdAt) > 0 ? Number(t.createdAt) : now,
+    order: Number.isFinite(Number(t.order)) ? Number(t.order) : 0,
     nextRun: nextRun > now - STALE_MS ? nextRun : nextRunAfter(spec, now, lastRun),
     ...(lastRun ? { lastRun } : {}),
     ...(typeof t.lastSession === 'string' ? { lastSession: t.lastSession } : {}),
@@ -72,13 +73,21 @@ function normalizeTask(x: unknown): ScheduleTask | null {
   }
 }
 
-/** 读全量清单：文件缺失/损坏按空列表处理（与 settings.json 的容错风格一致） */
+/** 读全量清单：旧数据没有 order 时按创建时间倒序初始化；文件缺失/损坏按空列表处理 */
 export function readSchedules(): ScheduleTask[] {
   try {
     if (!existsSync(schedulesPath())) return []
     const raw = JSON.parse(readFileSync(schedulesPath(), 'utf8')) as unknown
     if (!Array.isArray(raw)) return []
-    return raw.map(normalizeTask).filter((t): t is ScheduleTask => !!t)
+    const hasOrder = raw.every((x) => {
+      const t = x as Partial<ScheduleTask> | null
+      return !!t && typeof t.order === 'number' && Number.isFinite(t.order)
+    })
+    return raw
+      .map(normalizeTask)
+      .filter((t): t is ScheduleTask => !!t)
+      .sort((a, b) => (hasOrder ? a.order - b.order : b.createdAt - a.createdAt))
+      .map((t, order) => ({ ...t, order }))
   } catch {
     return []
   }
@@ -121,6 +130,7 @@ export function upsertSchedule(t: ScheduleTask): ScheduleTask[] {
   const old = list.find((x) => x.id === norm.id)
   if (old) {
     norm.createdAt = old.createdAt
+    norm.order = old.order
     norm.lastRun = old.lastRun
     norm.lastSession = old.lastSession
     norm.lastError = old.lastError
@@ -128,8 +138,9 @@ export function upsertSchedule(t: ScheduleTask): ScheduleTask[] {
     list.splice(list.indexOf(old), 1, norm)
   } else {
     norm.createdAt = now
+    norm.order = list.length ? Math.min(...list.map((x) => x.order)) - 1 : 0
     norm.nextRun = nextRunAfter(norm.spec, now, now)
-    list.push(norm)
+    list.unshift(norm)
   }
   writeSchedules(list)
   return list
@@ -139,6 +150,18 @@ export function removeSchedule(id: string): ScheduleTask[] {
   const list = readSchedules().filter((x) => x.id !== id)
   writeSchedules(list)
   return list
+}
+
+/** 拖拽排序：接收完整有序任务 id，落盘前重新压紧 order */
+export function reorderSchedules(ids: string[]): ScheduleTask[] {
+  const list = readSchedules()
+  if (ids.length !== list.length || new Set(ids).size !== ids.length || ids.some((id) => !list.some((x) => x.id === id))) {
+    return list
+  }
+  const byId = new Map(list.map((x) => [x.id, x]))
+  const next = ids.map((id, order) => ({ ...byId.get(id)!, order }))
+  writeSchedules(next)
+  return next
 }
 
 /** 执行一次：建会话 + 异步发送 prompt；内核受理后立即返回，不等待本轮对话完成 */
@@ -202,17 +225,22 @@ async function tick(): Promise<void> {
   ticking = true
   try {
     if (!(await adapter.isHealthy())) return // 内核没起来：本轮全跳过，等下一轮（nextRun 不动）
-    const list = readSchedules()
     const now = Date.now()
-    for (const task of list) {
-      if (!task.enabled || task.nextRun > now || runningTaskIds.has(task.id)) continue
+    const dueIds = readSchedules()
+      .filter((task) => task.enabled && task.nextRun <= now && !runningTaskIds.has(task.id))
+      .map((task) => task.id)
+    for (const id of dueIds) {
+      // 每个任务领取前重读：前一个任务执行期间可能发生拖拽、编辑或删除，不能拿轮次开始时的旧快照回写。
+      const list = readSchedules()
+      const task = list.find((x) => x.id === id)
+      if (!task || !task.enabled || task.nextRun > now || runningTaskIds.has(task.id)) continue
       runningTaskIds.add(task.id)
       try {
         // 到点（或 tick 抖动内）：先领取本轮，再执行。错过的在 readSchedules 归一化时已推进过，不会落在这里补跑。
         claimSchedule(list, task)
         const res = await runTask(task)
-        writeRunResult(task.id, res)
-        if (res.sessionId) onRan?.({ taskId: task.id, sessionId: res.sessionId, name: task.name })
+        writeRunResult(id, res)
+        if (res.sessionId) onRan?.({ taskId: id, sessionId: res.sessionId, name: task.name })
       } finally {
         runningTaskIds.delete(task.id)
       }

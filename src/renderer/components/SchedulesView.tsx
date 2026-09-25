@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { LoaderCircle, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { GripVertical, LoaderCircle, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { Modal } from './Modal'
+import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { Menu } from './Menu'
 import type { ScheduleSpec, ScheduleTask } from '../../../electron/main/types'
@@ -45,6 +46,8 @@ export function SchedulesView(p: Props) {
   const [editing, setEditing] = useState<ScheduleTask | 'new' | null>(null)
   /** 「立即执行」进行中的任务 id（按钮置灰防连点） */
   const [running, setRunning] = useState('')
+  /** 只接受最后一次拖拽响应，避免较慢的旧请求覆盖新顺序 */
+  const reorderSeq = useRef(0)
 
   useEffect(() => {
     void window.qingniao.scheduleList().then(setTasks).catch(() => undefined)
@@ -74,6 +77,27 @@ export function SchedulesView(p: Props) {
     }
   }
 
+  async function reorderTasks(from: number, to: number): Promise<void> {
+    const previous = tasks
+    const next = moveItem(tasks, from, to)
+    if (next === previous) return
+    const seq = ++reorderSeq.current
+    setTasks(next)
+    try {
+      const saved = await window.qingniao.scheduleReorder(next.map((x) => x.id))
+      if (reorderSeq.current === seq) setTasks(saved)
+    } catch (e) {
+      if (reorderSeq.current !== seq) return
+      try {
+        setTasks(await window.qingniao.scheduleList())
+      } catch {
+        setTasks(previous)
+      }
+      p.onNotice('排序保存失败：' + (e instanceof Error ? e.message : String(e)))
+    }
+  }
+
+  const taskSort = useDragSort((from, to) => void reorderTasks(from, to))
   const initial = editing === 'new' ? null : editing
 
   return (
@@ -93,8 +117,20 @@ export function SchedulesView(p: Props) {
           {tasks.length === 0 ? (
             <div className="spage-empty">还没有计划任务。点右上角「新建计划任务」，让它每天、每周或每隔几小时自动执行。</div>
           ) : (
-            tasks.map((t) => (
-              <div key={t.id} className={'scard' + (t.enabled ? '' : ' off')}>
+            tasks.map((t, i) => (
+              <div
+                {...taskSort.rowProps(i)}
+                key={t.id}
+                className={
+                  'scard'
+                  + (t.enabled ? '' : ' off')
+                  + (taskSort.dragIdx === i ? ' dragging' : '')
+                  + (taskSort.overIdx === i ? ' dragover ' + taskSort.overPos : '')
+                }
+              >
+                <span {...taskSort.handleProps(i)} className="scard-grip" title="拖动调整顺序">
+                  <GripVertical size={15} />
+                </span>
                 <div className="scard-main" onClick={() => setEditing(t)}>
                   <div className="scard-name">
                     <span className="scard-title">{t.name}</span>
@@ -148,7 +184,7 @@ export function SchedulesView(p: Props) {
   )
 }
 
-/** 新建 / 编辑共用一份表单；新建时主进程补 createdAt / nextRun，这里填占位值即可 */
+/** 新建 / 编辑共用一份表单；新建时主进程补 createdAt / order / nextRun，这里填占位值即可 */
 function ScheduleModal({
   initial,
   onSaved,
@@ -186,6 +222,7 @@ function ScheduleModal({
       spec: sp,
       enabled,
       createdAt: initial?.createdAt ?? Date.now(),
+      order: initial?.order ?? 0,
       nextRun: initial?.nextRun ?? Date.now()
     }
     setSaving(true)

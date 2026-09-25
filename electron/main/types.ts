@@ -594,6 +594,8 @@ export interface ScheduleTask {
   enabled: boolean
   /** 创建时间戳；hourly 型在没有 lastRun 时以它为锚推下次执行 */
   createdAt: number
+  /** 列表顺序，越小越靠前；旧数据按 createdAt 倒序初始化 */
+  order: number
   /** 持久化的下次执行时刻（错过即跳过、推进到下个周期） */
   nextRun: number
   lastRun?: number

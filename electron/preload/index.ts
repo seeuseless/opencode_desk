@@ -109,6 +109,8 @@ const api = {
   scheduleSave: (t: ScheduleTask): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:save', t),
   /** 删除计划任务（会话历史保留），返回最新清单 */
   scheduleRemove: (id: string): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:remove', id),
+  /** 按完整任务 id 顺序保存拖拽结果，返回最新清单 */
+  scheduleReorder: (ids: string[]): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:reorder', ids),
   /** 立即执行一次：主进程在「任务」目录建会话并发 prompt；返回执行结果 */
   scheduleRunNow: (id: string): Promise<{ ok: boolean; sessionId?: string; error?: string }> =>
     ipcRenderer.invoke('schedule:runNow', id),

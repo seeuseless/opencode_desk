@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
+import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
@@ -47,81 +48,6 @@ const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
   { key: 'high', label: '高', tip: '固定高档思考' },
   { key: 'off', label: '不支持', tip: '禁用思考' }
 ]
-
-/**
- * 把数组里 from 位置的元素挪到 to 位置（其余顺次让位）。越界时原样返回，调用方不必自己夹。
- */
-function moveItem<T>(list: T[], from: number, to: number): T[] {
-  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list
-  const next = [...list]
-  const [x] = next.splice(from, 1)
-  next.splice(to, 0, x)
-  return next
-}
-
-/**
- * 极简 HTML5 拖拽排序：返回让容器/行展开的 props 与「正在拖的行下标」。
- *
- * 用原生 draggable 而不是第三方库：这里只有「竖排若干行、拖到别处换顺序」一个诉求，
- * 引一个 dnd 库进来（拖拽预览、指针传感器、键盘无障碍那一整套）得不偿失。
- * 拖拽手柄单独给 `draggable`（见 handleProps），避免在输入框里选文字时被误当成拖拽。
- */
-function useDragSort(onReorder: (from: number, to: number) => void) {
-  /** 正在拖的行下标：驱动「哪一行是幽灵态」的样式 */
-  const [dragIdx, setDragIdx] = useState<number | null>(null)
-  /** 拖到哪一行上了：驱动插入位置的高亮线 */
-  const [overIdx, setOverIdx] = useState<number | null>(null)
-  /** 插入线画在目标行的上沿还是下沿（由鼠标落在该行上半/下半决定） */
-  const [overPos, setOverPos] = useState<'top' | 'bottom'>('top')
-  /** dragenter/dragover 里 preventDefault 才能收到 drop；同时读 dragIdx 判断是不是自己发起的拖拽 */
-  const dragIdxRef = useRef<number | null>(null)
-  dragIdxRef.current = dragIdx
-
-  const rowProps = (i: number) => ({
-    onDragOver: (e: React.DragEvent) => {
-      if (dragIdxRef.current === null) return
-      e.preventDefault()
-      e.dataTransfer.dropEffect = 'move'
-      // 鼠标落在上半还是下半，决定插入线画在它上沿还是下沿——
-      // 只看「悬停在哪一行」不够，用户以为要插到 A 上面结果插到下面，会以为没生效
-      const r = e.currentTarget.getBoundingClientRect()
-      setOverPos(e.clientY < r.top + r.height / 2 ? 'top' : 'bottom')
-      setOverIdx(i)
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault()
-      const from = dragIdxRef.current
-      setOverIdx(null)
-      setDragIdx(null)
-      document.body.classList.remove('dragging-row')
-      if (from !== null) onReorder(from, i)
-    },
-    onDragEnd: () => {
-      setDragIdx(null)
-      setOverIdx(null)
-      document.body.classList.remove('dragging-row')
-    }
-  })
-
-  const handleProps = (i: number) => ({
-    draggable: true,
-    onDragStart: (e: React.DragEvent) => {
-      // 不用 setData 的内容，但必须调一次：部分浏览器（含 Electron/Chromium）不设 data 就不启动拖拽
-      e.dataTransfer.setData('text/plain', String(i))
-      e.dataTransfer.effectAllowed = 'move'
-      // 拖拽期间给 body 打标记：手柄要全局进 grabbing 态（鼠标可能已经离开手柄本身）
-      document.body.classList.add('dragging-row')
-      setDragIdx(i)
-    },
-    onDragEnd: () => {
-      document.body.classList.remove('dragging-row')
-      setDragIdx(null)
-      setOverIdx(null)
-    }
-  })
-
-  return { dragIdx, overIdx, overPos, rowProps, handleProps }
-}
 
 interface Props {
   settings: SettingsCfg
