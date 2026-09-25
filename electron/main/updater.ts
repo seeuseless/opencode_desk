@@ -64,22 +64,24 @@ function readMeta(): UpdateMeta {
 }
 
 /**
- * 打包后安装包的固定文件名（electron-builder.yml 的 artifactName 写死成它）。
+ * 打包后安装包的文件名事实（electron-builder.yml 各平台 artifactName）：
  *
- * 这两个常量只是**兜底**：正常路径是 pickAsset 从 Release 的 assets 里按扩展名挑，
- * 拿到的就是当次实际上传的真实文件名（见下方 pickAsset）。只有 Release 元数据异常、
- * 拿不到 assets 时才回落到这里。
+ * Windows：x64 附件固定叫 QingNiao-Setup.exe（release.yml 把 ${arch} 产物重命名后
+ * 上传，维持 `releases/latest/download/QingNiao-Setup.exe` 固定直链）；arm64 叫
+ * QingNiao-Setup-arm64.exe。本常量按当前进程架构取对应名，只做兜底。
  *
- * mac 侧带 arch 后缀是因为 electron-builder.yml 的 mac.artifactName 用了 ${arch}——
- * 多架构产物若同名会互相覆盖。当前 CI 用 macos-latest（Apple Silicon），故为 arm64；
- * 将来若加了 x64 mac 构建或换了 runner，记得同步这里的兜底值。
+ * mac：arm64 / x64 双份 QingNiao-Setup-<arch>.dmg/.zip，按进程架构拼名字：
+ * x64 包（含 Rosetta 下运行的场景）认领 x64 附件，arm64 同理。
+ *
+ * 正常路径是 pickAsset 从 Release 的 assets 里按架构挑（见下方 pickAsset），这些
+ * 常量只在 Release 元数据异常、拿不到 assets 时才用得上。
  *
  * 前缀是英文 `QingNiao` 而非中文「青鸟」：GitHub 对非 ASCII 的附件名要 URL 转义，
  * 中文名会让 `releases/latest/download/<名>` 这条固定直链在各端不稳（见
  * electron-builder.yml 的 artifactName 注释）。改这里必须同步改那边的 artifactName。
  */
-const WIN_SETUP_NAME = 'QingNiao-Setup.exe'
-const MAC_DMG_NAME = 'QingNiao-Setup-arm64.dmg'
+const WIN_SETUP_NAME = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
+const MAC_DMG_NAME = `QingNiao-Setup-${process.arch}.dmg`
 
 /**
  * 版本号归一化：0.0.1 / v0.0.1 / 0.1.0-beta.1 → 可直接比较的数字段 + 预发布标识。
@@ -214,7 +216,21 @@ interface GhRelease {
 function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { url: string; name: string; size: number } {
   const list = Array.isArray(assets) ? assets.filter((a) => a.browser_download_url) : []
   const want = process.platform === 'win32' ? /\.exe$/i : process.platform === 'darwin' ? /\.(dmg|zip)$/i : /\.(appimage|deb)$/i
+  // 双架构包（win x64/arm64、mac arm64/x64）同挂一个 Release，必须按当前进程架构
+  // 认领——通用正则会拿到数组里第一个匹配附件，架构随上传顺序碰运气。Rosetta 下
+  // process.arch 是 x64，x64 应用认 x64 包，行为也正确。
+  // Windows 的期望名要与 CI 重命名约定一致：x64 附件就叫 QingNiao-Setup.exe（不带后缀）。
+  let archHit: GhAsset | undefined
+  if (process.platform === 'win32') {
+    const expected = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
+    archHit = list.find((a) => (a.name ?? '').toLowerCase() === expected.toLowerCase())
+  } else if (process.platform === 'darwin') {
+    archHit =
+      list.find((a) => new RegExp(`-${process.arch}\\.dmg$`, 'i').test(a.name ?? '')) ??
+      list.find((a) => new RegExp(`-${process.arch}\\.zip$`, 'i').test(a.name ?? ''))
+  }
   const hit =
+    archHit ??
     list.find((a) => want.test(a.name ?? '')) ??
     list.find((a) => /\.(exe|dmg|zip|appimage|deb)$/i.test(a.name ?? '')) ??
     list[0]

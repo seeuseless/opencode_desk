@@ -20,9 +20,15 @@
 #   应用本身仍叫「青鸟」（productName 不变），快捷方式与窗口标题不受影响。
 #
 # 两个平台各自的附件名（都由 electron-builder.yml 决定，改一处即可）：
-#   · Windows：QingNiao-Setup.exe              （artifactName: QingNiao-Setup.${ext}）
-#   · macOS  ：QingNiao-Setup-arm64.dmg / .zip （mac.artifactName 带 ${arch}，多架构不互相覆盖）
-#   mac 侧的文件名与主进程 updater.ts 的 MAC_DMG_NAME 常量必须一致，否则应用内更新找不到包。
+#   · Windows：QingNiao-Setup.exe（x64，CI 把 ${arch} 产物重命名回固定名以维持
+#              releases/latest/download 直链）+ QingNiao-Setup-arm64.exe（ARM64）
+#   · macOS  ：QingNiao-Setup-arm64.dmg/.zip + QingNiao-Setup-x64.dmg/.zip
+#              （mac.artifactName 带 ${arch}；--arm64 --x64 双架构出包，覆盖 Apple
+#               Silicon 与 Intel）
+#   双架构出包靠构建命令传 --x64 --arm64（或 --arm64 --x64）两个 flag；交叉架构的
+#   内核替换由 beforePack 钩子处理（scripts/electron-before-pack.cjs），对侧内核
+#   平台包用 npm pack + tar 备好（平台包有 os/cpu 校验，npm install 会拒装）。
+#   updater.ts 的 pickAsset 按 process.arch 认领附件，文件名改了必须两边同步。
 #
 # ⚠️ 已知踩过的坑（2026-09-22 首次发版，连续失败多次，修完才通）：
 #   1) 仓库 .npmrc 与 yarn.lock 里的 780 条 resolved 全部指向腾讯云镜像，
@@ -127,64 +133,100 @@ jobs:
         shell: bash
         run: node node_modules/opencode-ai/postinstall.mjs
 
+      # 交叉打包 Windows ARM64 的前置：runner 是 x64，opencode-windows-arm64 是
+      # optionalDependencies 里 os/cpu 校验拒装的包（npm install 直接 EBADPLATFORM，
+      # 见 mac job 里同款步骤的长注释），走 npm pack 下载 tarball 解压到 node_modules。
+      # 版本必须与 opencode-ai 声明的一致，从它的 package.json 读。
+      - name: 安装 arm64 内核平台包（Windows ARM64 支持）
+        shell: bash
+        run: |
+          set -e
+          VER=$(node -p "require('./node_modules/opencode-ai/package.json').optionalDependencies['opencode-windows-arm64']")
+          echo "opencode-windows-arm64@$VER"
+          npm pack "opencode-windows-arm64@$VER" --pack-destination "$RUNNER_TEMP"
+          mkdir -p node_modules/opencode-windows-arm64
+          tar -xzf "$RUNNER_TEMP/opencode-windows-arm64-$VER.tgz" -C node_modules/opencode-windows-arm64 --strip-components 1
+          ls -l node_modules/opencode-windows-arm64/bin
+
       # dist 里已经串了 gen-update-meta → electron-vite build → check-kernel → electron-builder
       # `--publish never` 在这里再显式写一遍（脚本里已带），防将来有人改脚本时把发布打开。
-      - name: 构建 Windows 安装包
-        run: yarn dist --publish never
+      # --x64 --arm64：一次出双架构包（两个 flag 都要写——只传一个就只出那一个架构）。
+      # 产物：QingNiao-Setup-x64.exe + QingNiao-Setup-arm64.exe（artifactName 带 ${arch}）。
+      # arm64 包的内核由 beforePack 钩子从 opencode-windows-arm64 换入（上一步备好）。
+      - name: 构建 Windows 安装包（x64 + arm64）
+        run: yarn dist --x64 --arm64 --publish never
         env:
           # electron 二进制体积大（~100MB），走官方 GitHub Release 直连；
           # 若 CI 上偶发超时，可改为国内镜像（不在仓库里写死，避免影响本地开发）
           ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
 
-      # ⚠️ 打包后的产物名校验，**不能省**：
-      #   上传步骤一旦列错文件名就会（在 fail_on_unmatched_files 下）整体失败，
-      #   一旦 artifactName 没生效——比如产物还叫「青鸟 Setup 1.0.0.exe」这种带版本号的默认名——
-      #   上传步骤就会报错或静默跳过，Release 建出来却是空的，且日志里不易看出源头。
-      #   所以这里主动断言文件名，不对就立刻红掉并打出实际内容，便于一眼定位。
-      - name: 校验安装包名（必须是 QingNiao-Setup.exe）
+      # ⚠️ 打包后的产物校验，**不能省**：
+      #   1) 两个架构的安装包都必须产出（artifactName 没生效会在上传步骤炸或静默漏传）；
+      #   2) 包内内核必须是真二进制且**架构与包一致**——Mach-O/PE 头看不出架构，
+      #      这里读 PE 头 machine 字段断言（0x8664=x64、0xaa64=arm64），防止
+      #      "交叉轮没换内核"的包混上 Release（2026-09-25 加双架构时立的规矩）。
+      #   注：x64 的 unpacked 目录叫 win-unpacked（默认架构无后缀），arm64 叫 win-arm64-unpacked。
+      - name: 校验双架构安装包与内核
         shell: bash
         run: |
-          echo "dist 实际内容："
-          ls -l dist
-          if [ ! -f "dist/QingNiao-Setup.exe" ]; then
-            echo "::error::未找到 dist/QingNiao-Setup.exe——检查 electron-builder.yml 的 artifactName 是否生效"
-            exit 1
-          fi
-          echo "✓ 安装包名正确"
+          for ARCH in x64 arm64; do
+            if [ "$ARCH" = x64 ]; then APPDIR="dist/win-unpacked"; else APPDIR="dist/win-$ARCH-unpacked"; fi
+            if [ ! -d "$APPDIR" ]; then
+              echo "::error::未产出 $APPDIR——检查 electron-builder.yml 的 win 配置与 --x64 --arm64 参数"
+              ls -l dist
+              exit 1
+            fi
+            BIN="$APPDIR/resources/bin/opencode.exe"
+            if [ ! -f "$BIN" ]; then
+              echo "::error::[$ARCH] 安装包内缺少内核二进制：$BIN"
+              exit 1
+            fi
+            SIZE=$(stat -c%s "$BIN")
+            echo "[$ARCH] 内核二进制：$BIN（$SIZE 字节，预期 >100MB）"
+            if [ "$SIZE" -lt 100000000 ]; then
+              echo "::error::[$ARCH] 只有 $SIZE 字节，是未替换的占位脚本而非真二进制"
+              exit 1
+            fi
+            # PE 头 machine 字段：0x8664=x64、0xaa64=arm64，必须与包目录架构一致
+            KIND=$(node -p "const fs=require('fs');const b=Buffer.alloc(4096);const f=fs.openSync(process.argv[1],'r');fs.readSync(f,b,0,4096,0);fs.closeSync(f);'0x'+b.readUInt16LE(b.readUInt32LE(0x3c)+4).toString(16)" "$BIN")
+            echo "[$ARCH] 内核 PE machine：$KIND"
+            case "$ARCH" in
+              x64)   if [ "$KIND" != "0x8664" ]; then echo "::error::[$ARCH] 包里的内核不是 x64（$KIND）——beforePack 钩子未生效"; exit 1; fi ;;
+              arm64) if [ "$KIND" != "0xaa64" ]; then echo "::error::[$ARCH] 包里的内核不是 arm64（$KIND）——平台包没备好或钩子未生效"; exit 1; fi ;;
+            esac
+          done
+          echo "✓ 双架构安装包与内核均正常"
 
-      # ⚠️ 断言打进去的内核二进制是真货（**最后一道闸**，2026-09-22 用户装完
-      #   `spawn UNKNOWN` 就是漏了这道检查）：
-      #   node_modules/opencode-ai/bin/opencode.exe 仓库预置的那个只有 479 字节，
-      #   是个 `exit 1` 的斥退占位脚本，必须由 postinstall 换成 ~172MB 的真二进制。
-      #   前面「补跑 postinstall」那步已经保证了一次，但这里**验的是最终产物**——
-      #   只有产物里躺着真二进制，用户装完才打得开。用大小做粗判即可：
-      #   真货 >100MB，占位脚本只有几百字节，中间没有任何合法的中间态。
-      - name: 校验内核二进制已打进安装包
+      # 安装包文件名带 ${arch} 后，x64 产物叫 QingNiao-Setup-x64.exe；而应用内更新与
+      # README 承诺的固定直链是 releases/latest/download/QingNiao-Setup.exe（不经
+      # api.github.com、国内可直连）。把 x64 包重命名上传，直链不中断（历史版本靠 tag 追溯）。
+      - name: 重命名 x64 包为固定名（维持更新直链）
         shell: bash
         run: |
-          BIN="dist/win-unpacked/resources/bin/opencode.exe"
-          if [ ! -f "$BIN" ]; then
-            echo "::error::安装包内缺少内核二进制：$BIN"
-            exit 1
-          fi
-          SIZE=$(stat -c%s "$BIN")
-          echo "内核二进制大小：$SIZE 字节（预期 >100MB）"
-          if [ "$SIZE" -lt 100000000 ]; then
-            echo "::error::$BIN 只有 $SIZE 字节，是未替换的占位脚本而非真二进制——检查 postinstall 是否生效"
-            echo "::error::（这个包装上去会启动失败，绝不能再传上 Release）"
-            exit 1
-          fi
-          echo "✓ 内核二进制正常"
+          set -e
+          ls -l dist/*.exe
+          for f in dist/QingNiao-Setup-x64.exe dist/QingNiao-Setup-arm64.exe; do
+            if [ ! -f "$f" ]; then
+              echo "::error::未找到 $f——检查 electron-builder.yml 的 win.artifactName 是否带 \${arch}"
+              exit 1
+            fi
+          done
+          mv dist/QingNiao-Setup-x64.exe dist/QingNiao-Setup.exe
+          echo "✓ x64 包已重命名为 QingNiao-Setup.exe"
 
       # 上传安装包（files 用固定名：GitHub 会把中文名转义，写死最稳）。
       # ⚠️ files 里**只列确定会产出的文件**（理由见文件头注释第 4 条）：
       #   本项目不用 electron-updater，latest.yml 不会被生成，所以不列。
+      #   QingNiao-Setup.exe 是 x64 包重命名后的固定名（维持直链），arm64 带架构后缀，
+      #   应用内更新按 process.arch 认领（updater.ts pickAsset）。
       - name: 上传安装包到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: dist/QingNiao-Setup.exe
+          files: |
+            dist/QingNiao-Setup.exe
+            dist/QingNiao-Setup-arm64.exe
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
@@ -240,11 +282,32 @@ jobs:
         shell: bash
         run: node node_modules/opencode-ai/postinstall.mjs
 
+      # 交叉打包 Intel mac（x64）的前置：内核平台包是 optionalDependencies，npm/yarn
+      # 只装「当前机器架构」的包（Apple Silicon runner 上只有 darwin-arm64），
+      # x64 内核必须显式备上，beforePack 钩子（scripts/electron-before-pack.cjs）打
+      # x64 包时才有源可拷。版本必须与 opencode-ai 声明的一致，从它的 package.json 读。
+      # 选 -baseline（而非 AVX2 版）：发布包要面对所有 Intel mac，老机器不一定支持 AVX2。
+      # ⚠️ 不能用 npm install 装：平台包声明了 os/cpu，机器不匹配直接 EBADPLATFORM 拒装
+      #   （--force 又会重整依赖树、动到 electron 二进制）。npm pack 只下载 tarball、
+      #   不做平台检查也不碰依赖树，解压到 node_modules 即可（electron-builder 按目录找包）。
+      - name: 安装 x64 内核平台包（Intel mac 支持）
+        shell: bash
+        run: |
+          set -e
+          VER=$(node -p "require('./node_modules/opencode-ai/package.json').optionalDependencies['opencode-darwin-x64-baseline']")
+          echo "opencode-darwin-x64-baseline@$VER"
+          npm pack "opencode-darwin-x64-baseline@$VER" --pack-destination "$RUNNER_TEMP"
+          mkdir -p node_modules/opencode-darwin-x64-baseline
+          tar -xzf "$RUNNER_TEMP/opencode-darwin-x64-baseline-$VER.tgz" -C node_modules/opencode-darwin-x64-baseline --strip-components 1
+          ls -l node_modules/opencode-darwin-x64-baseline/bin
+
       # dist:mac 里串的是 electron-builder --mac；这里额外关掉签名自动发现，
       # 否则没有钥匙串证书时 electron-builder 会要求签名而失败。
-      # 产物：QingNiao-Setup-arm64.dmg / QingNiao-Setup-arm64.zip（macos-latest 是 Apple Silicon）
-      - name: 构建 macOS 安装包（未签名）
-        run: yarn dist:mac --publish never
+      # --arm64 --x64：一次出双架构包（mac.artifactName 带 ${arch}，互不覆盖）。
+      # 产物：QingNiao-Setup-arm64.dmg/.zip + QingNiao-Setup-x64.dmg/.zip。
+      # x64 包的内核由 beforePack 钩子从 opencode-darwin-x64-baseline 换入（上一步装好）。
+      - name: 构建 macOS 安装包（未签名，arm64 + x64）
+        run: yarn dist:mac --arm64 --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
@@ -255,40 +318,44 @@ jobs:
       #   源头是后置的 postinstall 会 chmod 0o755；这里验的是**最终产物**，
       #   防止 electron-builder 拷贝 extraResources 时把权限位丢掉。
       #   同时验一下大小，排除"把占位脚本打进去"的老问题（与 Windows 那步等价）。
-      - name: 校验内核二进制已打进安装包且可执行
+      # 双架构各验一遍，并用 file 断言**架构没打岔**：这是防止"arm64 机器上打 x64 包
+      # 却忘了换内核"的唯一可靠手段——Mach-O 文件头两种架构相同，只有 cputype 能区分
+      # （beforePack 钩子若没生效，x64 包里就是 arm64 内核，装上必跑不起来）。
+      - name: 校验双架构内核已打进安装包且架构正确
         shell: bash
         run: |
-          BIN="dist/mac-arm64/青鸟.app/Contents/Resources/bin/opencode.exe"
-          # 兼容不同 electron-builder 版本的输出目录命名（mac-arm64 / mac / mac-universal）
-          if [ ! -f "$BIN" ]; then
-            BIN=$(find dist -path '*/Contents/Resources/bin/opencode.exe' -type f 2>/dev/null | head -1)
-          fi
-          if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
-            echo "::error::.app 包内找不到内核二进制（Contents/Resources/bin/opencode.exe）"
-            echo "::error::检查 electron-builder.yml 的 extraResources 与 asarUnpack 配置"
-            find dist -name 'opencode*' -type f 2>/dev/null | head -10
-            exit 1
-          fi
-          SIZE=$(stat -f%z "$BIN")
-          echo "内核二进制：$BIN"
-          echo "  大小：$SIZE 字节（预期 >100MB）"
-          if [ "$SIZE" -lt 100000000 ]; then
-            echo "::error::只有 $SIZE 字节，是未替换的占位脚本而非真二进制——检查 postinstall 是否生效"
-            exit 1
-          fi
-          # 文件头应是 Mach-O（cffaedfe 小端 / cafebabe fat），不是 PE
-          HEAD=$(xxd -p -l 4 "$BIN")
-          echo "  文件头：0x$HEAD"
-          case "$HEAD" in
-            cffaedfe*|cafebabe*|feedface*) echo "  ✓ 是 Mach-O" ;;
-            *) echo "::error::文件头 0x$HEAD 不是 Mach-O——可能打进了错误平台的二进制"; exit 1 ;;
-          esac
-          if [ ! -x "$BIN" ]; then
-            echo "::error::内核二进制没有可执行权限（-x 未通过）——mac 上主进程会无法 spawn 它"
-            echo "::error::该文件权限：$(ls -l "$BIN")"
-            exit 1
-          fi
-          echo "✓ 内核二进制正常且可执行"
+          for ARCH in arm64 x64; do
+            BIN="dist/mac-$ARCH/青鸟.app/Contents/Resources/bin/opencode.exe"
+            # 兼容不同 electron-builder 版本的输出目录命名（mac-arm64 / mac / mac-universal）
+            if [ ! -f "$BIN" ]; then
+              BIN=$(find "dist/mac-$ARCH" -path '*/Contents/Resources/bin/opencode.exe' -type f 2>/dev/null | head -1)
+            fi
+            if [ -z "$BIN" ] || [ ! -f "$BIN" ]; then
+              echo "::error::[$ARCH] .app 包内找不到内核二进制（Contents/Resources/bin/opencode.exe）"
+              echo "::error::检查 electron-builder.yml 的 extraResources 与 asarUnpack 配置"
+              exit 1
+            fi
+            SIZE=$(stat -f%z "$BIN")
+            echo "[$ARCH] 内核二进制：$BIN"
+            echo "  大小：$SIZE 字节（预期 >100MB）"
+            if [ "$SIZE" -lt 100000000 ]; then
+              echo "::error::[$ARCH] 只有 $SIZE 字节，是未替换的占位脚本而非真二进制——检查 postinstall 是否生效"
+              exit 1
+            fi
+            # file 输出含 cputype：arm64 架构 → "arm64"，Intel → "x86_64"，必须与包目录一致
+            KIND=$(file -b "$BIN")
+            echo "  类型：$KIND"
+            case "$ARCH" in
+              arm64) case "$KIND" in *arm64*) echo "  ✓ 架构匹配" ;; *) echo "::error::[$ARCH] 包里装的不是 arm64 内核（$KIND）"; exit 1 ;; esac ;;
+              x64)   case "$KIND" in *x86_64*) echo "  ✓ 架构匹配" ;; *) echo "::error::[$ARCH] 包里装的不是 x64 内核（$KIND）——beforePack 钩子未生效或平台包没装"; exit 1 ;; esac ;;
+            esac
+            if [ ! -x "$BIN" ]; then
+              echo "::error::[$ARCH] 内核二进制没有可执行权限（-x 未通过）——mac 上主进程会无法 spawn 它"
+              echo "::error::该文件权限：$(ls -l "$BIN")"
+              exit 1
+            fi
+          done
+          echo "✓ 双架构内核均正常且可执行"
 
       - name: 校验产物
         shell: bash
@@ -304,20 +371,22 @@ jobs:
             exit 1
           fi
 
-      # 应用内更新在 mac 上找的文件名是固定常量（updater.ts 的 MAC_DMG_NAME），
-      # 这里断言一下两边没写岔，免得 Release 传上去了、应用却永远说"没有新版本"。
-      - name: 校验 dmg 文件名与 updater.ts 常量一致
+      # 应用内更新在 mac 上按「当前架构」找 dmg（updater.ts 按 process.arch 拼
+      # QingNiao-Setup-${arch}.dmg），这里断言 arm64 / x64 两份产物都在、名字没写岔。
+      - name: 校验双架构 dmg 文件名与 updater.ts 命名一致
         shell: bash
         run: |
-          grep -n "MAC_DMG_NAME" electron/main/updater.ts
-          if ! ls dist/QingNiao-Setup-arm64.dmg >/dev/null 2>&1; then
-            echo "::error::未找到 dist/QingNiao-Setup-arm64.dmg"
-            echo "::error::主进程 updater.ts 的 MAC_DMG_NAME 期望这个文件名；"
-            echo "::error::若实际产物名不同（如 arch 不是 arm64），请同步改 MAC_DMG_NAME 或 mac.artifactName"
-            ls -l dist
-            exit 1
-          fi
-          echo "✓ dmg 文件名与 updater.ts 一致"
+          grep -n "MAC_DMG_NAME\|process.arch" electron/main/updater.ts
+          for ARCH in arm64 x64; do
+            if [ ! -f "dist/QingNiao-Setup-$ARCH.dmg" ]; then
+              echo "::error::未找到 dist/QingNiao-Setup-$ARCH.dmg"
+              echo "::error::主进程 updater.ts 按当前架构期望这个文件名；"
+              echo "::error::若实际产物名不同，请同步改 MAC_DMG_NAME 或 mac.artifactName"
+              ls -l dist
+              exit 1
+            fi
+            echo "✓ QingNiao-Setup-$ARCH.dmg 存在"
+          done
 
       - name: 上传 macOS 安装包到 Release
         uses: softprops/action-gh-release@v2
@@ -326,6 +395,8 @@ jobs:
           files: |
             dist/QingNiao-Setup-arm64.dmg
             dist/QingNiao-Setup-arm64.zip
+            dist/QingNiao-Setup-x64.dmg
+            dist/QingNiao-Setup-x64.zip
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

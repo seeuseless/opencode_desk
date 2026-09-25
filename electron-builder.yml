@@ -50,8 +50,14 @@ directories:
 #   GitHub 的 `releases/latest/download/<名>` 直链、以及上传附件后的 asset 名称对非 ASCII
 #   字符要转义，中文名会让下载链接/文件名在各端表现不稳（转义、显示乱码、个别环境直接拿不到）。
 #   注意这只是**产物文件名**：应用本身仍叫「青鸟」（productName 不变），桌面快捷方式、
-#   开始菜单项、窗口标题都还是中文，改的只是发到 GitHub 的那个安装包文件。
-artifactName: QingNiao-Setup.${ext}
+#   开始菜单项、窗口标题都还是中文，改的只是发到 GitHub 的那个安装包。
+#
+# ⚠️ ${arch} 必须带（2026-09-25 加 Windows ARM64 后双架构出包）：多架构产物若同名会互相覆盖。
+#   带上后 x64 产物叫 QingNiao-Setup-x64.exe、arm64 叫 QingNiao-Setup-arm64.exe。
+#   「releases/latest/download/QingNiao-Setup.exe」固定直链（README 承诺的下载方式）由
+#   release.yml 构建后把 x64 的包重命名成 QingNiao-Setup.exe 上传来维持——应用内更新
+#   正常路径走 GitHub API 的 assets 按 arch 认领（updater.ts pickAsset），不依赖直链。
+artifactName: QingNiao-Setup-${arch}.${ext}
 files:
   - out/**
   - resources/image/icon.png
@@ -134,18 +140,30 @@ extraResources:
 # 把 extraResources 的 bin 从 asar 拆出（asar 内无法执行原生二进制；Windows 同样需要）
 asarUnpack:
   - "**/resources/bin/**"
+# 双架构支持（mac arm64+x64、Windows x64+arm64）：内核二进制不会随 electron-builder
+# 的 arch 自动切换（它只管 Electron 本体，extraResources 里我们自己拷的 opencode 内核
+# 是 postinstall 按「构建机器」架构放的），交叉架构出包前由这个钩子把内核换成目标架构
+# （见脚本头注释）。本机构架构建时钩子按 process.arch 短路，行为与以前完全一致。
+beforePack: scripts/electron-before-pack.cjs
 win:
   icon: resources/image/icon.ico
+  # target 不写 arch：默认只出构建机架构。CI 上用 `--x64 --arm64` 两个 flag 一次出
+  # 双架构包（见 release.yml）；本地 dist 不带 flag，仍只出本机架构。
+  # 交叉架构（x64 runner 打 arm64）的内核替换由顶层 beforePack 钩子处理。
   target:
     - nsis
-  # 与顶层同名（显式写一遍，避免将来顶层被改时这里悄悄跟着变）
-  artifactName: QingNiao-Setup.${ext}
+  # 带 ${arch}：双架构产物不互相覆盖（x64 → QingNiao-Setup-x64.exe，arm64 → -arm64）。
+  # 固定名 QingNiao-Setup.exe 由 release.yml 把 x64 产物重命名后上传，维持更新直链。
+  artifactName: QingNiao-Setup-${arch}.${ext}
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: always
 mac:
   icon: resources/image/icon.icns
+  # target 不写 arch：默认只出构建机架构。CI 上用 `--arm64 --x64` 两个 flag 一次出
+  # 双架构包（见 release.yml）；本地 dist:mac 不带 flag，仍只出本机架构。
+  # 交叉架构的内核替换由顶层 beforePack 钩子处理（见上方说明）。
   target:
     - dmg
     - zip

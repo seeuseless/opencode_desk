@@ -44,8 +44,10 @@ yarn dist:mac      # electron-builder 打 macOS dmg/zip
 >
 > | 平台 | 安装包 |
 > | --- | --- |
-> | Windows | `QingNiao-Setup.exe`（文件名固定不含版本号） |
-> | macOS | `QingNiao-Setup-arm64.dmg`（另有 `.zip`） |
+> | Windows（x64） | `QingNiao-Setup.exe`（文件名固定不含版本号） |
+> | Windows（ARM64） | `QingNiao-Setup-arm64.exe` |
+> | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg`（另有 `.zip`） |
+> | macOS（Intel） | `QingNiao-Setup-x64.dmg`（另有 `.zip`） |
 >
 > 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
 > `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名下载不稳。
