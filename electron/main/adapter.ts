@@ -287,7 +287,7 @@ class Adapter {
       // 模型校正：渲染层 localStorage 存档可能是过期值（provider 改名/停用/删除），
       // 命中不了 config 里的提供商就回落默认档，避免内核报 provider not found
       const seg = path.split('?')[0].split('/').filter(Boolean)
-      if (method === 'POST' && seg[0] === 'session' && seg[2] === 'message') {
+      if (method === 'POST' && seg[0] === 'session' && (seg[2] === 'message' || seg[2] === 'prompt_async')) {
         payload = { ...body, model: resolveModel(loadSettings(), body?.model as never) }
       }
       const res = await fetch(this.base + path, {

@@ -337,11 +337,10 @@ export default function App() {
     }
   }
 
-  /** 打开「计划任务」执行产出的会话：恒在内置「任务」目录里（主进程固定往那写） */
-  function openScheduleSession(sid: string) {
+  /** 计划任务启动后只展开左侧「任务」目录，不切换当前会话窗口 */
+  function showScheduleSessionInSidebar() {
     const proj = projects.find((x) => x.builtin) ?? projects.find((x) => x.id === 'builtin')
-    if (!proj) return
-    pickSessionFor(proj, sid)
+    if (proj) setExpanded((e) => ({ ...e, [proj.id]: true }))
   }
 
   async function deleteSessionOf(proj: Project, sid: string) {
@@ -652,7 +651,7 @@ export default function App() {
         {view === 'schedules' ? (
           <SchedulesView
             refreshSignal={schedTick}
-            onOpenSession={openScheduleSession}
+            onTaskSessionCreated={showScheduleSessionInSidebar}
             onNotice={setNotice}
             onClose={toChat}
           />

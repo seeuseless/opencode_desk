@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { LoaderCircle, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { Switch } from './Switch'
 import { Menu } from './Menu'
@@ -25,8 +25,8 @@ function ranLabel(t: number | undefined): string {
 interface Props {
   /** 自增计数：主进程推「有任务到点执行」时 +1，列表跟着重读一次 */
   refreshSignal?: number
-  /** 「立即执行」成功后跳到该次执行产出的会话（父 App 激活内置「任务」目录打开） */
-  onOpenSession: (sid: string) => void
+  /** 「立即执行」成功后展开左侧内置「任务」目录，让新会话直接可见 */
+  onTaskSessionCreated: () => void
   /** 保存 / 执行 / 删除失败时弹全局提示 */
   onNotice: (msg: string) => void
   /** 关闭列表页回对话 */
@@ -62,7 +62,7 @@ export function SchedulesView(p: Props) {
     setRunning(t.id)
     try {
       const r = await window.qingniao.scheduleRunNow(t.id)
-      if (r.ok && r.sessionId) p.onOpenSession(r.sessionId)
+      if (r.ok) p.onTaskSessionCreated()
       else if (r.error) p.onNotice(r.error)
       try {
         setTasks(await window.qingniao.scheduleList())
@@ -108,11 +108,12 @@ export function SchedulesView(p: Props) {
                 <div className="scard-acts">
                   <button
                     className="icon-btn"
-                    title="立即执行"
+                    title={running === t.id ? '执行中…' : '立即执行'}
+                    aria-busy={running === t.id}
                     disabled={!!running}
                     onClick={() => void runNow(t)}
                   >
-                    <Play size={14} />
+                    {running === t.id ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}
                   </button>
                   <button className="icon-btn" title="编辑" onClick={() => setEditing(t)}>
                     <Pencil size={14} />

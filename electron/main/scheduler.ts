@@ -141,7 +141,7 @@ export function removeSchedule(id: string): ScheduleTask[] {
   return list
 }
 
-/** 执行一次：建会话 + 发 prompt（两步都是内核即时受理，跑不跑完不阻塞这里） */
+/** 执行一次：建会话 + 异步发送 prompt；内核受理后立即返回，不等待本轮对话完成 */
 async function runTask(task: ScheduleTask): Promise<{ sessionId?: string; error?: string }> {
   if (!workspace) return { error: '执行目录未初始化' }
   const qs = '?directory=' + encodeURIComponent(workspace)
@@ -149,7 +149,7 @@ async function runTask(task: ScheduleTask): Promise<{ sessionId?: string; error?
   if (r1.status >= 400) return { error: String(r1.data ?? '创建会话失败') }
   const sid = (r1.data as { id?: string } | null)?.id
   if (!sid) return { error: '创建会话未返回 id' }
-  const r2 = await adapter.api('/session/' + sid + '/message' + qs, 'POST', {
+  const r2 = await adapter.api('/session/' + sid + '/prompt_async' + qs, 'POST', {
     parts: [{ type: 'text', text: task.prompt }]
   })
   if (r2.status >= 400) return { sessionId: sid, error: String(r2.data ?? '发送任务内容失败') }
