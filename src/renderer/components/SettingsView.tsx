@@ -7,6 +7,7 @@ import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { UpdatePanel } from './UpdatePanel'
 import { getThemeList, CUSTOM_ID } from '../theme'
+import { LANGS, t, type Lang } from '../i18n'
 import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
@@ -41,6 +42,11 @@ const MODALITY_LABELS: { key: Modality; label: string; tip?: string }[] = [
   }
 ]
 
+/** 模态键 → 当前语言的标签（键是 MODALITY_LABELS 里的简体标签） */
+function modalityLabel(k: Modality): string {
+  return t(MODALITY_LABELS.find((m) => m.key === k)?.label ?? k)
+}
+
 /** 每个模型的思考形态选项（输入框思考选择器据此给档位，缺省=关/开） */
 const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
   { key: 'toggle', label: '关/开', tip: '默认：思考默认开启，你可在「关/开」之间切' },
@@ -65,6 +71,9 @@ interface Props {
   onNormalChatWidth: (width: number) => void
   projectSortMode: ProjectSortMode
   onProjectSortMode: (mode: ProjectSortMode) => void
+  /** 界面语言（App 持有，切换后整棵树重渲染） */
+  lang: Lang
+  onLang: (l: Lang) => void
   /** 当前活动项目路径：项目级技能写在 <项目>/.opencode/skills 下（没有项目时该组不可用） */
   projectPath?: string | null
   projectName?: string | null
@@ -426,34 +435,34 @@ export function SettingsView(p: Props) {
   /** 应用提供商模板：本机已有同 ID 的配置原样带出（模型/参数/Base URL），但绝不带入 API Key */
   function applyPreset(pid: string) {
     if (!draft) return
-    const t = PROVIDER_PRESETS.find((x) => x.id === pid)
-    if (!t) return
+    const preset = PROVIDER_PRESETS.find((x) => x.id === pid)
+    if (!preset) return
     setModelForm(null)
     setModelDel(null)
-    const cur = providers.find((x) => x.id === t.id)
+    const cur = providers.find((x) => x.id === preset.id)
     // 老存档里过时的端点顺手纠回来（见 STALE_BASE_URL），否则用户永远停在写死的错地址上
-    const savedBase = freshBaseURL(t.id, cur?.baseURL)
-    const ids = cur?.models.length ? cur.models.map((m) => m.id) : t.models
+    const savedBase = freshBaseURL(preset.id, cur?.baseURL)
+    const ids = cur?.models.length ? cur.models.map((m) => m.id) : preset.models
     const known = cur ? Object.fromEntries(cur.models.map((m) => [m.id, m])) : {}
     const cfgs: Record<string, ModelCfg> = {}
     for (const mid of ids) {
       // 已存过的参数（含用户选过的生成角色）不动，只对全新模型按名字/模板预填
       cfgs[mid] =
-        known[mid] ?? { id: mid, ...defaultModelCfg(), ...presetModelPatch(mid, t.input?.[mid], t.gen?.[mid]) }
+        known[mid] ?? { id: mid, ...defaultModelCfg(), ...presetModelPatch(mid, preset.input?.[mid], preset.gen?.[mid]) }
     }
     setDraft({
       isNew: true,
       index: -1,
-      name: cur?.name ?? t.name,
-      id: t.id,
-      baseURL: savedBase ?? t.baseURL,
+      name: cur?.name ?? preset.name,
+      id: preset.id,
+      baseURL: savedBase ?? preset.baseURL,
       apiKey: '',
       modelsText: ids.join('\n'),
       // 已存过的配置带出现有值；全新填写时用模板预填的查询地址（agnes 这类非标准端点省得用户去查文档）
-      videoPoll: cur?.videoPoll ?? t.videoPoll ?? '',
+      videoPoll: cur?.videoPoll ?? preset.videoPoll ?? '',
       cfgs
     })
-    setFormMsg({ text: '已填充模板，请填写 API Key', bad: false })
+    setFormMsg({ text: t('已填充模板，请填写 API Key'), bad: false })
   }
 
   function openEdit(i: number) {
@@ -477,17 +486,17 @@ export function SettingsView(p: Props) {
   async function fetchModels() {
     if (!draft) return
     if (!draft.baseURL.trim()) {
-      setFormMsg({ text: '请先填写 Base URL', bad: true })
+      setFormMsg({ text: t('请先填写 Base URL'), bad: true })
       return
     }
     setFetching(true)
     setFormMsg(null)
     const r = await window.qingniao.fetchModels(draft.baseURL, draft.apiKey)
     setFetching(false)
-    if (r.error) setFormMsg({ text: '拉取失败：' + r.error, bad: true })
+    if (r.error) setFormMsg({ text: t('拉取失败：') + r.error, bad: true })
     else {
       setDraft({ ...draft, modelsText: r.models!.join('\n') })
-      setFormMsg({ text: `已获取 ${r.models!.length} 个模型`, bad: false })
+      setFormMsg({ text: t('已获取 {n} 个模型', { n: r.models!.length }), bad: false })
     }
   }
 
@@ -587,19 +596,20 @@ export function SettingsView(p: Props) {
    * 其余角色取 GEN_LABELS 的标签（图片 / 视频 / 语音 / 音乐 / 识别）。
    */
   function roleLabel(role: GenRole): string {
-    if (role === 'none') return '文本'
-    return GEN_LABELS.find((g) => g.key === role)?.label ?? role
+    if (role === 'none') return t('文本')
+    const lab = GEN_LABELS.find((g) => g.key === role)?.label
+    return lab ? t(lab) : role
   }
 
   async function saveDraft() {
     if (!draft || busySelf) return
     const id = (draft.id.trim() || slugify(draft.name)).toLowerCase()
     if (!draft.baseURL.trim()) {
-      setFormMsg({ text: '请填写 Base URL', bad: true })
+      setFormMsg({ text: t('请填写 Base URL'), bad: true })
       return
     }
     if (providers.some((x, i) => x.id === id && i !== draft.index)) {
-      setFormMsg({ text: '提供商 ID 已存在：' + id, bad: true })
+      setFormMsg({ text: t('提供商 ID 已存在：') + id, bad: true })
       return
     }
     const cfg: ProviderCfg = {
@@ -626,7 +636,7 @@ export function SettingsView(p: Props) {
   async function toggle(i: number) {
     applySettings(
       { ...p.settings, providers: providers.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) },
-      { note: `将${providers[i].enabled ? '停用' : '启用'}「${providers[i].name}」。` }
+      { note: t(providers[i].enabled ? '将停用「{name}」。' : '将启用「{name}」。', { name: providers[i].name }) }
     )
   }
 
@@ -650,24 +660,24 @@ export function SettingsView(p: Props) {
     if (!mcpDraft) return
     const name = mcpDraft.name.trim().toLowerCase().replace(/\s+/g, '-')
     if (!name) {
-      setFormMsg({ text: '请填写 MCP 名称', bad: true })
+      setFormMsg({ text: t('请填写 MCP 名称'), bad: true })
       return
     }
     if (mcpDraft.type === 'local' && !mcpDraft.command.trim()) {
-      setFormMsg({ text: '请填写启动命令（如 npx -y @modelcontextprotocol/server-xxx）', bad: true })
+      setFormMsg({ text: t('请填写启动命令（如 npx -y @modelcontextprotocol/server-xxx）'), bad: true })
       return
     }
     if (mcpDraft.type === 'remote' && !mcpDraft.url.trim()) {
-      setFormMsg({ text: '请填写服务地址', bad: true })
+      setFormMsg({ text: t('请填写服务地址'), bad: true })
       return
     }
     if (name === 'playwright') {
-      setFormMsg({ text: 'playwright 为内置浏览器保留名，请换一个', bad: true })
+      setFormMsg({ text: t('playwright 为内置浏览器保留名，请换一个'), bad: true })
       return
     }
     const list = p.settings.mcps
     if (list.some((x, i) => x.name === name && i !== mcpDraft.index)) {
-      setFormMsg({ text: '同名 MCP 已存在：' + name, bad: true })
+      setFormMsg({ text: t('同名 MCP 已存在：') + name, bad: true })
       return
     }
     const cfg: McpCfg = {
@@ -693,7 +703,7 @@ export function SettingsView(p: Props) {
     const m = p.settings.mcps[i]
     applySettings(
       { ...p.settings, mcps: p.settings.mcps.map((x, k) => (k === i ? { ...x, enabled: !x.enabled } : x)) },
-      { note: `将${m.enabled ? '停用' : '启用'} MCP「${m.name}」。` }
+      { note: t(m.enabled ? '将停用 MCP「{name}」。' : '将启用 MCP「{name}」。', { name: m.name }) }
     )
   }
 
@@ -701,7 +711,7 @@ export function SettingsView(p: Props) {
     const m = p.settings.mcps[i]
     applySettings(
       { ...p.settings, mcps: p.settings.mcps.filter((_, k) => k !== i) },
-      { note: `将删除 MCP「${m.name}」。` }
+      { note: t('将删除 MCP「{name}」。', { name: m.name }) }
     )
   }
 
@@ -792,27 +802,27 @@ export function SettingsView(p: Props) {
     return (
       <div className="sk-sec" key={kind}>
         <div className="sk-head">
-          <span className="sk-title">{title}</span>
+          <span className="sk-title">{t(title)}</span>
           {hint && <span className="sk-hint">{hint}</span>}
           <span className="spacer" />
           {kind !== 'builtin' && (
             <>
               <button className="ghost" disabled={!usable} onClick={() => void window.qingniao.openSkillsDir({ scope: kind, projectPath: p.projectPath })}>
-                <FolderOpen size={13} /> 打开目录
+                <FolderOpen size={13} /> {t('打开目录')}
               </button>
               <button className="ghost" disabled={!usable} onClick={() => newSkill(kind === 'global' ? 'global' : 'project')}>
-                <Plus size={13} /> 新建
+                <Plus size={13} /> {t('新建')}
               </button>
             </>
           )}
         </div>
-        {!usable && kind !== 'builtin' && <div className="plist-empty">未打开项目</div>}
+        {!usable && kind !== 'builtin' && <div className="plist-empty">{t('未打开项目')}</div>}
         {usable && list.length === 0 && (
           <div className="plist-empty hint">
-            {kind === 'global' ? '还没有全局技能' : `「${p.projectName ?? '当前项目'}」下还没有技能`}
+            {kind === 'global' ? t('还没有全局技能') : t('「{name}」下还没有技能', { name: p.projectName ?? t('当前项目') })}
           </div>
         )}
-        {kind === 'builtin' && list.length === 0 && <div className="plist-empty hint">没有内置技能</div>}
+        {kind === 'builtin' && list.length === 0 && <div className="plist-empty hint">{t('没有内置技能')}</div>}
         {list.map((s) => (
           <div key={s.scope + s.name} className={'prow' + (s.error ? ' bad' : '')}>
             <span className="prow-ico">
@@ -821,17 +831,17 @@ export function SettingsView(p: Props) {
             <div className="prow-main">
               <div className="prow-name">
                 {s.name}
-                <span className="chip">{kind === 'builtin' ? '内置' : kind === 'global' ? '全局' : '项目'}</span>
-                {s.error && <span className="chip bad">不可用</span>}
+                <span className="chip">{t(kind === 'builtin' ? '内置' : kind === 'global' ? '全局' : '项目')}</span>
+                {s.error && <span className="chip bad">{t('不可用')}</span>}
               </div>
               <div className="sk-desc">{s.error ?? s.description}</div>
             </div>
             {kind !== 'builtin' && (
               <>
-                <button className="icon-btn" title="编辑" onClick={() => void openSkill(s)}>
+                <button className="icon-btn" title={t('编辑')} onClick={() => void openSkill(s)}>
                   <Pencil size={15} />
                 </button>
-                <button className="icon-btn danger" title="删除" onClick={() => setSkDel(s)}>
+                <button className="icon-btn danger" title={t('删除')} onClick={() => setSkDel(s)}>
                   <Trash2 size={15} />
                 </button>
               </>
@@ -846,14 +856,14 @@ export function SettingsView(p: Props) {
     <main className="main settings">
       <div className="set-layout">
         <nav className="set-menu">
-          {tabs.map((t) => (
+          {tabs.map((tb) => (
             <button
               type="button"
-              key={t.id}
-              className={'set-item' + (tab === t.id ? ' on' : '')}
-              onClick={() => setTab(t.id)}
+              key={tb.id}
+              className={'set-item' + (tab === tb.id ? ' on' : '')}
+              onClick={() => setTab(tb.id)}
             >
-              <t.icon size={15} /> {t.label}
+              <tb.icon size={15} /> {t(tb.label)}
             </button>
           ))}
         </nav>
@@ -862,10 +872,24 @@ export function SettingsView(p: Props) {
         <>
         <section>
           <h3>
-            <Layers size={15} /> 通用
+            <Layers size={15} /> {t('通用')}
           </h3>
-          <h4 className="sub-title">聊天宽度</h4>
-          <p className="sec-tip">仅影响非代码模式下的聊天内容宽度，默认使用较宽布局。</p>
+          <h4 className="sub-title">{t('语言')}</h4>
+          <p className="sec-tip">{t('切换后整个界面的文案随之更新。')}</p>
+          <div className="acct-tabs">
+            {LANGS.map((l) => (
+              <button
+                type="button"
+                key={l.id}
+                className={'seg-btn' + (p.lang === l.id ? ' on' : '')}
+                onClick={() => p.onLang(l.id)}
+              >
+                {l.label}
+              </button>
+            ))}
+          </div>
+          <h4 className="sub-title">{t('聊天宽度')}</h4>
+          <p className="sec-tip">{t('仅影响非代码模式下的聊天内容宽度，默认使用较宽布局。')}</p>
           <div className="chat-width-setting">
             <input
               type="range"
@@ -876,30 +900,34 @@ export function SettingsView(p: Props) {
               onChange={(e) => p.onNormalChatWidth(Number(e.target.value))}
             />
             <span>{p.normalChatWidth}px</span>
+            {/* 与 App.tsx 里 normalChatWidth 的默认值保持一致 */}
+            <button type="button" className="ghost sm" onClick={() => p.onNormalChatWidth(960)}>
+              {t('恢复默认')}
+            </button>
           </div>
-          <h4 className="sub-title">项目文件夹排序</h4>
-          <p className="sec-tip">默认按最近任务先后排列，也可以固定顺序后手动调整。</p>
+          <h4 className="sub-title">{t('项目文件夹排序')}</h4>
+          <p className="sec-tip">{t('默认按最近任务先后排列，也可以固定顺序后手动调整。')}</p>
           <div className="acct-tabs">
             <button
               type="button"
               className={'seg-btn' + (p.projectSortMode === 'activity' ? ' on' : '')}
               onClick={() => p.onProjectSortMode('activity')}
             >
-              自动（按任务先后）
+              {t('自动（按任务先后）')}
             </button>
             <button
               type="button"
               className={'seg-btn' + (p.projectSortMode === 'fixed' ? ' on' : '')}
               onClick={() => p.onProjectSortMode('fixed')}
             >
-              固定顺序
+              {t('固定顺序')}
             </button>
           </div>
           {p.projectSortMode === 'fixed' && (
-            <p className="sec-tip">固定后可在左侧直接拖动项目文件夹调整顺序；内置「任务」目录始终置顶。</p>
+            <p className="sec-tip">{t('固定后可在左侧直接拖动项目文件夹调整顺序；内置「任务」目录始终置顶。')}</p>
           )}
-          <h4 className="sub-title">代码风格</h4>
-          <p className="sec-tip">统一应用于代码编辑器、聊天代码块与工具详情；随当前主题自动适配明暗。</p>
+          <h4 className="sub-title">{t('代码风格')}</h4>
+          <p className="sec-tip">{t('统一应用于代码编辑器、聊天代码块与工具详情；随当前主题自动适配明暗。')}</p>
           <div className="code-style-grid">
             {CODE_STYLES.map((style) => {
               const preview = CODE_STYLE_PREVIEWS[style.id]
@@ -916,8 +944,8 @@ export function SettingsView(p: Props) {
                     <span style={{ color: preview.string }}>answer</span>{' '}
                     <i>=</i> <em>42</em>
                   </span>
-                  <span className="code-style-name">{style.name}</span>
-                  <span className="code-style-desc">{style.desc}</span>
+                  <span className="code-style-name">{t(style.name)}</span>
+                  <span className="code-style-desc">{t(style.desc)}</span>
                   {on && <span className="theme-mark"><Check size={11} strokeWidth={3} /></span>}
                 </button>
               )
@@ -925,23 +953,23 @@ export function SettingsView(p: Props) {
           </div>
         </section>
         <section>
-          <h4 className="sub-title">主题</h4>
+          <h4 className="sub-title">{t('主题')}</h4>
           <p className="sec-tip">
-            内置配色即时切换，实时应用到整个界面；选择「自定义」可用四种基础色自由搭配。
+            {t('内置配色即时切换，实时应用到整个界面；选择「自定义」可用四种基础色自由搭配。')}
           </p>
           <div className="theme-grid">
-            {getThemeList().map((t) => {
+            {getThemeList().map((th) => {
               // 预览色：内置为 [侧栏 / 内容底 / 主色]，自定义取当前四色
-              const [side, body, accent] = t.id === CUSTOM_ID
+              const [side, body, accent] = th.id === CUSTOM_ID
                 ? [p.custom.sideBg, p.custom.bg, p.custom.accent]
-                : [t.swatches[0], t.swatches[2], t.swatches[1]]
-              const on = p.theme === t.id
+                : [th.swatches[0], th.swatches[2], th.swatches[1]]
+              const on = p.theme === th.id
               return (
                 <button
                   type="button"
-                  key={t.id}
+                  key={th.id}
                   className={'theme-card' + (on ? ' on' : '')}
-                  onClick={() => p.onTheme(t.id)}
+                  onClick={() => p.onTheme(th.id)}
                 >
                   <span className="theme-preview">
                     <i className="pv-side" style={{ background: side }} />
@@ -949,7 +977,7 @@ export function SettingsView(p: Props) {
                       <b style={{ background: accent }} />
                     </i>
                   </span>
-                  <span className="theme-name">{t.name}</span>
+                  <span className="theme-name">{t(th.name)}</span>
                   {on && <span className="theme-mark"><Check size={11} strokeWidth={3} /></span>}
                 </button>
               )
@@ -981,19 +1009,18 @@ export function SettingsView(p: Props) {
         <>
         <section>
           <h3>
-            模型提供商
+            {t('模型提供商')}
             <span className="spacer" />
             <button className="ghost" onClick={openNew}>
-              <Plus size={14} /> 添加提供商
+              <Plus size={14} /> {t('添加提供商')}
             </button>
           </h3>
           <p className="sec-tip">
-            填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；
-            保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。
+            {t('填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。')}
             <br />
-            拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。
+            {t('拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。')}
           </p>
-          {providers.length === 0 && <div className="plist-empty">还没有自定义提供商，点击右上角添加</div>}
+          {providers.length === 0 && <div className="plist-empty">{t('还没有自定义提供商，点击右上角添加')}</div>}
           {providers.length > 0 && (
             <div className="plist">
               {providers.map((c, i) => (
@@ -1009,21 +1036,21 @@ export function SettingsView(p: Props) {
                   }
                   {...provSort.rowProps(i)}
                 >
-                  <span className="prow-grip" title="拖动调整顺序" {...provSort.handleProps(i)}>
+                  <span className="prow-grip" title={t('拖动调整顺序')} {...provSort.handleProps(i)}>
                     <GripVertical size={14} />
                   </span>
                   <Switch checked={c.enabled} onChange={() => toggle(i)} />
                   <div className="prow-main">
                     <div className="prow-name">
                       {c.name}
-                      <span className="chip">{c.models.length} 个模型</span>
+                      <span className="chip">{t('{n} 个模型', { n: c.models.length })}</span>
                     </div>
                     <div className="prow-url">{c.baseURL}</div>
                   </div>
-                  <button className="icon-btn" title="编辑" onClick={() => openEdit(i)}>
+                  <button className="icon-btn" title={t('编辑')} onClick={() => openEdit(i)}>
                     <Pencil size={15} />
                   </button>
-                  <button className="icon-btn danger" title="删除" onClick={() => setConfirmDel(c)}>
+                  <button className="icon-btn danger" title={t('删除')} onClick={() => setConfirmDel(c)}>
                     <Trash2 size={15} />
                   </button>
                 </div>
@@ -1033,48 +1060,49 @@ export function SettingsView(p: Props) {
         </section>
         <section>
           <h3>
-            其他模型调用授权
+            {t('其他模型调用授权')}
             <span className="spacer" />
             {authGrants.length > 0 && (
               <button className="ghost danger-text" onClick={() => void revokeGrant()}>
-                全部撤销
+                {t('全部撤销')}
               </button>
             )}
           </h3>
           <p className="sec-tip">
-            除当前对话模型外，AI 在识图、生成图片/视频/音乐、配音、语音识别时会调用别的模型。
+            {t('除当前对话模型外，AI 在识图、生成图片/视频/音乐、配音、语音识别时会调用别的模型。')}
             {fullAccess ? (
               <>
-                当前是<strong>完全控制</strong>：这一档是总权限闸，这类调用<strong>一律直接放行、不再弹授权卡</strong>，
-                下面的清单只是历史记录（撤销它也拦不住）。想恢复成每次询问，把访问权限切回「默认权限」。
+                {t('当前是')}<strong>{t('完全控制')}</strong>{t('：这一档是总权限闸，这类调用')}
+                <strong>{t('一律直接放行、不再弹授权卡')}</strong>{t('，下面的清单只是历史记录（撤销它也拦不住）。想恢复成每次询问，把访问权限切回「默认权限」。')}
               </>
             ) : (
               <>
-                每次调用前都会弹一张授权卡，你选「永久允许」的目标会记在这里——想恢复成每次询问就撤销它。
+                {t('每次调用前都会弹一张授权卡，你选「永久允许」的目标会记在这里——想恢复成每次询问就撤销它。')}
                 <br />
-                撤销会同时清掉本次运行内的会话级授权：留着它会让「撤销了却还在调」看起来像没生效。
+                {t('撤销会同时清掉本次运行内的会话级授权：留着它会让「撤销了却还在调」看起来像没生效。')}
               </>
             )}
           </p>
           {authGrants.length === 0 && (
             <div className="plist-empty">
               {fullAccess
-                ? '还没有永久允许的目标；当前是完全控制，这类调用本来也不会再问你'
-                : '还没有永久允许的目标，AI 每次调用其他模型都会先问你'}
+                ? t('还没有永久允许的目标；当前是完全控制，这类调用本来也不会再问你')
+                : t('还没有永久允许的目标，AI 每次调用其他模型都会先问你')}
             </div>
           )}
           {authGrants.length > 0 && (
             <div className="plist">
               {authGrants.map((k) => {
                 const [role, id] = k.split('|')
+                const rl = MODEL_ROLE_LABEL[role]
                 return (
                   <div key={k} className="prow">
                     <Cpu size={15} />
                     <div className="prow-main">
-                      <div className="prow-name">{MODEL_ROLE_LABEL[role] ?? role ?? '调用模型'}</div>
+                      <div className="prow-name">{rl ? t(rl) : role || t('调用模型')}</div>
                       <div className="prow-url">{id || k}</div>
                     </div>
-                    <button className="icon-btn danger" title="撤销这条永久授权" onClick={() => void revokeGrant(k)}>
+                    <button className="icon-btn danger" title={t('撤销这条永久授权')} onClick={() => void revokeGrant(k)}>
                       <Trash2 size={15} />
                     </button>
                   </div>
@@ -1089,7 +1117,7 @@ export function SettingsView(p: Props) {
         {tab === 'mcp' && (
         <section>
           <h3>
-            浏览器与扩展（MCP）
+            {t('浏览器与扩展（MCP）')}
             <span className="spacer" />
             <button
               className="ghost"
@@ -1098,14 +1126,14 @@ export function SettingsView(p: Props) {
                 setMcpDraft({ isNew: true, index: -1, name: '', type: 'local', command: '', url: '' })
               }}
             >
-              <Plus size={14} /> 添加 MCP
+              <Plus size={14} /> {t('添加 MCP')}
             </button>
           </h3>
           <p className="sec-tip">
-            也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。
+            {t('也可以添加任意本地命令型 / 远程 URL 型 MCP 服务器扩展工具能力。变更需重启内核生效（保存时自动完成）。')}
           </p>
           <div className="mcp-list">
-          {p.settings.mcps.length === 0 && <div className="plist-empty hint">还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）</div>}
+          {p.settings.mcps.length === 0 && <div className="plist-empty hint">{t('还没有添加 MCP 服务器，可添加本地命令型（stdio）或远程 URL 型（HTTP/SSE）')}</div>}
           {p.settings.mcps.map((m, i) => (
             <div key={m.name} className="prow">
               <Switch checked={m.enabled} onChange={() => toggleMcp(i)} />
@@ -1115,13 +1143,13 @@ export function SettingsView(p: Props) {
               <div className="prow-main">
                 <div className="prow-name">
                   {m.name}
-                  <span className={'chip kind-' + m.type}>{m.type === 'remote' ? '远程' : '本地'}</span>
+                  <span className={'chip kind-' + m.type}>{t(m.type === 'remote' ? '远程' : '本地')}</span>
                 </div>
                 <div className="prow-url">{m.type === 'remote' ? m.url : m.command}</div>
               </div>
               <button
                 className="icon-btn"
-                title="编辑"
+                title={t('编辑')}
                 onClick={() => {
                   setFormMsg(null)
                   setMcpDraft({ isNew: false, index: i, name: m.name, type: m.type, command: m.command, url: m.url })
@@ -1129,7 +1157,7 @@ export function SettingsView(p: Props) {
               >
                 <Pencil size={15} />
               </button>
-              <button className="icon-btn danger" title="删除" onClick={() => removeMcp(i)}>
+              <button className="icon-btn danger" title={t('删除')} onClick={() => removeMcp(i)}>
                 <Trash2 size={15} />
               </button>
             </div>
@@ -1141,11 +1169,11 @@ export function SettingsView(p: Props) {
         {tab === 'skills' && (
         <section>
           <h3>
-            技能（Skills）
+            {t('技能（Skills）')}
           </h3>
-          {skillGroup('builtin', '内置技能', '')}
-          {skillGroup('global', '全局技能', '~/.qingniaoai/opencode/skills')}
-          {skillGroup('project', '项目技能', p.projectName ? `${p.projectName} · .opencode/skills` : '<项目>/.opencode/skills')}
+          {skillGroup('builtin', t('内置技能'), '')}
+          {skillGroup('global', t('全局技能'), '~/.qingniaoai/opencode/skills')}
+          {skillGroup('project', t('项目技能'), p.projectName ? `${p.projectName} · .opencode/skills` : `${t('<项目>')}/.opencode/skills`)}
         </section>
         )}
 
@@ -1175,18 +1203,18 @@ export function SettingsView(p: Props) {
       </div>
 
       {draft && (
-        <Modal title={draft.isNew ? '添加提供商' : '编辑提供商'} wide onClose={closeProviderModal}>
+        <Modal title={draft.isNew ? t('添加提供商') : t('编辑提供商')} wide onClose={closeProviderModal}>
           {draft.isNew && (
             <div className="preset-row">
-              <span className="preset-lab">快速填充</span>
-              {PROVIDER_PRESETS.map((t) => (
+              <span className="preset-lab">{t('快速填充')}</span>
+              {PROVIDER_PRESETS.map((pr) => (
                 <button
                   type="button"
-                  key={t.id}
-                  className={'preset-chip' + (draft.id === t.id ? ' on' : '')}
-                  onClick={() => applyPreset(t.id)}
+                  key={pr.id}
+                  className={'preset-chip' + (draft.id === pr.id ? ' on' : '')}
+                  onClick={() => applyPreset(pr.id)}
                 >
-                  {t.name}
+                  {pr.name}
                 </button>
               ))}
               <button
@@ -1194,21 +1222,21 @@ export function SettingsView(p: Props) {
                 className="preset-chip"
                 onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })}
               >
-                手动填写
+                {t('手动填写')}
               </button>
             </div>
           )}
           <label>
-            名称
+            {t('名称')}
             <input
               value={draft.name}
-              placeholder="如 DeepSeek"
+              placeholder={t('如 DeepSeek')}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
           </label>
           <label>
             ID
-            <input value={draft.id} placeholder="留空自动生成，如 deepseek" onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
+            <input value={draft.id} placeholder={t('留空自动生成，如 deepseek')} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
           </label>
           <label>
             Base URL
@@ -1218,11 +1246,11 @@ export function SettingsView(p: Props) {
               onChange={(e) => setDraft({ ...draft, baseURL: e.target.value })}
             />
           </label>
-          <label title="创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个">
-            <span className="lab-soft">视频任务查询地址（可选）</span>
+          <label title={t('创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个')}>
+            <span className="lab-soft">{t('视频任务查询地址（可选）')}</span>
             <input
               value={draft.videoPoll}
-              placeholder="如 https://xx/videos/{video_id}"
+              placeholder={t('如 https://xx/videos/{video_id}')}
               onChange={(e) => setDraft({ ...draft, videoPoll: e.target.value })}
             />
           </label>
@@ -1238,7 +1266,7 @@ export function SettingsView(p: Props) {
               <button
                 type="button"
                 className="pw-eye"
-                title={showKey ? '隐藏' : '显示'}
+                title={showKey ? t('隐藏') : t('显示')}
                 onClick={() => setShowKey(!showKey)}
               >
                 {showKey ? <EyeOff size={15} /> : <Eye size={15} />}
@@ -1249,11 +1277,11 @@ export function SettingsView(p: Props) {
               原先每行摊开上下文窗口、最大输出、输入、思考、生成五组控件，一屏放不下两个模型，
               现在列表用来扫全貌，参数收进弹窗。 */}
           <div className="model-cfgs">
-            <div className="model-cfgs-tip">拖动左侧手柄可调整顺序</div>
+            <div className="model-cfgs-tip">{t('拖动左侧手柄可调整顺序')}</div>
             {(() => {
               const ids = parseModels(draft.modelsText)
               if (!ids.length) {
-                return <div className="model-empty">还没有模型，点下方「添加」填一个</div>
+                return <div className="model-empty">{t('还没有模型，点下方「添加」填一个')}</div>
               }
               return ids.map((mid, mi) => {
                 const c = cfgOf(mid)
@@ -1271,7 +1299,7 @@ export function SettingsView(p: Props) {
                     key={mid}
                     {...modelSort.rowProps(mi)}
                   >
-                    <span className="model-row-grip" title="拖动调整顺序" {...modelSort.handleProps(mi)}>
+                    <span className="model-row-grip" title={t('拖动调整顺序')} {...modelSort.handleProps(mi)}>
                       <GripVertical size={14} />
                     </span>
                     <span className="model-row-name" title={mid}>
@@ -1281,27 +1309,27 @@ export function SettingsView(p: Props) {
                         「输入」= 它吃什么（能不能读图/看视频），排查「发图它不懂」看这格；
                         「生成」= 它干什么用（配音/出图/听写），排查「配音工具说找不到模型」看这格。
                         输入取模态摘要，生成取角色标签。 */}
-                    <span className="model-row-io" title={`输入：${ins.join(' / ') || '未设置'}`}>
-                      <span className="model-row-io-lab">输入</span>
+                    <span className="model-row-io" title={t('输入：{v}', { v: ins.length ? ins.map((k) => modalityLabel(k)).join(' / ') : t('未设置') })}>
+                      <span className="model-row-io-lab">{t('输入')}</span>
                       {ins.length ? (
                         ins.map((k) => (
                           <span className="iochip on sm" key={k}>
-                            {MODALITY_LABELS.find((m) => m.key === k)?.label ?? k}
+                            {modalityLabel(k)}
                           </span>
                         ))
                       ) : (
-                        <span className="model-row-none">未设置</span>
+                        <span className="model-row-none">{t('未设置')}</span>
                       )}
                     </span>
-                    <span className="model-row-io sep" title={`生成：${roleLabel(role)}`}>
-                      <span className="model-row-io-lab">生成</span>
+                    <span className="model-row-io sep" title={t('生成：{v}', { v: roleLabel(role) })}>
+                      <span className="model-row-io-lab">{t('生成')}</span>
                       <span className={'iochip sm' + (role === 'none' ? '' : ' on')}>{roleLabel(role)}</span>
                     </span>
                     <span className="model-row-acts">
-                      <button className="ghost sm" title="编辑这个模型的接入参数" onClick={() => openModelForm(mid, mi)}>
-                        <Pencil size={13} /> 编辑
+                      <button className="ghost sm" title={t('编辑这个模型的接入参数')} onClick={() => openModelForm(mid, mi)}>
+                        <Pencil size={13} /> {t('编辑')}
                       </button>
-                      <button className="icon-btn danger" title="删除这个模型" onClick={() => setModelDel(mid)}>
+                      <button className="icon-btn danger" title={t('删除这个模型')} onClick={() => setModelDel(mid)}>
                         <Trash2 size={13} />
                       </button>
                     </span>
@@ -1311,20 +1339,20 @@ export function SettingsView(p: Props) {
             })()}
             <div className="model-foot">
               <button className="ghost model-add" onClick={() => openNewModelForm(parseModels(draft.modelsText).length)}>
-                <Plus size={14} /> 添加
+                <Plus size={14} /> {t('添加')}
               </button>
               <span className="model-foot-right">
                 {formMsg && <span className={'form-msg' + (formMsg.bad ? ' bad' : '')}>{formMsg.text}</span>}
                 <button className="ghost" onClick={fetchModels} disabled={fetching}>
-                  <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> 自动获取模型
+                  <RefreshCw size={14} className={fetching ? 'spin' : undefined} /> {t('自动获取模型')}
                 </button>
               </span>
             </div>
           </div>
           <div className="actions">
-            <button className="ghost" onClick={closeProviderModal}>取消</button>
+            <button className="ghost" onClick={closeProviderModal}>{t('取消')}</button>
             <button className="primary" disabled={busySelf} onClick={saveDraft}>
-              {busySelf ? '保存并重启内核…' : '保存'}
+              {busySelf ? t('保存并重启内核…') : t('保存')}
             </button>
           </div>
         </Modal>
@@ -1335,16 +1363,16 @@ export function SettingsView(p: Props) {
           模型名、上下文窗口、最大输出、输入、思考、生成，一个不少。 */}
       {modelForm && (
         <Modal
-          title={modelForm.isNew ? '添加模型' : '编辑模型'}
+          title={modelForm.isNew ? t('添加模型') : t('编辑模型')}
           onClose={() => setModelForm(null)}
           narrow
         >
           <div className="mform">
             <label>
-              模型名
+              {t('模型名')}
               <input
                 value={modelForm.id}
-                placeholder="调用时填的 model 字段，如 deepseek-chat"
+                placeholder={t('调用时填的 model 字段，如 deepseek-chat')}
                 autoFocus
                 onChange={(e) => {
                   const id = e.target.value
@@ -1367,12 +1395,12 @@ export function SettingsView(p: Props) {
                 if (!mid) return null
                 const ids = draft ? parseModels(draft.modelsText) : []
                 if (!ids.some((x, i) => x === mid && i !== modelForm.index)) return null
-                return <span className="form-msg bad">这个模型名已经有了</span>
+                return <span className="form-msg bad">{t('这个模型名已经有了')}</span>
               })()}
             </label>
             <div className="mform-row">
               <label>
-                上下文窗口
+                {t('上下文窗口')}
                 <input
                   type="number"
                   min={1}
@@ -1381,7 +1409,7 @@ export function SettingsView(p: Props) {
                 />
               </label>
               <label>
-                最大输出 Token
+                {t('最大输出 Token')}
                 <input
                   type="number"
                   min={1}
@@ -1391,14 +1419,14 @@ export function SettingsView(p: Props) {
               </label>
             </div>
             <div className="mform-group">
-              <span className="mform-lab">输入</span>
+              <span className="mform-lab">{t('输入')}</span>
               <div className="mform-chips">
                 {MODALITY_LABELS.map((m) => (
                   <button
                     key={m.key}
                     type="button"
                     className={'iochip' + (modelForm.input.includes(m.key) ? ' on' : '')}
-                    title={m.tip}
+                    title={m.tip ? t(m.tip) : undefined}
                     onClick={() =>
                       setModelForm({
                         ...modelForm,
@@ -1408,51 +1436,51 @@ export function SettingsView(p: Props) {
                       })
                     }
                   >
-                    {m.label}
+                    {t(m.label)}
                   </button>
                 ))}
               </div>
             </div>
             <div className="mform-group">
-              <span className="mform-lab">思考</span>
+              <span className="mform-lab">{t('思考')}</span>
               <div className="mform-chips">
-                {THINK_LABELS.map((t) => (
+                {THINK_LABELS.map((tk) => (
                   <button
-                    key={t.key}
+                    key={tk.key}
                     type="button"
-                    className={'iochip' + ((modelForm.thinking ?? 'toggle') === t.key ? ' on' : '')}
-                    title={t.tip}
-                    onClick={() => setModelForm({ ...modelForm, thinking: t.key })}
+                    className={'iochip' + ((modelForm.thinking ?? 'toggle') === tk.key ? ' on' : '')}
+                    title={t(tk.tip)}
+                    onClick={() => setModelForm({ ...modelForm, thinking: tk.key })}
                   >
-                    {t.label}
+                    {t(tk.label)}
                   </button>
                 ))}
               </div>
             </div>
             <div className="mform-group">
-              <span className="mform-lab">生成</span>
+              <span className="mform-lab">{t('生成')}</span>
               <div className="mform-chips">
                 {GEN_LABELS.map((g) => (
                   <button
                     key={g.key}
                     type="button"
                     className={'iochip' + ((modelForm.gen ?? 'auto') === g.key ? ' on' : '')}
-                    title={g.tip}
+                    title={t(g.tip)}
                     onClick={() => setModelForm({ ...modelForm, gen: g.key })}
                   >
-                    {g.label}
+                    {t(g.label)}
                   </button>
                 ))}
               </div>
             </div>
             <div className="actions">
-              <button className="ghost" onClick={() => setModelForm(null)}>取消</button>
+              <button className="ghost" onClick={() => setModelForm(null)}>{t('取消')}</button>
               <button
                 className="primary"
                 disabled={!modelForm.id.trim() || !modelForm.context || !modelForm.output}
                 onClick={commitModelForm}
               >
-                {modelForm.isNew ? '添加' : '确定'}
+                {modelForm.isNew ? t('添加') : t('确定')}
               </button>
             </div>
           </div>
@@ -1460,18 +1488,18 @@ export function SettingsView(p: Props) {
       )}
 
       {modelDel && (
-        <Modal title="删除模型" onClose={() => setModelDel(null)}>
+        <Modal title={t('删除模型')} onClose={() => setModelDel(null)}>
           <div className="mform">
             <div className="del-text">
-              从提供商里移除「<b>{modelDel}</b>」？此操作只改草稿，点提供商弹窗的「保存」才正式生效。
+              {t('从提供商里移除「')}<b>{modelDel}</b>{t('」？此操作只改草稿，点提供商弹窗的「保存」才正式生效。')}
             </div>
             <div className="actions">
-              <button className="ghost" onClick={() => setModelDel(null)}>取消</button>
+              <button className="ghost" onClick={() => setModelDel(null)}>{t('取消')}</button>
               <button
                 className="primary danger-btn"
                 onClick={() => delModel(modelDel, parseModels(draft?.modelsText ?? '').indexOf(modelDel))}
               >
-                删除
+                {t('删除')}
               </button>
             </div>
           </div>
@@ -1479,7 +1507,7 @@ export function SettingsView(p: Props) {
       )}
 
       {mcpDraft && (
-        <Modal title={mcpDraft.isNew ? '添加 MCP 服务器' : '编辑 MCP 服务器'} onClose={() => setMcpDraft(null)}>
+        <Modal title={mcpDraft.isNew ? t('添加 MCP 服务器') : t('编辑 MCP 服务器')} onClose={() => setMcpDraft(null)}>
           <div className="mcp-form">
             <div className="mcp-type">
               <button
@@ -1489,8 +1517,8 @@ export function SettingsView(p: Props) {
               >
                 <Terminal size={14} />
                 <div className="seg-txt">
-                  <b>本地命令（stdio）</b>
-                  <i>在本机启动进程，如 npx 拉起的 MCP 服务</i>
+                  <b>{t('本地命令（stdio）')}</b>
+                  <i>{t('在本机启动进程，如 npx 拉起的 MCP 服务')}</i>
                 </div>
               </button>
               <button
@@ -1500,15 +1528,15 @@ export function SettingsView(p: Props) {
               >
                 <Link2 size={14} />
                 <div className="seg-txt">
-                  <b>远程地址（HTTP/SSE）</b>
-                  <i>连接已部署的 MCP 服务端点 URL</i>
+                  <b>{t('远程地址（HTTP/SSE）')}</b>
+                  <i>{t('连接已部署的 MCP 服务端点 URL')}</i>
                 </div>
               </button>
             </div>
 
             <label>
-              名称
-              <span className="lab-tip">唯一标识，自动转小写，如 context7</span>
+              {t('名称')}
+              <span className="lab-tip">{t('唯一标识，自动转小写，如 context7')}</span>
               <input
                 value={mcpDraft.name}
                 placeholder="context7"
@@ -1519,8 +1547,8 @@ export function SettingsView(p: Props) {
 
             {mcpDraft.type === 'local' ? (
               <label>
-                启动命令
-                <span className="lab-tip">命令与参数用空格分隔，整行填入</span>
+                {t('启动命令')}
+                <span className="lab-tip">{t('命令与参数用空格分隔，整行填入')}</span>
                 <textarea
                   rows={3}
                   className="mono"
@@ -1532,8 +1560,8 @@ export function SettingsView(p: Props) {
               </label>
             ) : (
               <label>
-                服务地址
-                <span className="lab-tip">MCP 端点的完整 URL</span>
+                {t('服务地址')}
+                <span className="lab-tip">{t('MCP 端点的完整 URL')}</span>
                 <input
                   className="mono"
                   value={mcpDraft.url}
@@ -1552,9 +1580,9 @@ export function SettingsView(p: Props) {
             )}
 
             <div className="actions">
-              <button className="ghost" onClick={() => setMcpDraft(null)}>取消</button>
+              <button className="ghost" onClick={() => setMcpDraft(null)}>{t('取消')}</button>
               <button className="primary" disabled={busySelf} onClick={saveMcpDraft}>
-                {busySelf ? '保存并重启内核…' : '保存'}
+                {busySelf ? t('保存并重启内核…') : t('保存')}
               </button>
             </div>
           </div>
@@ -1563,7 +1591,7 @@ export function SettingsView(p: Props) {
 
       {skDraft && (
         <Modal
-          title={skDraft.isNew ? '新建技能' : `编辑技能 · ${skDraft.scope === 'global' ? '全局' : '项目'}`}
+          title={skDraft.isNew ? t('新建技能') : t('编辑技能 · ') + t(skDraft.scope === 'global' ? '全局' : '项目')}
           onClose={() => setSkDraft(null)}
         >
           <div className="mcp-form">
@@ -1579,8 +1607,8 @@ export function SettingsView(p: Props) {
                 >
                   <Globe size={14} />
                   <div className="seg-txt">
-                    <b>全局技能</b>
-                    <i>所有项目都生效，适合通用规范</i>
+                    <b>{t('全局技能')}</b>
+                    <i>{t('所有项目都生效，适合通用规范')}</i>
                   </div>
                 </button>
                 <button
@@ -1594,16 +1622,16 @@ export function SettingsView(p: Props) {
                 >
                   <FolderOpen size={14} />
                   <div className="seg-txt">
-                    <b>项目技能</b>
-                    <i>{p.projectName ? `只在「${p.projectName}」下生效` : '需先打开一个项目'}</i>
+                    <b>{t('项目技能')}</b>
+                    <i>{p.projectName ? t('只在「{name}」下生效', { name: p.projectName }) : t('需先打开一个项目')}</i>
                   </div>
                 </button>
               </div>
             )}
 
             <label>
-              名称
-              <span className="lab-tip">小写字母、数字与连字符，须与目录名一致，如 git-commit-zh</span>
+              {t('名称')}
+              <span className="lab-tip">{t('小写字母、数字与连字符，须与目录名一致，如 git-commit-zh')}</span>
               <input
                 className="mono"
                 value={skDraft.name}
@@ -1614,25 +1642,25 @@ export function SettingsView(p: Props) {
             </label>
 
             <label>
-              描述
-              <span className="lab-tip">模型靠它判断何时加载——写清「做什么」和「什么场景下用」</span>
+              {t('描述')}
+              <span className="lab-tip">{t('模型靠它判断何时加载——写清「做什么」和「什么场景下用」')}</span>
               <textarea
                 rows={3}
                 value={skDraft.description}
-                placeholder="用中文撰写 git 提交信息并完成提交、推送。当用户说「写 git 日志」「提交」「push」时使用。"
+                placeholder={t('用中文撰写 git 提交信息并完成提交、推送。当用户说「写 git 日志」「提交」「push」时使用。')}
                 onChange={(e) => setSkDraft({ ...skDraft, description: e.target.value })}
               />
             </label>
 
             <label>
-              正文（Markdown）
-              <span className="lab-tip">frontmatter 由上面两个字段自动生成，这里只写正文</span>
+              {t('正文（Markdown）')}
+              <span className="lab-tip">{t('frontmatter 由上面两个字段自动生成，这里只写正文')}</span>
               <textarea
                 rows={12}
                 className="mono"
                 value={skDraft.body}
                 spellCheck={false}
-                placeholder={'## 何时使用\n\n...\n\n## 具体做法\n\n- ...'}
+                placeholder={t('## 何时使用\n\n...\n\n## 具体做法\n\n- ...')}
                 onChange={(e) => setSkDraft({ ...skDraft, body: e.target.value })}
               />
             </label>
@@ -1645,9 +1673,9 @@ export function SettingsView(p: Props) {
             )}
 
             <div className="actions">
-              <button className="ghost" onClick={() => setSkDraft(null)}>取消</button>
+              <button className="ghost" onClick={() => setSkDraft(null)}>{t('取消')}</button>
               <button className="primary" disabled={skBusy} onClick={saveSkillForm}>
-                {skBusy ? '保存并重启内核…' : '保存'}
+                {skBusy ? t('保存并重启内核…') : t('保存')}
               </button>
             </div>
           </div>
@@ -1655,28 +1683,28 @@ export function SettingsView(p: Props) {
       )}
 
       {skDel && (
-        <Modal title="删除技能" onClose={() => setSkDel(null)}>
+        <Modal title={t('删除技能')} onClose={() => setSkDel(null)}>
           <p className="confirm-text">
-            确定删除「{skDel.name}」吗？会连同 <b>{skDel.path}</b> 整个目录一起删掉，不可恢复。
+            {t('确定删除「')}{skDel.name}{t('」吗？会连同')} <b>{skDel.path}</b> {t('整个目录一起删掉，不可恢复。')}
           </p>
           <div className="actions">
-            <button className="ghost" onClick={() => setSkDel(null)}>取消</button>
+            <button className="ghost" onClick={() => setSkDel(null)}>{t('取消')}</button>
             <button className="primary danger-btn" disabled={skBusy} onClick={doRemoveSkill}>
-              {skBusy ? '删除并重启内核…' : '删除'}
+              {skBusy ? t('删除并重启内核…') : t('删除')}
             </button>
           </div>
         </Modal>
       )}
 
       {confirmDel && (
-        <Modal title="删除提供商" onClose={() => !busySelf && setConfirmDel(null)}>
+        <Modal title={t('删除提供商')} onClose={() => !busySelf && setConfirmDel(null)}>
           <p className="confirm-text">
-            确定删除「{confirmDel.name}」及其 {confirmDel.models.length} 个模型吗？内核会重启，正在使用该提供商的会话将不可继续。
+            {t('确定删除「{name}」及其 {n} 个模型吗？内核会重启，正在使用该提供商的会话将不可继续。', { name: confirmDel.name, n: confirmDel.models.length })}
           </p>
           <div className="actions">
-            <button className="ghost" disabled={busySelf} onClick={() => setConfirmDel(null)}>取消</button>
+            <button className="ghost" disabled={busySelf} onClick={() => setConfirmDel(null)}>{t('取消')}</button>
             <button className="primary danger-btn" disabled={busySelf} onClick={doRemove}>
-              {busySelf ? '删除并重启内核…' : '删除'}
+              {busySelf ? t('删除并重启内核…') : t('删除')}
             </button>
           </div>
         </Modal>
@@ -1685,7 +1713,7 @@ export function SettingsView(p: Props) {
       {/* 保存设置 = 重启内核：跑着的任务会一起结束，先让用户确认；不想现在重启的可以「稍后再说」 */}
       {pending && (
         <Modal
-          title="保存并重启内核"
+          title={t('保存并重启内核')}
           onClose={() => {
             const back = pending.keepTab
             setPending(null)
@@ -1693,7 +1721,7 @@ export function SettingsView(p: Props) {
           }}
         >
           <p className="confirm-text">
-            {pending.note}保存会重启内核，<b>正在处理的任务会一同结束</b>。确定现在保存吗？
+            {pending.note}{t('保存会重启内核，')}<b>{t('正在处理的任务会一同结束')}</b>{t('。确定现在保存吗？')}
           </p>
           <div className="actions">
             <button
@@ -1704,7 +1732,7 @@ export function SettingsView(p: Props) {
                 if (back) setTab(back)
               }}
             >
-              稍后再说
+              {t('稍后再说')}
             </button>
             <button
               className="primary"
@@ -1715,7 +1743,7 @@ export function SettingsView(p: Props) {
                 void p.onSave(next)
               }}
             >
-              保存并重启
+              {t('保存并重启')}
             </button>
           </div>
         </Modal>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { BarChart3, LoaderCircle, LogIn, RefreshCw } from 'lucide-react'
+import { t } from '../i18n'
 import { fmtNumber, fmtTokens, daysAgoYmd, ymd } from '../format'
 import type { UsageSeries, UsageSummary } from '../oc'
 
@@ -24,13 +25,13 @@ export function UsagePanel(p: Props) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
 
-  const load = useCallback(async (f: string, t: string) => {
+  const load = useCallback(async (f: string, td: string) => {
     setBusy(true)
     setErr('')
     try {
-      const d = await window.qingniao.platformUsage({ from: f, to: t })
+      const d = await window.qingniao.platformUsage({ from: f, to: td })
       if (d) setData(d)
-      else setErr('取不到用量数据，可能是登录已失效')
+      else setErr(t('取不到用量数据，可能是登录已失效'))
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
     } finally {
@@ -46,12 +47,12 @@ export function UsagePanel(p: Props) {
     return (
       <section>
         <h3>
-          <BarChart3 size={15} /> 使用量
+          <BarChart3 size={15} /> {t('使用量')}
         </h3>
-        <p className="sec-tip">用量记在平台账号下。登录后这里会显示总 token 量、今日与昨日用量，以及各模型的消耗明细。</p>
+        <p className="sec-tip">{t('用量记在平台账号下。登录后这里会显示总 token 量、今日与昨日用量，以及各模型的消耗明细。')}</p>
         <div className="plist-empty">
           <button className="ghost" disabled={p.platformBusy} onClick={p.onLogin}>
-            {p.platformBusy ? <LoaderCircle size={14} className="spin" /> : <LogIn size={14} />} 登录后查看
+            {p.platformBusy ? <LoaderCircle size={14} className="spin" /> : <LogIn size={14} />} {t('登录后查看')}
           </button>
         </div>
       </section>
@@ -70,46 +71,46 @@ export function UsagePanel(p: Props) {
   return (
     <section>
       <h3>
-        <BarChart3 size={15} /> 使用量
+        <BarChart3 size={15} /> {t('使用量')}
         <span className="spacer" />
         <button className="ghost" disabled={busy} onClick={() => void load(from, to)}>
-          <RefreshCw size={13} className={busy ? 'spin' : undefined} /> 刷新
+          <RefreshCw size={13} className={busy ? 'spin' : undefined} /> {t('刷新')}
         </button>
       </h3>
       <p className="sec-tip">
-        消耗积分 = 总 token 量 ÷ 1000 × 模型倍率（限免模型不计费、打折模型按折扣后的倍率算）。
-        当前积分余额 <b>{data?.exempt ? '不限（管理员不参与计费）' : fmtNumber(data?.points)}</b>。
+        {t('消耗积分 = 总 token 量 ÷ 1000 × 模型倍率（限免模型不计费、打折模型按折扣后的倍率算）。当前积分余额')}
+        {' '}<b>{data?.exempt ? t('不限（管理员不参与计费）') : fmtNumber(data?.points)}</b>。
       </p>
 
       <div className="usage-cards">
-        <UsageCard title="总量" tokens={data?.all.tokens} calls={data?.all.calls} points={data?.all.points} />
-        <UsageCard title="今日" tokens={data?.today.tokens} calls={data?.today.calls} points={data?.today.points} />
-        <UsageCard title="昨日" tokens={data?.yesterday.tokens} calls={data?.yesterday.calls} points={data?.yesterday.points} />
+        <UsageCard title={t('总量')} tokens={data?.all.tokens} calls={data?.all.calls} points={data?.all.points} />
+        <UsageCard title={t('今日')} tokens={data?.today.tokens} calls={data?.today.calls} points={data?.today.points} />
+        <UsageCard title={t('昨日')} tokens={data?.yesterday.tokens} calls={data?.yesterday.calls} points={data?.yesterday.points} />
       </div>
 
       <div className="usage-range">
         <label>
-          从
+          {t('从')}
           <input type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} />
         </label>
         <label>
-          到
+          {t('到')}
           <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} />
         </label>
-        <button className="ghost" onClick={() => { setFrom(daysAgoYmd(6)); setTo(ymd(new Date())) }}>近 7 天</button>
-        <button className="ghost" onClick={() => { setFrom(daysAgoYmd(29)); setTo(ymd(new Date())) }}>近 30 天</button>
-        <button className="primary" disabled={busy} onClick={() => void load(from, to)}>查询</button>
+        <button className="ghost" onClick={() => { setFrom(daysAgoYmd(6)); setTo(ymd(new Date())) }}>{t('近 7 天')}</button>
+        <button className="ghost" onClick={() => { setFrom(daysAgoYmd(29)); setTo(ymd(new Date())) }}>{t('近 30 天')}</button>
+        <button className="primary" disabled={busy} onClick={() => void load(from, to)}>{t('查询')}</button>
         <span className="usage-range-tip">
-          区间内 {fmtTokens(data?.range.tokens)} token · {fmtNumber(data?.range.calls)} 次 · {fmtNumber(data?.range.points)} 积分
+          {t('区间内 {a} token · {b} 次 · {c} 积分', { a: fmtTokens(data?.range.tokens), b: fmtNumber(data?.range.calls), c: fmtNumber(data?.range.points) })}
         </span>
       </div>
 
       {err && <p className="form-msg block bad">{err}</p>}
 
       <div className="usage-sec">
-        <div className="usage-sec-title">各模型用量</div>
+        <div className="usage-sec-title">{t('各模型用量')}</div>
         {(data?.models.length ?? 0) === 0 ? (
-          <div className="plist-empty hint">这个区间里还没有调用记录</div>
+          <div className="plist-empty hint">{t('这个区间里还没有调用记录')}</div>
         ) : (
           <div className="ubars">
             {data!.models.map((m) => (
@@ -121,7 +122,7 @@ export function UsagePanel(p: Props) {
                 </span>
                 <span className="ubar-val">
                   {fmtTokens(m.tokens)}
-                  <em>{fmtNumber(m.points)} 分</em>
+                  <em>{t('{n} 分', { n: fmtNumber(m.points) })}</em>
                 </span>
               </div>
             ))}
@@ -130,9 +131,9 @@ export function UsagePanel(p: Props) {
       </div>
 
       <div className="usage-sec">
-        <div className="usage-sec-title">用量趋势</div>
+        <div className="usage-sec-title">{t('用量趋势')}</div>
         {!series || series.models.length === 0 ? (
-          <div className="plist-empty hint">这个区间里还没有调用记录</div>
+          <div className="plist-empty hint">{t('这个区间里还没有调用记录')}</div>
         ) : (
           <Trend series={series} />
         )}
@@ -144,13 +145,13 @@ export function UsagePanel(p: Props) {
 /** 一张口径卡：token 是主角，次数与积分作副信息 */
 function UsageCard(p: { title: string; tokens?: number; calls?: number; points?: number }) {
   return (
-    <div className="ucard">
-      <div className="ucard-k">{p.title}</div>
-      <div className="ucard-v">{fmtTokens(p.tokens)}</div>
-      <div className="ucard-s">
-        {fmtNumber(p.calls)} 次调用 · {fmtNumber(p.points)} 积分
+      <div className="ucard">
+        <div className="ucard-k">{p.title}</div>
+        <div className="ucard-v">{fmtTokens(p.tokens)}</div>
+        <div className="ucard-s">
+          {t('{a} 次调用 · {b} 积分', { a: fmtNumber(p.calls), b: fmtNumber(p.points) })}
+        </div>
       </div>
-    </div>
   )
 }
 
@@ -209,7 +210,7 @@ function Trend({ series }: { series: UsageSeries }) {
         onMouseMove={pick}
         onMouseLeave={() => setHover(null)}
         role="img"
-        aria-label="各模型用量趋势"
+        aria-label={t('各模型用量趋势')}
       >
         {rows.map((r) => {
           const gy = PAD.t + ih * r
@@ -263,7 +264,7 @@ function Trend({ series }: { series: UsageSeries }) {
                 <span className="utrend-tip-v">{fmtTokens(r.v)}</span>
               </div>
             ))}
-          {total === 0 && <div className="utrend-tip-none">这天没有调用</div>}
+          {total === 0 && <div className="utrend-tip-none">{t('这天没有调用')}</div>}
         </div>
       )}
 

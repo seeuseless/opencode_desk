@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, FileText, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
 import { Modal } from './Modal'
+import { t } from '../i18n'
 import { LICENSE_SECTIONS, LICENSE_TITLE } from '../lib/license'
 import type { UpdateState } from '../../../electron/main/types'
 
@@ -60,10 +61,10 @@ export function UpdatePanel() {
     return (
       <section>
         <h3>
-          <Rocket size={15} /> 关于
+          <Rocket size={15} /> {t('关于')}
         </h3>
         <div className="plist-empty">
-          <LoaderCircle size={14} className="spin" /> 正在读取版本信息…
+          <LoaderCircle size={14} className="spin" /> {t('正在读取版本信息…')}
         </div>
       </section>
     )
@@ -77,10 +78,10 @@ export function UpdatePanel() {
   return (
     <section>
       <h3>
-        <Rocket size={15} /> 关于
+        <Rocket size={15} /> {t('关于')}
       </h3>
       <p className="sec-tip">
-        青鸟 QingNiao —— 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）。
+        {t('青鸟 QingNiao —— 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）。')}
       </p>
 
       {/* 版本卡片：常态只有"当前版本 + 检查更新"。
@@ -88,12 +89,12 @@ export function UpdatePanel() {
           摆一排"已是最新"只是占位置；真有新版才在下面单独开一块（见下方 ud-upd）。 */}
       <div className="ud-card">
         <div className="ud-ver">
-          <span className="ud-lab">当前版本</span>
+          <span className="ud-lab">{t('当前版本')}</span>
           <b className="ud-num">{st.current}</b>
         </div>
         {st.checkedAt > 0 && !latest && !st.checking && (
           <span className="ud-state">
-            <Check size={13} /> 已是最新
+            <Check size={13} /> {t('已是最新')}
           </span>
         )}
         <span className="spacer" />
@@ -104,7 +105,7 @@ export function UpdatePanel() {
             onClick={() => void run(() => window.qingniao.checkUpdate())}
           >
             {st.checking ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
-            {st.checking ? '检查中…' : '检查更新'}
+            {st.checking ? t('检查中…') : t('检查更新')}
           </button>
         )}
       </div>
@@ -134,11 +135,11 @@ export function UpdatePanel() {
         <div className="ud-upd">
           <div className="ud-upd-head">
             <ArrowUpCircle size={15} />
-            <b>发现新版本 {latest.version}</b>
+            <b>{t('发现新版本 {v}', { v: latest.version })}</b>
             {latest.publishedAt && <span className="ud-time">{new Date(latest.publishedAt).toLocaleString('zh-CN', { hour12: false })}</span>}
             <span className="spacer" />
             <button className="ghost sm" onClick={() => void window.qingniao.openRelease(latest.tag)}>
-              <ExternalLink size={13} /> 查看发布页
+              <ExternalLink size={13} /> {t('查看发布页')}
             </button>
           </div>
 
@@ -151,7 +152,7 @@ export function UpdatePanel() {
                 <i style={{ width: pct === null ? '30%' : pct + '%' }} className={pct === null ? 'indet' : ''} />
               </div>
               <span className="ud-prog-txt">
-                {pct === null ? `已下载 ${fmtSize(st.progress!.received)}` : `${pct}% · ${fmtSize(st.progress!.received)} / ${fmtSize(st.progress!.total)}`}
+                {pct === null ? t('已下载 {v}', { v: fmtSize(st.progress!.received) }) : `${pct}% · ${fmtSize(st.progress!.received)} / ${fmtSize(st.progress!.total)}`}
               </span>
             </div>
           )}
@@ -166,22 +167,22 @@ export function UpdatePanel() {
                     void run(
                       () => window.qingniao.installUpdate(),
                       (r) => {
-                        if (!r.ok) setMsg({ kind: 'err', text: r.error ?? '启动安装程序失败' })
-                        else if (r.manual) setMsg({ kind: 'ok', text: '安装包已打开，请按提示把青鸟拖到「应用程序」完成替换。' })
+                        if (!r.ok) setMsg({ kind: 'err', text: r.error ?? t('启动安装程序失败') })
+                        else if (r.manual) setMsg({ kind: 'ok', text: t('安装包已打开，请按提示把青鸟拖到「应用程序」完成替换。') })
                         // Windows 上安装器接管后本应用会退出，这里不用再提示什么
                       }
                     )
                   }
                 >
-                  <Rocket size={14} /> 立即安装并重启
+                  <Rocket size={14} /> {t('立即安装并重启')}
                 </button>
                 <span className="ud-hint">
-                  安装包已下好（{fmtSize(latest.size)}）。点「立即安装」会关闭青鸟并启动安装程序。
+                  {t('安装包已下好（{v}）。点「立即安装」会关闭青鸟并启动安装程序。', { v: fmtSize(latest.size) })}
                 </span>
               </>
             ) : downloading ? (
               <button className="ghost" onClick={() => void run(() => window.qingniao.cancelUpdate())}>
-                <X size={14} /> 取消下载
+                <X size={14} /> {t('取消下载')}
               </button>
             ) : (
               <>
@@ -197,10 +198,10 @@ export function UpdatePanel() {
                     )
                   }
                 >
-                  <Download size={14} /> 下载更新
+                  <Download size={14} /> {t('下载更新')}
                 </button>
                 <span className="ud-hint">
-                  {latest.downloadName || '安装包'}
+                  {latest.downloadName || t('安装包')}
                   {latest.size > 0 ? ` · ${fmtSize(latest.size)}` : ''}
                 </span>
               </>
@@ -213,9 +214,9 @@ export function UpdatePanel() {
           真正要操作的更新按钮；但入口必须显眼可点，不能藏成脚注 */}
       <div className="ud-terms">
         <FileText size={14} />
-        <span>使用本软件即表示你已阅读并同意</span>
+        <span>{t('使用本软件即表示你已阅读并同意')}</span>
         <button type="button" className="ud-term-link" onClick={() => setShowLicense(true)}>
-          《{LICENSE_TITLE}》
+          《{t(LICENSE_TITLE)}》
         </button>
       </div>
 
@@ -237,21 +238,21 @@ export function UpdatePanel() {
  */
 function LicenseModal({ onClose }: { onClose: () => void }) {
   return (
-    <Modal title={LICENSE_TITLE} wide onClose={onClose}>
+    <Modal title={t(LICENSE_TITLE)} wide onClose={onClose}>
       <div className="lic-body">
         {LICENSE_SECTIONS.map((sec) => (
           <div className="lic-sec" key={sec.heading}>
-            <h4>{sec.heading}</h4>
+            <h4>{t(sec.heading)}</h4>
             {sec.paras.map((p) => (
               // 正文里的 **加粗** 是给"风险自担""不承担任何责任"这类关键词加强调的，
               // 用极简标记而不是 dangerouslySetInnerHTML：条款文本将来可能来自外部，
               // 走 HTML 注入等于给未来埋一个 XSS 面（这里只需要粗体一种样式）
-              <p key={p}>{renderBold(p)}</p>
+              <p key={p}>{renderBold(t(p))}</p>
             ))}
             {sec.items && (
               <ul>
                 {sec.items.map((it) => (
-                  <li key={it}>{renderBold(it)}</li>
+                  <li key={it}>{renderBold(t(it))}</li>
                 ))}
               </ul>
             )}
@@ -260,7 +261,7 @@ function LicenseModal({ onClose }: { onClose: () => void }) {
       </div>
       <div className="actions">
         <button className="primary" onClick={onClose}>
-          知道了
+          {t('知道了')}
         </button>
       </div>
     </Modal>
@@ -277,7 +278,7 @@ function renderBold(text: string): ReactNode {
 
 /** 字节数 → 人类可读（进度条与"安装包多大"都用它，避免两处各写一套换算） */
 function fmtSize(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '未知大小'
+  if (!Number.isFinite(n) || n <= 0) return t('未知大小')
   const mb = n / 1024 / 1024
   if (mb >= 1) return mb.toFixed(1) + ' MB'
   return Math.max(1, Math.round(n / 1024)) + ' KB'

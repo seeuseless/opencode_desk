@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { Check, Copy, Download, FolderOpen, Globe, ImageOff } from 'lucide-react'
+import { t } from '../i18n'
 
 const VIDEO_RE = /\.(mp4|webm|mov|m4v|avi)(\?|#|$)/i
 /** 配音/音频结果：内嵌成播放器而不是图片 */
@@ -72,7 +73,7 @@ function CodeBlockWrap(props: { children?: ReactNode; node?: unknown }) {
   return (
     <div className="md-code">
       <pre ref={ref}>{props.children}</pre>
-      <button type="button" className={copied ? 'md-copy copied' : 'md-copy'} onClick={copy} title={copied ? '已复制' : '复制代码'}>
+      <button type="button" className={copied ? 'md-copy copied' : 'md-copy'} onClick={copy} title={copied ? t('已复制') : t('复制代码')}>
         {copied ? <Check size={13} /> : <Copy size={13} />}
       </button>
     </div>
@@ -80,7 +81,7 @@ function CodeBlockWrap(props: { children?: ReactNode; node?: unknown }) {
 }
 
 /** 「保存」小按钮：走主进程另存为对话框（远程下载/本地复制），状态在按钮文字上短暂反馈 */
-function SaveButton({ source, label = '保存' }: { source: string; label?: string }) {
+function SaveButton({ source, label = t('保存') }: { source: string; label?: string }) {
   const [msg, setMsg] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const save = (e: React.MouseEvent) => {
@@ -108,9 +109,9 @@ function SaveButton({ source, label = '保存' }: { source: string; label?: stri
   }
   return (
     <span className="md-save-wrap">
-      <button type="button" className="md-btn" onClick={save} title="另存为本地文件">
+      <button type="button" className="md-btn" onClick={save} title={t('另存为本地文件')}>
         {done ? <Check size={13} /> : <Download size={13} />}
-        {done ? '已保存' : label}
+        {done ? t('已保存') : label}
       </button>
       {msg && msg !== '…' ? <span className="md-hint">{msg}</span> : null}
     </span>
@@ -136,7 +137,7 @@ function OpenFolderButton({ source }: { source: string }) {
     <button
       type="button"
       className="md-btn"
-      title="在文件管理器中打开所在文件夹"
+      title={t('在文件管理器中打开所在文件夹')}
       onClick={(e) => {
         e.preventDefault()
         e.stopPropagation()
@@ -195,10 +196,10 @@ function AudioEmbed({ source }: { source: string }) {
   const src = remote ? source : blobUrl
   return (
     <span className="md-audio">
-      {src ? <audio src={src} controls preload="none" /> : <span className="md-file-name">音频加载中…</span>}
+      {src ? <audio src={src} controls preload="none" /> : <span className="md-file-name">{t('音频加载中…')}</span>}
       <span className="md-video-bar">
         <span className="md-file-name" title={source}>{mediaName(source)}</span>
-        <SaveButton source={source} label="保存音频" />
+        <SaveButton source={source} label={t('保存音频')} />
         {!remote ? <OpenFolderButton source={source} /> : null}
       </span>
     </span>
@@ -249,10 +250,10 @@ function VideoEmbed({ source }: { source: string }) {
   const src = remote ? source : blobUrl
   return (
     <span className="md-video">
-      {src ? <video src={src} controls preload="metadata" /> : <span className="md-file-name">视频加载中…</span>}
+      {src ? <video src={src} controls preload="metadata" /> : <span className="md-file-name">{t('视频加载中…')}</span>}
       <span className="md-video-bar">
         <span className="md-file-name" title={source}>{mediaName(source)}</span>
-        <SaveButton source={source} label="保存视频" />
+        <SaveButton source={source} label={t('保存视频')} />
         {!remote ? <OpenFolderButton source={source} /> : null}
       </span>
     </span>
@@ -345,7 +346,7 @@ function MdImage(props: {
         src={eff}
         alt={alt ?? ''}
         className="md-img"
-        title="点击放大"
+        title={t('点击放大')}
         onClick={() => onPreview(eff)}
         onError={() => setBroken(true)}
       />
@@ -355,7 +356,7 @@ function MdImage(props: {
           <button
             type="button"
             className="md-btn"
-            title="在内置浏览器中打开"
+            title={t('在内置浏览器中打开')}
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -597,7 +598,7 @@ export function Markdown({ text }: { text: string }) {
         {normalizeMedia(text)}
       </ReactMarkdown>
       {preview ? (
-        <div className="md-lightbox" onClick={() => setPreview(null)} title="点击任意处或按 Esc 关闭">
+        <div className="md-lightbox" onClick={() => setPreview(null)} title={t('点击任意处或按 Esc 关闭')}>
           <img src={preview} alt="" />
         </div>
       ) : null}

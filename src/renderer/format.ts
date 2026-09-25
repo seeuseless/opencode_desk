@@ -5,16 +5,21 @@
  * 积分是纯计数，只加千分位、不做单位换算——「1.2 万积分」不如「12,345 积分」好核对。
  */
 
+import { getLang } from './i18n'
+
 /** 去掉小数末尾多余的 0：1.50 → 1.5，2.00 → 2 */
 function trim(n: number): string {
   return n.toFixed(2).replace(/\.?0+$/, '')
 }
 
-/** token 数自动换单位：满万用「万」，满亿用「亿」，否则原样 */
+/** token 数自动换单位：满万用「万」，满亿用「亿」，否则原样；英文走 K/M/B 缩写 */
 export function fmtTokens(n?: number | null): string {
   const v = Number(n || 0)
-  if (v >= 100_000_000) return `${trim(v / 100_000_000)} 亿`
-  if (v >= 10_000) return `${trim(v / 10_000)} 万`
+  if (getLang() === 'en') {
+    return new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(v)
+  }
+  if (v >= 100_000_000) return `${trim(v / 100_000_000)} ${getLang() === 'tw' ? '億' : '亿'}`
+  if (v >= 10_000) return `${trim(v / 10_000)} ${getLang() === 'tw' ? '萬' : '万'}`
   return String(v)
 }
 

@@ -9,6 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
+import { getLang, setLang, t, type Lang } from './i18n'
 import { load, save } from './store'
 import { CUSTOM_ID, THEMES } from './theme'
 import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
@@ -51,6 +52,14 @@ function isDarkColor(hex: string): boolean {
 }
 
 export default function App() {
+  const [lang, setLangState] = useState<Lang>(getLang)
+  // 切语言必须先把 i18n 模块变量拨过去再触发重渲染：t() 在渲染期读模块变量，
+  // 若只 setState（模块变量在 effect 里才更新），重渲染那一帧整树仍按旧语言渲染，
+  // 界面就"点了没反应、再点一下才变"。
+  function changeLang(l: Lang) {
+    setLang(l)
+    setLangState(l)
+  }
   const [theme, setTheme] = useState<string>(loadTheme)
   const [custom, setCustom] = useState<CustomColors>(() => load('qingniao.themeColors', DEFAULT_CUSTOM))
   const [codeStyle, setCodeStyle] = useState<CodeStyle>(() => {
@@ -164,6 +173,11 @@ export default function App() {
       for (const k of DERIVED_KEYS) el.style.removeProperty(k)
     }
   }, [theme, custom])
+
+  // 语言：模块变量已在事件里拨过（见 changeLang），这里只同步 <html lang>
+  useEffect(() => {
+    document.documentElement.lang = lang === 'tw' ? 'zh-TW' : lang === 'en' ? 'en' : 'zh-CN'
+  }, [lang])
 
   useEffect(() => save('qingniao.themeColors', custom), [custom])
 
@@ -287,7 +301,7 @@ export default function App() {
         path: info.workspace,
         // 名字固定「任务」：它是内置的落脚点，不是用户选的某个文件夹，
         // 叫「默认」反而像"某个默认文件夹"，叫「任务」才点明「这里是放任务的」
-        name: '任务',
+        name: t('任务'),
         added: 0,
         builtin: true
       }
@@ -549,7 +563,7 @@ export default function App() {
       path = await window.qingniao.pickDir()
     } catch (e) {
       // 对话框本身没弹出来（极少见）：必须说一声，否则点完毫无动静像卡死
-      setNotice(`没能打开选择文件夹对话框：${e instanceof Error ? e.message : String(e)}`)
+      setNotice(t('没能打开选择文件夹对话框：{msg}', { msg: e instanceof Error ? e.message : String(e) }))
       return
     }
     if (!path) return // 用户取消
@@ -677,7 +691,7 @@ export default function App() {
       // 用户只能对着转圈的「保存并重启内核…」干等
       const msg = e instanceof Error ? e.message : String(e)
       setSettings(await window.qingniao.getSettings())
-      setNotice(`设置已写入，但内核没能重启成功：${msg}。可以重新保存一次，或重启本应用。`)
+      setNotice(t('设置已写入，但内核没能重启成功：{msg}。可以重新保存一次，或重启本应用。', { msg }))
       throw e
     } finally {
       setSaving(false)
@@ -789,7 +803,7 @@ export default function App() {
     setAccessAsk(null)
     if (!ask) return
     setSettings(await window.qingniao.setAccess(ask.level))
-    setNotice('已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。')
+    setNotice(t('已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。'))
   }
 
   // 展示顺序：自动模式按最近有对话活动的文件夹排最前，固定模式按用户拖拽的顺序；
@@ -860,7 +874,7 @@ export default function App() {
         />
         <div
           className="side-resizer"
-          title="拖拽调整侧栏宽度"
+          title={t('拖拽调整侧栏宽度')}
           onPointerDown={(e) => startColumnResize(e, 'sidebar')}
         />
         {/* 右列 = 标题栏 + 内容区：侧栏独占左侧全高，标题栏不再横贯整窗 */}
@@ -894,7 +908,7 @@ export default function App() {
           {codeWorkspaceVisible && (
             <div
               className="work-resizer"
-              title="拖拽调整代码与对话宽度"
+              title={t('拖拽调整代码与对话宽度')}
               onPointerDown={(e) => startColumnResize(e, 'chat')}
             />
           )}
@@ -959,7 +973,7 @@ export default function App() {
             if (e.target === e.currentTarget) setView('chat')
           }}
         >
-          <div className="schedules-layer" role="dialog" aria-modal="true" aria-label="计划任务">
+          <div className="schedules-layer" role="dialog" aria-modal="true" aria-label={t('计划任务')}>
             <SchedulesView
               refreshSignal={schedTick}
               onTaskSessionCreated={showScheduleSessionInSidebar}
@@ -977,10 +991,10 @@ export default function App() {
             if (e.target === e.currentTarget) toChat()
           }}
         >
-          <div className="settings-layer" role="dialog" aria-modal="true" aria-label="设置">
+          <div className="settings-layer" role="dialog" aria-modal="true" aria-label={t('设置')}>
             <header className="settings-head">
-              <h3>设置</h3>
-              <button className="icon-btn" onClick={toChat} title="关闭">
+              <h3>{t('设置')}</h3>
+              <button className="icon-btn" onClick={toChat} title={t('关闭')}>
                 <X size={17} />
               </button>
             </header>
@@ -997,8 +1011,10 @@ export default function App() {
               onCodeStyle={setCodeStyle}
                normalChatWidth={normalChatWidth}
                onNormalChatWidth={setNormalChatWidth}
-               projectSortMode={projectSortMode}
-               onProjectSortMode={changeProjectSortMode}
+              projectSortMode={projectSortMode}
+              onProjectSortMode={changeProjectSortMode}
+              lang={lang}
+              onLang={changeLang}
                projectPath={activeProject?.path ?? null}
               projectName={activeProject?.name ?? null}
               model={model}
@@ -1017,11 +1033,11 @@ export default function App() {
       )}
 
       {notice && (
-        <Modal title="操作没成功" onClose={() => setNotice('')}>
+        <Modal title={t('操作没成功')} onClose={() => setNotice('')}>
           <p className="confirm-text">{notice}</p>
           <div className="actions">
             <button className="primary" onClick={() => setNotice('')}>
-              知道了
+              {t('知道了')}
             </button>
           </div>
         </Modal>
@@ -1029,25 +1045,24 @@ export default function App() {
 
       {/* 切「完全控制」前的确认：把后果说清（不再询问、影响所有文件夹），让用户明确点一下 */}
       {accessAsk && (
-        <Modal title="切换为完全控制？" onClose={() => setAccessAsk(null)}>
+        <Modal title={t('切换为完全控制？')} onClose={() => setAccessAsk(null)}>
           <p className="confirm-text">
-            访问权限将改为<strong>完全控制</strong>：
-            AI 之后读写文件、执行命令都<strong>不再先问你</strong>，直接动手。
+            {t('访问权限将改为')}<strong>{t('完全控制')}</strong>{t('：AI 之后读写文件、执行命令都')}
+            <strong>{t('不再先问你')}</strong>{t('，直接动手。')}
           </p>
           <p className="confirm-text">
-            这一档也是<strong>总权限闸</strong>：识图、生图/视频、配音、语音识别这类「调用别的模型」
-            同样<strong>不再弹授权卡</strong>——你给的已经是全部权限了。
+            {t('这一档也是')}<strong>{t('总权限闸')}</strong>{t('：识图、生图/视频、配音、语音识别这类「调用别的模型」同样')}
+            <strong>{t('不再弹授权卡')}</strong>{t('——你给的已经是全部权限了。')}
           </p>
           <p className="confirm-text hint">
-            这条权限<strong>对所有文件夹生效</strong>，不是只对当前项目。如果只是想让它改一次，
-            保持「默认权限」、在弹确认时点「仅这一次」更稳妥。
+            {t('这条权限对所有文件夹生效，不是只对当前项目。如果只是想让它改一次，保持「默认权限」、在弹确认时点「仅这一次」更稳妥。')}
           </p>
           <div className="actions">
             <button className="ghost" onClick={() => setAccessAsk(null)}>
-              取消
+              {t('取消')}
             </button>
             <button className="primary danger-btn" onClick={() => void applyAccess()}>
-              确认切换
+              {t('确认切换')}
             </button>
           </div>
         </Modal>
@@ -1062,18 +1077,18 @@ function Welcome({ onAddProject, onOpenSettings }: { onAddProject: () => void; o
     <main className="main">
       <div className="welcome">
         <div className="welcome-inner">
-          <h2>先添加一个项目文件夹</h2>
+          <h2>{t('先添加一个项目文件夹')}</h2>
           <p>
-            选择要干活的目录，会话与文件操作都在该目录内进行。
+            {t('选择要干活的目录，会话与文件操作都在该目录内进行。')}
             <br />
-            还没有配置模型的话，先去设置里添一个提供商。
+            {t('还没有配置模型的话，先去设置里添一个提供商。')}
           </p>
           <div className="welcome-acts">
             <button className="primary" onClick={onAddProject}>
-              <FolderPlus size={15} /> 添加项目
+              <FolderPlus size={15} /> {t('添加项目')}
             </button>
             <button className="ghost" onClick={onOpenSettings}>
-              <Settings size={15} /> 打开设置
+              <Settings size={15} /> {t('打开设置')}
             </button>
           </div>
         </div>

@@ -1,5 +1,7 @@
 # 青鸟 QingNiao — 开源工作助手
 
+简体中文 | [English](./README-EN.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-seeuseless%2Fopencode__desk-181717?logo=github)](https://github.com/seeuseless/opencode_desk)
 [![Release](https://img.shields.io/github/v/release/seeuseless/opencode_desk?label=release&color=blue)](https://github.com/seeuseless/opencode_desk/releases/latest)

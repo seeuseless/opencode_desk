@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Folder, FolderPlus, KeyRound, Search, ShieldCheck } from 'lucide-react'
 import { fuzzyMatch, splitByRanges } from '../lib/fuzzy'
+import { t } from '../i18n'
 import type { AccessLevel, Project } from './Sidebar'
 
 interface Props {
@@ -39,7 +40,7 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
   }, [open])
 
   const cur = value ? projects.find((p) => p.id === value) : undefined
-  const display = cur ? cur.name : '选择项目'
+  const display = cur ? cur.name : t('选择项目')
   /**
    * 「任务」目录（builtin）恒居首位：与左栏同一套规则（排序放在渲染层是唯一能保证
    * 「永远在最上面」的地方）。项目数组的默认顺序是「最近活动优先」，所以这里必须显式再排一次。
@@ -74,7 +75,7 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
   return (
     <div className="menu-wrap pp" ref={wrap}>
       {/* 极窄栏时标签会被容器查询藏掉只留图标，title 兜底说明 */}
-      <button type="button" className="menu-trigger pp" title="切换项目文件夹" onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="menu-trigger pp" title={t('切换项目文件夹')} onClick={() => setOpen((v) => !v)}>
         <Folder size={14} />
         <span className="menu-label">{display}</span>
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
@@ -88,7 +89,7 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
               ref={searchRef}
               className="pp-search-input"
               value={query}
-              placeholder="搜索文件夹"
+              placeholder={t('搜索文件夹')}
               spellCheck={false}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -129,7 +130,7 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
                 </span>
               </button>
             ))}
-            {q && matched.length === 0 && <div className="pp-empty">没找到匹配的文件夹</div>}
+            {q && matched.length === 0 && <div className="pp-empty">{t('没找到匹配的文件夹')}</div>}
             <button
               type="button"
               className="pp-item pp-pick"
@@ -139,7 +140,7 @@ export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
               }}
             >
               <FolderPlus size={14} className="pp-ico" />
-              <span className="pp-name">选择文件夹</span>
+              <span className="pp-name">{t('选择文件夹')}</span>
             </button>
           </div>
         </div>
@@ -194,11 +195,11 @@ export function AccessPicker({
       <button
         type="button"
         className={'menu-trigger ap' + (full ? ' full' : '')}
-        title={full ? '访问权限：完全控制（对所有文件夹生效）' : '访问权限：默认权限（对所有文件夹生效）'}
+        title={full ? t('访问权限：完全控制（对所有文件夹生效）') : t('访问权限：默认权限（对所有文件夹生效）')}
         onClick={() => setOpen((v) => !v)}
       >
         {full ? <ShieldCheck size={14} /> : <KeyRound size={14} />}
-        <span className="menu-label">{full ? '完全控制' : '默认权限'}</span>
+        <span className="menu-label">{full ? t('完全控制') : t('默认权限')}</span>
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
       </button>
       {open && (
@@ -210,15 +211,15 @@ export function AccessPicker({
           >
             <KeyRound size={14} />
             <div className="ap-t">
-              <b>默认权限</b>
-              <i>改动文件、执行命令前先弹窗问你</i>
+              <b>{t('默认权限')}</b>
+              <i>{t('改动文件、执行命令前先弹窗问你')}</i>
             </div>
           </button>
           <button type="button" className={'ap-b' + (full ? ' on' : '')} onClick={() => pick('full')}>
             <ShieldCheck size={14} />
             <div className="ap-t">
-              <b>完全控制</b>
-              <i>不再询问，直接读写文件、跑命令</i>
+              <b>{t('完全控制')}</b>
+              <i>{t('不再询问，直接读写文件、跑命令')}</i>
             </div>
           </button>
         </div>

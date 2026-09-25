@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { loadLanguage, type LanguageName } from '@uiw/codemirror-extensions-langs'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags as t } from '@lezer/highlight'
+import { tags as tg } from '@lezer/highlight'
 import { FileCode2, X } from 'lucide-react'
+import { t } from '../i18n'
 import type { Project } from './Sidebar'
 
 export interface CodeControls {
@@ -31,17 +32,17 @@ interface OpenFile {
 }
 
 const editorHighlight = syntaxHighlighting(HighlightStyle.define([
-  { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--code-comment)', fontStyle: 'italic' },
-  { tag: [t.keyword, t.moduleKeyword, t.controlKeyword], color: 'var(--code-keyword)' },
-  { tag: [t.string, t.special(t.string)], color: 'var(--code-string)' },
-  { tag: [t.number, t.bool, t.null, t.atom], color: 'var(--code-number)' },
-  { tag: [t.function(t.variableName), t.function(t.propertyName)], color: 'var(--code-function)' },
-  { tag: [t.typeName, t.className, t.namespace], color: 'var(--code-type)' },
-  { tag: [t.variableName, t.propertyName], color: 'var(--code-variable)' },
-  { tag: [t.operator, t.punctuation, t.separator], color: 'var(--code-punctuation)' },
-  { tag: [t.tagName], color: 'var(--code-keyword)' },
-  { tag: [t.attributeName], color: 'var(--code-function)' },
-  { tag: [t.invalid], color: 'var(--code-deleted)' }
+  { tag: [tg.comment, tg.lineComment, tg.blockComment], color: 'var(--code-comment)', fontStyle: 'italic' },
+  { tag: [tg.keyword, tg.moduleKeyword, tg.controlKeyword], color: 'var(--code-keyword)' },
+  { tag: [tg.string, tg.special(tg.string)], color: 'var(--code-string)' },
+  { tag: [tg.number, tg.bool, tg.null, tg.atom], color: 'var(--code-number)' },
+  { tag: [tg.function(tg.variableName), tg.function(tg.propertyName)], color: 'var(--code-function)' },
+  { tag: [tg.typeName, tg.className, tg.namespace], color: 'var(--code-type)' },
+  { tag: [tg.variableName, tg.propertyName], color: 'var(--code-variable)' },
+  { tag: [tg.operator, tg.punctuation, tg.separator], color: 'var(--code-punctuation)' },
+  { tag: [tg.tagName], color: 'var(--code-keyword)' },
+  { tag: [tg.attributeName], color: 'var(--code-function)' },
+  { tag: [tg.invalid], color: 'var(--code-deleted)' }
 ]))
 
 export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onStatusChange, onControlsChange, onOpenFilesChange }: Props) {
@@ -55,7 +56,7 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
   const dirty = !!file && file.content !== file.savedContent
 
   useEffect(() => {
-    onStatusChange?.(file ? { path: file.path, status: dirty ? '未保存' : '已保存' } : null)
+    onStatusChange?.(file ? { path: file.path, status: dirty ? t('未保存') : t('已保存') } : null)
     return () => onStatusChange?.(null)
   }, [file?.path, dirty, onStatusChange])
 
@@ -206,7 +207,7 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
   return (
     <section className="code-pane">
       {tabs.length > 0 && (
-        <nav className="code-tabs" aria-label="已打开文件">
+        <nav className="code-tabs" aria-label={t('已打开文件')}>
           {tabs.map((item) => (
             <button
               key={item.path}
@@ -221,7 +222,7 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
                 className="code-tab-close"
                 role="button"
                 tabIndex={0}
-                title="关闭文件"
+                title={t('关闭文件')}
                 onClick={(e) => {
                   e.stopPropagation()
                   closeTab(item.path)
@@ -244,11 +245,11 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
       {!filePath ? (
         <div className="code-empty">
           <FileCode2 size={28} />
-          <strong>展开项目后点一个代码文件</strong>
-          <span>文件会在这里打开，可直接修改并保存</span>
+          <strong>{t('展开项目后点一个代码文件')}</strong>
+          <span>{t('文件会在这里打开，可直接修改并保存')}</span>
         </div>
       ) : loading ? (
-        <div className="code-empty">正在读取文件…</div>
+        <div className="code-empty">{t('正在读取文件…')}</div>
       ) : file ? (
         <CodeMirror
           key={file.path}
@@ -274,7 +275,7 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
           }}
         />
       ) : (
-        <div className="code-empty code-error">{error || '文件读取失败'}</div>
+        <div className="code-empty code-error">{error || t('文件读取失败')}</div>
       )}
       {error && file && <div className="code-status error">{error}</div>}
     </section>

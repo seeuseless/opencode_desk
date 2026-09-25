@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Brain, Check, ChevronDown } from 'lucide-react'
+import { t } from '../i18n'
 import type { ThinkingKind } from '../oc'
 
 /**
@@ -51,30 +52,30 @@ export function ThinkingPicker({ value, onChange, kind }: { value: string; onCha
         className="menu-trigger"
         title={
           disabled
-            ? '该模型在配置里设为「不支持思考」，故思考档位不可用'
-            : `思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）`
+            ? t('该模型在配置里设为「不支持思考」，故思考档位不可用')
+            : t('思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）')
         }
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
       >
         <Brain size={14} />
-        <span className="menu-label">{cur.label}</span>
+        <span className="menu-label">{t(cur.label)}</span>
         <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
       </button>
       {open && !disabled && (
         <div className="menu-panel tp up">
-          {options.map((t) => (
+          {options.map((op) => (
             <button
-              key={t.key}
+              key={op.key}
               type="button"
-              className={'menu-item' + (t.key === cur.key ? ' on' : '')}
+              className={'menu-item' + (op.key === cur.key ? ' on' : '')}
               onClick={() => {
-                onChange(t.key)
+                onChange(op.key)
                 setOpen(false)
               }}
             >
-              <span className="mi-check">{t.key === cur.key && <Check size={13} />}</span>
-              <span>{t.label}</span>
+              <span className="mi-check">{op.key === cur.key && <Check size={13} />}</span>
+              <span>{t(op.label)}</span>
             </button>
           ))}
         </div>

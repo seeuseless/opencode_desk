@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState, type ReactNode, type RefObject } from 'react'
 import { X } from 'lucide-react'
+import { t } from '../i18n'
 
 /**
  * 应用内模态层（不用原生 alert/confirm）。
@@ -56,7 +57,7 @@ export function Modal({
       <div className={'modal' + (wide ? ' wide' : narrow ? ' narrow' : '')}>
         <header className="mhead">
           <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} title="关闭">
+          <button className="icon-btn" onClick={onClose} title={t('关闭')}>
             <X size={16} />
           </button>
         </header>

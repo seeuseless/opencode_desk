@@ -1306,6 +1306,8 @@ input, textarea { font: inherit; }
 .set-menu {
   width: 200px; flex-shrink: 0; padding: 26px 12px;
   border-right: 1px solid var(--line); overflow-y: auto;
+  /* 项与项留出缝隙：hover 高亮块与相邻选中块连成一片时视觉太挤 */
+  display: flex; flex-direction: column; gap: 3px;
 }
 .set-item {
   display: flex; align-items: center; gap: 9px; width: 100%;
@@ -1751,9 +1753,10 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 
 /* ---------- 浏览面板：AI 浏览器操作（headless playwright）时显示在对话左侧 ---------- */
 /* 对话固定在最右；row-reverse 让 DOM 中靠后的浏览器视觉上落到左边 */
-.chat-row { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: row-reverse; }
-.browser-panel { position: relative; width: 40%; min-width: 240px; max-width: 62%; display: flex; flex-direction: column; border-right: 1px solid var(--line); background: var(--content); }
-.browser-panel.max { width: auto; min-width: 0; max-width: none; flex: 1; }
+/* 聊天在左、内置浏览器面板在最右：面板渲染在 main 之后（非代码模式浏览器开着时才挂） */
+.chat-row { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: row; }
+.browser-panel { position: relative; width: 40%; min-width: 240px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--content); }
+.browser-panel.max { width: auto; min-width: 0; max-width: none; flex: 1; border-left: none; }
 /* 用户没点开面板：只藏 UI，webview 继续挂着供 AI 操作（不能卸载，卸载即销毁 webContents） */
 .browser-panel.hidden { display: none; }
 /* 浮动卡收起时对话整体隐藏（组件保持挂载） */

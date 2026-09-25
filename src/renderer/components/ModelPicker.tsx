@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, LoaderCircle, Sparkles } from 'lucide-react'
+import { t } from '../i18n'
 
 export interface ModelGroupModel {
   mid: string
@@ -87,7 +88,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
         ? codeMode
           ? shortModelName(value)
           : value
-        : '选择模型'
+        : t('选择模型')
   const active = groups.find((g) => g.id === expanded)
 
   /** 代码模式右侧聊天变窄时，模型菜单也不能从窗口边缘溢出去。 */
@@ -145,7 +146,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                   if (willExpand) onExpandGroup?.(g.id)
                 }}
               >
-                <span className="mp-name">{g.label}</span>
+                <span className="mp-name">{t(g.label)}</span>
                 {refreshingGroup === g.id ? (
                   <LoaderCircle size={13} className="mp-arrow spin" />
                 ) : (
@@ -161,7 +162,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                 onOpenSettings?.()
               }}
             >
-              <span className="mp-name">配置模型</span>
+              <span className="mp-name">{t('配置模型')}</span>
             </button>
           </div>
           {active && active.models.length > 0 && (
@@ -195,8 +196,8 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
  * 只在平台模型上出现（第三方 provider 的模型压根没有这些字段）。
  */
 function Tag({ m }: { m: ModelGroupModel }) {
-  if (isFree(m)) return <span className="mp-tag free">限免</span>
-  if (m.discount) return <span className="mp-tag off">折扣</span>
+  if (isFree(m)) return <span className="mp-tag free">{t('限免')}</span>
+  if (m.discount) return <span className="mp-tag off">{t('折扣')}</span>
 
   return null
 }

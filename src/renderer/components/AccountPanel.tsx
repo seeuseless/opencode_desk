@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronLeft, ChevronRight, CircleUser, Coins, LoaderCircle, LogIn, LogOut, RefreshCw, Wallet } from 'lucide-react'
+import { t } from '../i18n'
 import { fmtNumber, fmtTokens } from '../format'
 import { Modal } from './Modal'
 import type { PlatformAccount, UsageLog, UsagePage, UsageRecord } from '../oc'
@@ -78,39 +79,38 @@ export function AccountPanel(p: Props) {
     return (
       <section>
         <h3>
-          <CircleUser size={15} /> 账号
+          <CircleUser size={15} /> {t('账号')}
         </h3>
         <p className="sec-tip">
-          登录平台账号后即可使用内置模型（无需自备 API Key），用量与积分都记在这个账号下。
-          登录在系统浏览器里完成，青鸟只会拿到一份可随时吊销的授权，不会保存密码。
+          {t('登录平台账号后即可使用内置模型（无需自备 API Key），用量与积分都记在这个账号下。登录在系统浏览器里完成，青鸟只会拿到一份可随时吊销的授权，不会保存密码。')}
         </p>
         <div className="acct-login">
           <button className="primary" disabled={p.platformBusy} onClick={p.onLogin}>
-            {p.platformBusy ? <LoaderCircle size={14} className="spin" /> : <LogIn size={14} />} 登录平台账号
+            {p.platformBusy ? <LoaderCircle size={14} className="spin" /> : <LogIn size={14} />} {t('登录平台账号')}
           </button>
         </div>
 
         {!manual ? (
           <button className="ghost acct-more" onClick={() => setManual(true)}>
-            登录没反应？换平台地址或粘贴授权码
+            {t('登录没反应？换平台地址或粘贴授权码')}
           </button>
         ) : (
           <div className="acct-manual">
             <label>
-              平台地址
-              <span className="lab-tip">填平台部署的根地址，如 http://127.0.0.1:9000</span>
+              {t('平台地址')}
+              <span className="lab-tip">{t('填平台部署的根地址，如 http://127.0.0.1:9000')}</span>
               <input value={url} spellCheck={false} onChange={(e) => setUrl(e.target.value)} />
             </label>
             <button className="ghost" disabled={p.platformBusy || !url.trim()} onClick={() => p.onSetBaseUrl(url.trim())}>
-              保存地址
+              {t('保存地址')}
             </button>
             <label>
-              授权码
-              <span className="lab-tip">浏览器打开登录页后会显示一串授权码，10 分钟内有效、用一次作废</span>
+              {t('授权码')}
+              <span className="lab-tip">{t('浏览器打开登录页后会显示一串授权码，10 分钟内有效、用一次作废')}</span>
               <input className="mono" value={code} spellCheck={false} onChange={(e) => setCode(e.target.value)} />
             </label>
             <button className="primary" disabled={p.platformBusy || !code.trim()} onClick={() => p.onSubmitCode(code.trim())}>
-              用授权码登录
+              {t('用授权码登录')}
             </button>
           </div>
         )}
@@ -121,10 +121,10 @@ export function AccountPanel(p: Props) {
   return (
     <section>
       <h3>
-        <CircleUser size={15} /> 账号
+        <CircleUser size={15} /> {t('账号')}
         <span className="spacer" />
         <button className="ghost" disabled={busy} onClick={() => void load()}>
-          <RefreshCw size={13} className={busy ? 'spin' : undefined} /> 刷新
+          <RefreshCw size={13} className={busy ? 'spin' : undefined} /> {t('刷新')}
         </button>
       </h3>
 
@@ -132,34 +132,34 @@ export function AccountPanel(p: Props) {
         <div className="acct-lead">
           <span className="acct-avatar">{(acct?.user.name || p.baseUrl).slice(0, 1).toUpperCase()}</span>
           <div className="acct-id">
-            <div className="acct-name">{acct?.user.name ?? '已登录'}</div>
+            <div className="acct-name">{acct?.user.name ?? t('已登录')}</div>
             <div className="acct-mail">{acct?.user.email ?? ''}</div>
           </div>
           <div className="acct-points">
             <div className="acct-points-k">
-              <Coins size={13} /> 积分
+              <Coins size={13} /> {t('积分')}
             </div>
             {/* 管理员不参与积分计费：显示「不限」而不是一个会让人以为余额不足的 0 */}
-            <div className="acct-points-v">{acct?.exempt ? '不限' : fmtNumber(acct?.points)}</div>
+            <div className="acct-points-v">{acct?.exempt ? t('不限') : fmtNumber(acct?.points)}</div>
           </div>
         </div>
         <div className="acct-meta">
           {/* 只显示「这台机器叫什么」：平台地址与授权到期属于运维细节，
               授权本身是长期有效的，摆在用户面前只会让人以为要过期续费 */}
-          {acct?.device && <span>本机设备 {acct.device}</span>}
+          {acct?.device && <span>{t('本机设备')} {acct.device}</span>}
           <span className="spacer" />
           <button className="ghost danger" onClick={() => setConfirmOut(true)}>
-            <LogOut size={13} /> 退出登录
+            <LogOut size={13} /> {t('退出登录')}
           </button>
         </div>
       </div>
 
       <div className="acct-tabs">
         <button className={'seg-btn' + (tab === 'logs' ? ' on' : '')} onClick={() => switchTab('logs')}>
-          <Wallet size={13} /> 积分记录
+          <Wallet size={13} /> {t('积分记录')}
         </button>
         <button className={'seg-btn' + (tab === 'records' ? ' on' : '')} onClick={() => switchTab('records')}>
-          每次消耗
+          {t('每次消耗')}
         </button>
       </div>
 
@@ -167,17 +167,17 @@ export function AccountPanel(p: Props) {
         <table className="utable">
           <thead>
             <tr>
-              <th>时间</th>
-              <th>类型</th>
-              <th className="num">变动</th>
-              <th className="num">余额</th>
-              <th>说明</th>
+              <th>{t('时间')}</th>
+              <th>{t('类型')}</th>
+              <th className="num">{t('变动')}</th>
+              <th className="num">{t('余额')}</th>
+              <th>{t('说明')}</th>
             </tr>
           </thead>
           <tbody>
             {logs.items.length === 0 && (
               <tr>
-                <td colSpan={5} className="empty">还没有积分变动</td>
+                <td colSpan={5} className="empty">{t('还没有积分变动')}</td>
               </tr>
             )}
             {logs.items.map((l) => (
@@ -200,17 +200,17 @@ export function AccountPanel(p: Props) {
         <table className="utable">
           <thead>
             <tr>
-              <th>时间</th>
-              <th>模型</th>
-              <th className="num">输入 / 输出</th>
-              <th className="num">合计</th>
-              <th className="num">扣积分</th>
+              <th>{t('时间')}</th>
+              <th>{t('模型')}</th>
+              <th className="num">{t('输入 / 输出')}</th>
+              <th className="num">{t('合计')}</th>
+              <th className="num">{t('扣积分')}</th>
             </tr>
           </thead>
           <tbody>
             {records.items.length === 0 && (
               <tr>
-                <td colSpan={5} className="empty">还没有消耗记录</td>
+                <td colSpan={5} className="empty">{t('还没有消耗记录')}</td>
               </tr>
             )}
             {records.items.map((r) => (
@@ -218,7 +218,7 @@ export function AccountPanel(p: Props) {
                 <td className="dim">{r.created_at}</td>
                 <td>
                   <div className="mono-cell">{r.model}</div>
-                  <div className="dim">{r.ratio} 倍</div>
+                  <div className="dim">{t('{n} 倍', { n: r.ratio })}</div>
                 </td>
                 <td className="num dim">
                   {fmtTokens(r.prompt_tokens)} / {fmtTokens(r.completion_tokens)}
@@ -240,14 +240,13 @@ export function AccountPanel(p: Props) {
       />
 
       {confirmOut && (
-        <Modal title="退出登录" onClose={() => setConfirmOut(false)}>
+        <Modal title={t('退出登录')} onClose={() => setConfirmOut(false)}>
           <p className="confirm-text">
-            退出后会清掉本机的授权与设备身份，内置模型随之不可用（右栏手机端连接也会断开）。
-            下次登录需要重新授权。
+            {t('退出后会清掉本机的授权与设备身份，内置模型随之不可用（右栏手机端连接也会断开）。下次登录需要重新授权。')}
           </p>
           <div className="actions">
             <button className="ghost" onClick={() => setConfirmOut(false)}>
-              取消
+              {t('取消')}
             </button>
             <button
               className="primary danger-btn"
@@ -257,7 +256,7 @@ export function AccountPanel(p: Props) {
                 p.onLogout()
               }}
             >
-              {p.platformBusy ? '退出中…' : '退出登录'}
+              {p.platformBusy ? t('退出中…') : t('退出登录')}
             </button>
           </div>
         </Modal>
@@ -279,14 +278,14 @@ function Pager(p: { page: number; pages: number; total: number; busy: boolean; o
   return (
     <div className="upager">
       <span className="upager-info">
-        共 {p.total} 条 · 第 {p.page} / {Math.max(1, p.pages)} 页
+        {t('共 {n} 条 · 第 {a} / {b} 页', { n: p.total, a: p.page, b: Math.max(1, p.pages) })}
       </span>
       <span className="spacer" />
       <button className="ghost" disabled={p.busy || p.page <= 1} onClick={() => p.onGo(p.page - 1)}>
-        <ChevronLeft size={13} /> 上一页
+        <ChevronLeft size={13} /> {t('上一页')}
       </button>
       <button className="ghost" disabled={p.busy || p.page >= p.pages} onClick={() => p.onGo(p.page + 1)}>
-        下一页 <ChevronRight size={13} />
+        {t('下一页')} <ChevronRight size={13} />
       </button>
     </div>
   )

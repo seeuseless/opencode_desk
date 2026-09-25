@@ -21,6 +21,7 @@ import {
 import { Modal } from './Modal'
 import { useDragSort } from './useDragSort'
 import { Switch } from './Switch'
+import { t } from '../i18n'
 import { SCHEDULE_PREFIX, fmtYmd } from '../oc'
 import type { ProjectSortMode } from '../App'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
@@ -189,9 +190,9 @@ export function Sidebar(p: Props) {
               {isOpen ? <FolderOpen size={14} className="code-file-ico" /> : <Folder size={14} className="code-file-ico" />}
               <span className="sess-title">{node.name}</span>
             </div>
-            {isOpen && treeLoading[key] && <div className="code-list-empty" style={rowStyle}>读取中…</div>}
+            {isOpen && treeLoading[key] && <div className="code-list-empty" style={rowStyle}>{t('读取中…')}</div>}
             {isOpen && treeError[key] && <div className="code-list-error" style={rowStyle}>{treeError[key]}</div>}
-            {isOpen && treeMap[key]?.length === 0 && <div className="code-list-empty" style={rowStyle}>空目录</div>}
+            {isOpen && treeMap[key]?.length === 0 && <div className="code-list-empty" style={rowStyle}>{t('空目录')}</div>}
             {isOpen && treeMap[key] && renderTree(proj, treeMap[key], depth + 1)}
           </div>
         )
@@ -228,24 +229,24 @@ export function Sidebar(p: Props) {
   /** 绿点只认「真有手机连着」，不认开关：开关开着但没人扫码时不该亮 */
   const mobileLinked = !!p.mobile?.mobileConnected
   const mobileTitle = !p.mobile?.loggedIn
-    ? '移动端'
+    ? t('移动端')
     : mobileLinked
-      ? '移动端：手机已连接'
+      ? t('移动端：手机已连接')
       : mobileOn
-        ? '移动端：已放行，等待手机扫码连接'
-        : '移动端：未放行'
+        ? t('移动端：已放行，等待手机扫码连接')
+        : t('移动端：未放行')
 
   return (
     <>
       <aside className="side" style={{ width: p.width, minWidth: p.width }}>
         {/* 顶部工作区栏：名称固定，右侧两个动作分别是打开文件夹和添加任务。 */}
         <div className="side-workspace-head">
-          <span>工作区</span>
+          <span>{t('工作区')}</span>
           <div className="workspace-actions">
-            <button className="icon-btn" title="打开文件夹" onClick={p.onAddProject}>
+            <button className="icon-btn" title={t('打开文件夹')} onClick={p.onAddProject}>
               <FolderOpen size={15} />
             </button>
-            <button className="icon-btn" title="在「任务」目录里新建一个任务" onClick={p.onNewTask}>
+            <button className="icon-btn" title={t('在「任务」目录里新建一个任务')} onClick={p.onNewTask}>
               <MessageSquarePlus size={15} />
             </button>
           </div>
@@ -254,10 +255,10 @@ export function Sidebar(p: Props) {
           {p.projects.length === 0 && (
             <div className="proj-empty">
               <FolderPlus size={22} />
-              <span>还没有项目</span>
+              <span>{t('还没有项目')}</span>
             {!p.codeMode && (
               <button className="ghost pick-dir" onClick={p.onAddProject}>
-                选择文件夹
+                {t('选择文件夹')}
               </button>
             )}
             </div>
@@ -302,7 +303,7 @@ export function Sidebar(p: Props) {
                   <span className="proj-actions">
                     <button
                       className="icon-btn"
-                      title="添加任务"
+                      title={t('添加任务')}
                       onClick={(e) => {
                         e.stopPropagation()
                         p.onNewSession(proj.id)
@@ -314,11 +315,11 @@ export function Sidebar(p: Props) {
                 </div>
                 {isOpen && p.codeMode && !isBuiltinProj(proj) ? (
                   <>
-                    {treeLoading[treeKey(proj.path, '')] && <div className="code-list-empty">正在读取目录…</div>}
+                    {treeLoading[treeKey(proj.path, '')] && <div className="code-list-empty">{t('正在读取目录…')}</div>}
                     {treeError[treeKey(proj.path, '')] && (
                       <div className="code-list-error">{treeError[treeKey(proj.path, '')]}</div>
                     )}
-                    {treeMap[treeKey(proj.path, '')]?.length === 0 && <div className="code-list-empty">没有代码文件</div>}
+                    {treeMap[treeKey(proj.path, '')]?.length === 0 && <div className="code-list-empty">{t('没有代码文件')}</div>}
                     {renderTree(proj, treeMap[treeKey(proj.path, '')] ?? [], 0)}
                   </>
                 ) : isOpen && (
@@ -336,13 +337,13 @@ export function Sidebar(p: Props) {
                           <span className="sess-date">{fmtYmd(s.time.created)}</span>
                         )}
                         {!!p.busyIds[s.id] && (
-                          <span className="sess-busy" title="处理中">
+                          <span className="sess-busy" title={t('处理中')}>
                             <LoaderCircle size={13} className="spin" />
                           </span>
                         )}
                         <button
                           className="icon-btn sess-del"
-                          title="删除会话"
+                          title={t('删除会话')}
                           onClick={(e) => {
                             e.stopPropagation()
                             setConfirmDelSess({ proj, sess: s })
@@ -368,12 +369,12 @@ export function Sidebar(p: Props) {
                         {(shownCount[proj.id] ?? COLLAPSE_AT) < list.length ? (
                           <>
                             <ChevronRight size={13} />
-                            显示更多会话
+                            {t('显示更多会话')}
                           </>
                         ) : (
                           <>
                             <ChevronDown size={13} />
-                            收起
+                            {t('收起')}
                           </>
                         )}
                       </div>
@@ -391,41 +392,41 @@ export function Sidebar(p: Props) {
             <button
               type="button"
               className="foot-user on"
-              title={`${p.platform.user?.name ?? '已登录'}${p.platform.user?.email ? ' · ' + p.platform.user.email : ''}\n点击查看账号、积分与用量`}
+              title={`${p.platform.user?.name ?? t('已登录')}${p.platform.user?.email ? ' · ' + p.platform.user.email : ''}\n${t('点击查看账号、积分与用量')}`}
               onClick={p.onOpenAccount}
             >
               <CircleUser size={15} />
-              <span className="fu-name">{p.platform.user?.name || '已登录'}</span>
+              <span className="fu-name">{p.platform.user?.name || t('已登录')}</span>
             </button>
           ) : (
             <button
               type="button"
               className="foot-user login"
-              title={p.platform?.error ? '上次登录没成功：' + p.platform.error : '登录平台账号后即可使用内置模型'}
+              title={p.platform?.error ? t('上次登录没成功：') + p.platform.error : t('登录平台账号后即可使用内置模型')}
               disabled={p.platformBusy}
               onClick={p.onLogin}
             >
               {p.platformBusy ? <LoaderCircle size={15} className="spin" /> : <LogIn size={15} />}
-              <span className="fu-name">登录</span>
+              <span className="fu-name">{t('登录')}</span>
             </button>
           ))}
           <div
             className={'foot-btn' + (p.codeMode ? ' on' : '')}
-            title={p.codeMode ? '关闭代码模式' : '开启代码模式'}
+            title={p.codeMode ? t('关闭代码模式') : t('开启代码模式')}
             onClick={p.onToggleCodeMode}
           >
             <Code2 size={16} />
           </div>
           <div
             className={'foot-btn' + (p.view === 'schedules' ? ' on' : '')}
-            title="计划任务"
+            title={t('计划任务')}
             onClick={p.onOpenSchedules}
           >
             <Timer size={16} />
           </div>
           <div
             className={'foot-btn' + (p.view === 'settings' ? ' on' : '')}
-            title="设置"
+            title={t('设置')}
             onClick={p.onOpenSettings}
           >
             <Settings size={16} />
@@ -438,16 +439,16 @@ export function Sidebar(p: Props) {
             <div className={'mobwrap' + (mobileOn ? ' on' : '')}>
               <div className={'foot-btn mobtrig' + (mobileOn ? ' on' : '')} title={mobileTitle}>
                 <Smartphone size={16} />
-                {mobileLinked && <span className="mob-dot" title="手机已连接" />}
+                {mobileLinked && <span className="mob-dot" title={t('手机已连接')} />}
               </div>
               <div className="mobpop">
                 <div className="mobpop-inner">
                   <div className="mp-head">
-                    <span className="mp-title">移动端连接</span>
+                    <span className="mp-title">{t('移动端连接')}</span>
                     {/* 换码按钮放标题行：二维码下面留白给码本身 */}
                     <button
                       className="mp-rot"
-                      title="换一张二维码（旧码立即作废）"
+                      title={t('换一张二维码（旧码立即作废）')}
                       disabled={!p.mobile?.url || p.mobileBusy}
                       onClick={p.onMobileRotate}
                     >
@@ -463,7 +464,7 @@ export function Sidebar(p: Props) {
                   {p.mobile?.qr ? (
                     <QrCode qr={p.mobile.qr} />
                   ) : (
-                    <div className="mp-qrph">{p.mobile?.error ? '二维码暂时取不到' : '二维码生成中…'}</div>
+                    <div className="mp-qrph">{p.mobile?.error ? t('二维码暂时取不到') : t('二维码生成中…')}</div>
                   )}
 
                   {p.mobile?.error && <p className="mp-err">{p.mobile.error}</p>}
@@ -474,13 +475,13 @@ export function Sidebar(p: Props) {
         </div>
 
         {confirmDel && (
-          <Modal title="移除项目" onClose={() => setConfirmDel(null)}>
+          <Modal title={t('移除项目')} onClose={() => setConfirmDel(null)}>
             <p className="confirm-text">
-              确定把「{confirmDel.name}」从项目列表移除吗？不会删除本地文件夹与历史记录。
+              {t('确定把「{name}」从项目列表移除吗？不会删除本地文件夹与历史记录。', { name: confirmDel.name })}
             </p>
             <div className="actions">
               <button className="ghost" onClick={() => setConfirmDel(null)}>
-                取消
+                {t('取消')}
               </button>
               <button
                 className="primary danger-btn"
@@ -489,20 +490,20 @@ export function Sidebar(p: Props) {
                   setConfirmDel(null)
                 }}
               >
-                移除
+                {t('移除')}
               </button>
             </div>
           </Modal>
         )}
 
         {confirmDelSess && (
-          <Modal title="删除会话" onClose={() => setConfirmDelSess(null)}>
+          <Modal title={t('删除会话')} onClose={() => setConfirmDelSess(null)}>
             <p className="confirm-text">
-              确定删除「{confirmDelSess.sess.title ?? confirmDelSess.sess.id}」吗？聊天记录将一并删除，不可恢复。
+              {t('确定删除「{name}」吗？聊天记录将一并删除，不可恢复。', { name: confirmDelSess.sess.title ?? confirmDelSess.sess.id })}
             </p>
             <div className="actions">
               <button className="ghost" onClick={() => setConfirmDelSess(null)}>
-                取消
+                {t('取消')}
               </button>
               <button
                 className="primary danger-btn"
@@ -511,7 +512,7 @@ export function Sidebar(p: Props) {
                   setConfirmDelSess(null)
                 }}
               >
-                删除
+                {t('删除')}
               </button>
             </div>
           </Modal>
@@ -542,7 +543,7 @@ export function Sidebar(p: Props) {
               }}
             >
               <FolderOpen size={14} />
-              打开文件夹
+              {t('打开文件夹')}
             </button>
             <button
               className="ctx-item"
@@ -552,7 +553,7 @@ export function Sidebar(p: Props) {
               }}
             >
               <MessageSquarePlus size={14} />
-              添加任务
+              {t('添加任务')}
             </button>
             {/* 只有内置的「任务」目录不给「从列表移除」（连分隔线一起不画）：
                 它由主进程创建、是列表清空后仅剩的落脚点，点了也移不掉。
@@ -568,7 +569,7 @@ export function Sidebar(p: Props) {
                   }}
                 >
                   <Trash2 size={14} />
-                  从列表移除
+                  {t('从列表移除')}
                 </button>
               </>
             )}
@@ -597,7 +598,7 @@ function QrCode({ qr, size = 156 }: { qr: { size: number; rows: number[][] }; si
       viewBox={`0 0 ${total} ${total}`}
       shapeRendering="crispEdges"
       role="img"
-      aria-label="移动端配对二维码"
+      aria-label={t('移动端配对二维码')}
     >
       <rect width={total} height={total} fill="#ffffff" />
       <path d={d} fill="#000000" />

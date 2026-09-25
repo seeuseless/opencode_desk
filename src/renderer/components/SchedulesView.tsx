@@ -4,6 +4,7 @@ import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { Menu } from './Menu'
+import { t } from '../i18n'
 import type { ScheduleSpec, ScheduleTask } from '../../../electron/main/types'
 
 /** 时刻摘要：每天 09:00 / 每周一 08:30 / 每隔 4 小时 */
@@ -11,15 +12,15 @@ const pad = (n: number) => String(n).padStart(2, '0')
 const WEEK = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 function specLabel(s: ScheduleSpec): string {
-  if (s.kind === 'hourly') return s.everyHours === 1 ? '每隔 1 小时' : `每隔 ${s.everyHours} 小时`
+  if (s.kind === 'hourly') return s.everyHours === 1 ? t('每隔 {n} 小时', { n: 1 }) : t('每隔 {n} 小时', { n: s.everyHours })
   const tm = `${pad(s.hour)}:${pad(s.minute)}`
-  return s.kind === 'daily' ? `每天 ${tm}` : `每周${WEEK[s.day - 1]} ${tm}`
+  return s.kind === 'daily' ? t('每天 {tm}', { tm }) : t('每周{w} {tm}', { w: t(WEEK[s.day - 1]), tm })
 }
 
 /** 上次执行时间：本地时区的「月-日 时:分」；没跑过显示「尚未执行」 */
-function ranLabel(t: number | undefined): string {
-  if (!t) return '尚未执行'
-  const d = new Date(t)
+function ranLabel(ts: number | undefined): string {
+  if (!ts) return t('尚未执行')
+  const d = new Date(ts)
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
@@ -55,25 +56,25 @@ export function SchedulesView(p: Props) {
     void window.qingniao.scheduleList().then(setTasks).catch(() => undefined)
   }, [p.refreshSignal])
 
-  async function remove(t: ScheduleTask): Promise<void> {
+  async function remove(task: ScheduleTask): Promise<void> {
     try {
-      setTasks(await window.qingniao.scheduleRemove(t.id))
+      setTasks(await window.qingniao.scheduleRemove(task.id))
     } catch (e) {
-      p.onNotice('删除失败：' + (e instanceof Error ? e.message : String(e)))
+      p.onNotice(t('删除失败：') + (e instanceof Error ? e.message : String(e)))
     }
   }
 
-  async function runNow(t: ScheduleTask): Promise<void> {
-    setRunning(t.id)
+  async function runNow(task: ScheduleTask): Promise<void> {
+    setRunning(task.id)
     try {
-      const r = await window.qingniao.scheduleRunNow(t.id)
+      const r = await window.qingniao.scheduleRunNow(task.id)
       if (r.ok) p.onTaskSessionCreated()
       else if (r.error) p.onNotice(r.error)
       try {
         setTasks(await window.qingniao.scheduleList())
       } catch { /* 刷新失败不影响执行结果 */ }
     } catch (e) {
-      p.onNotice('执行失败：' + (e instanceof Error ? e.message : String(e)))
+      p.onNotice(t('执行失败：') + (e instanceof Error ? e.message : String(e)))
     } finally {
       setRunning('')
     }
@@ -95,7 +96,7 @@ export function SchedulesView(p: Props) {
       } catch {
         setTasks(previous)
       }
-      p.onNotice('排序保存失败：' + (e instanceof Error ? e.message : String(e)))
+      p.onNotice(t('排序保存失败：') + (e instanceof Error ? e.message : String(e)))
     }
   }
 
@@ -106,58 +107,58 @@ export function SchedulesView(p: Props) {
     <>
       <div className="spage">
         <div className="spage-head">
-          <h3 style={{ flex: 'none' }}>计划任务</h3>
-          <button className="icon-btn" onClick={() => setEditing('new')} title="新建计划任务">
+          <h3 style={{ flex: 'none' }}>{t('计划任务')}</h3>
+          <button className="icon-btn" onClick={() => setEditing('new')} title={t('新建计划任务')}>
             <Plus size={16} />
           </button>
           <span className="spacer" />
-          <button className="icon-btn" onClick={p.onClose} title="关闭计划任务">
+          <button className="icon-btn" onClick={p.onClose} title={t('关闭计划任务')}>
             <X size={16} />
           </button>
         </div>
         <div className="spage-body">
           {tasks.length === 0 ? (
-            <div className="spage-empty">还没有计划任务。点右上角「新建计划任务」，让它每天、每周或每隔几小时自动执行。</div>
+            <div className="spage-empty">{t('还没有计划任务。点右上角「新建计划任务」，让它每天、每周或每隔几小时自动执行。')}</div>
           ) : (
-            tasks.map((t, i) => (
+            tasks.map((tk, i) => (
               <div
                 {...taskSort.rowProps(i)}
                 {...taskSort.handleProps(i)}
-                key={t.id}
+                key={tk.id}
                 className={
                   'scard'
-                  + (t.enabled ? '' : ' off')
+                  + (tk.enabled ? '' : ' off')
                   + (taskSort.dragIdx === i ? ' dragging' : '')
                   + (taskSort.overIdx === i ? ' dragover ' + taskSort.overPos : '')
                 }
               >
-                <div className="scard-main" onClick={() => setEditing(t)}>
+                <div className="scard-main" onClick={() => setEditing(tk)}>
                   <div className="scard-name">
-                    <span className="scard-title">{t.name}</span>
-                    {t.lastError && <span className="scard-err">上次执行失败：{t.lastError}</span>}
+                    <span className="scard-title">{tk.name}</span>
+                    {tk.lastError && <span className="scard-err">{t('上次执行失败：')}{tk.lastError}</span>}
                   </div>
                   <div className="scard-sub">
-                    {specLabel(t.spec)} · 上次执行 {ranLabel(t.lastRun)}
-                    {t.enabled ? '' : ' · 已停用'}
+                    {specLabel(tk.spec)} · {t('上次执行')} {ranLabel(tk.lastRun)}
+                    {tk.enabled ? '' : ' · ' + t('已停用')}
                   </div>
                 </div>
                 <div className="scard-acts">
                   <button
                     className="icon-btn"
-                    title={running === t.id ? '执行中…' : '立即执行'}
-                    aria-busy={running === t.id}
+                    title={running === tk.id ? t('执行中…') : t('立即执行')}
+                    aria-busy={running === tk.id}
                     disabled={!!running}
-                    onClick={() => void runNow(t)}
+                    onClick={() => void runNow(tk)}
                   >
-                    {running === t.id ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}
+                    {running === tk.id ? <LoaderCircle className="spin" size={14} /> : <Play size={14} />}
                   </button>
-                  <button className="icon-btn" title="编辑" onClick={() => setEditing(t)}>
+                  <button className="icon-btn" title={t('编辑')} onClick={() => setEditing(tk)}>
                     <Pencil size={14} />
                   </button>
                   <button
                     className="icon-btn danger"
-                    title="删除计划任务（已产出的会话保留）"
-                    onClick={() => setConfirmDel(t)}
+                    title={t('删除计划任务（已产出的会话保留）')}
+                    onClick={() => setConfirmDel(tk)}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -182,13 +183,13 @@ export function SchedulesView(p: Props) {
       )}
 
       {confirmDel && (
-        <Modal title="删除计划任务" onClose={() => setConfirmDel(null)}>
+        <Modal title={t('删除计划任务')} onClose={() => setConfirmDel(null)}>
           <p className="confirm-text">
-            确定删除「{confirmDel.name}」吗？删除后不再自动执行，已产出的会话会保留。
+            {t('确定删除「{name}」吗？删除后不再自动执行，已产出的会话会保留。', { name: confirmDel.name })}
           </p>
           <div className="actions">
             <button className="ghost" onClick={() => setConfirmDel(null)}>
-              取消
+              {t('取消')}
             </button>
             <button
               className="primary danger-btn"
@@ -198,7 +199,7 @@ export function SchedulesView(p: Props) {
                 void remove(target)
               }}
             >
-              删除
+              {t('删除')}
             </button>
           </div>
         </Modal>
@@ -238,7 +239,7 @@ function ScheduleModal({
         : mode === 'weekly'
           ? { kind: 'weekly', day, hour, minute }
           : { kind: 'hourly', everyHours: Number(hours) }
-    const t: ScheduleTask = {
+    const task: ScheduleTask = {
       id: initial?.id ?? 'st' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
       name: name.trim(),
       prompt: prompt.trim(),
@@ -250,51 +251,51 @@ function ScheduleModal({
     }
     setSaving(true)
     try {
-      await window.qingniao.scheduleSave(t)
+      await window.qingniao.scheduleSave(task)
       onSaved()
     } catch (e) {
-      onNotice('保存失败：' + (e instanceof Error ? e.message : String(e)))
+      onNotice(t('保存失败：') + (e instanceof Error ? e.message : String(e)))
       setSaving(false)
     }
   }
 
   return (
-    <Modal title={initial ? '计划任务' : '新建计划任务'} onClose={onClose} wide>
+    <Modal title={initial ? t('计划任务') : t('新建计划任务')} onClose={onClose} wide>
       <div className="sched-form">
         <label>
-          任务名称
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="如：每日晨报" maxLength={40} autoFocus />
+          {t('任务名称')}
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('如：每日晨报')} maxLength={40} autoFocus />
         </label>
         <label>
-          任务内容
+          {t('任务内容')}
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="定时要执行的内容，会以新会话发给 AI"
+            placeholder={t('定时要执行的内容，会以新会话发给 AI')}
             rows={3}
           />
         </label>
         <label>
-          执行时间
+          {t('执行时间')}
           {/* 面板一律向上弹：这行在弹窗里位置偏下，向下展开会被弹窗底边裁掉 */}
           <div className="sched-pick">
             <Menu
               value={mode}
               options={[
-                { key: 'daily', label: '每天' },
-                { key: 'weekly', label: '每周' },
-                { key: 'hourly', label: '每隔 N 小时' }
+                { key: 'daily', label: t('每天') },
+                { key: 'weekly', label: t('每周') },
+                { key: 'hourly', label: t('每隔 N 小时') }
               ]}
               onChange={(k) => setMode(k as ScheduleSpec['kind'])}
-              placeholder="选择周期"
+              placeholder={t('选择周期')}
               up
             />
             {mode === 'weekly' && (
               <Menu
                 value={String(day)}
-                options={WEEK.map((w, i) => ({ key: String(i + 1), label: w }))}
+                options={WEEK.map((w, i) => ({ key: String(i + 1), label: t(w) }))}
                 onChange={(k) => setDay(Number(k))}
-                placeholder="选择星期"
+                placeholder={t('选择星期')}
                 up
               />
             )}
@@ -303,26 +304,26 @@ function ScheduleModal({
                 value={hours}
                 options={Array.from({ length: 24 }, (_, i) => ({
                   key: String(i + 1),
-                  label: `每隔 ${i + 1} 小时`
+                  label: t('每隔 {n} 小时', { n: i + 1 })
                 }))}
                 onChange={setHours}
-                placeholder="选择间隔"
+                placeholder={t('选择间隔')}
                 up
               />
             ) : (
               <>
                 <Menu
                   value={pad(hour)}
-                  options={Array.from({ length: 24 }, (_, i) => ({ key: pad(i), label: pad(i) + ' 时' }))}
+                  options={Array.from({ length: 24 }, (_, i) => ({ key: pad(i), label: pad(i) + ' ' + t('时') }))}
                   onChange={(k) => setHour(Number(k))}
-                  placeholder="时"
+                  placeholder={t('时')}
                   up
                 />
                 <Menu
                   value={pad(minute)}
-                  options={Array.from({ length: 60 }, (_, i) => ({ key: pad(i), label: pad(i) + ' 分' }))}
+                  options={Array.from({ length: 60 }, (_, i) => ({ key: pad(i), label: pad(i) + ' ' + t('分') }))}
                   onChange={(k) => setMinute(Number(k))}
-                  placeholder="分"
+                  placeholder={t('分')}
                   up
                 />
               </>
@@ -331,18 +332,18 @@ function ScheduleModal({
         </label>
         <div className="sched-on">
           <div>
-            <b>启用该任务</b>
-            <span className="lab-tip">关闭后不再自动执行，仍可随时手动「立即执行」</span>
+            <b>{t('启用该任务')}</b>
+            <span className="lab-tip">{t('关闭后不再自动执行，仍可随时手动「立即执行」')}</span>
           </div>
           <Switch checked={enabled} onChange={setEnabled} />
         </div>
-        {initial?.lastError && <p className="form-msg bad">上次执行失败：{initial.lastError}</p>}
+        {initial?.lastError && <p className="form-msg bad">{t('上次执行失败：')}{initial.lastError}</p>}
         <div className="actions">
           <button className="ghost" onClick={onClose}>
-            取消
+            {t('取消')}
           </button>
           <button className="primary" disabled={!name.trim() || !prompt.trim() || saving} onClick={() => void save()}>
-            {saving ? '保存中…' : '保存'}
+            {saving ? t('保存中…') : t('保存')}
           </button>
         </div>
       </div>

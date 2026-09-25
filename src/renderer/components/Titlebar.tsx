@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Maximize2, Minimize2, Minus, PanelRight, RefreshCw, Save, X } from 'lucide-react'
+import { Maximize2, Minimize2, Minus, PanelRight, PanelRightClose, RefreshCw, Save, X } from 'lucide-react'
+import { t } from '../i18n'
 import type { CodeControls } from './CodeWorkspace'
 
 /** 会话标题（对话区首条用户信息；计划会话另带标记与执行日期） */
@@ -46,8 +47,9 @@ export function Titlebar({
       {/* 会话标题：左端与下方消息区同左边距，短标题过长自动省略；不占中间槽（留给浏览器工具栏） */}
       {title && (
         <div className="tb-title" title={title.text}>
-          {title.sched && <span className="ch-tag">计划</span>}
-          <span className="tb-title-text">{title.text.length > 80 ? title.text.slice(0, 80) + '…' : title.text}</span>
+          {title.sched && <span className="ch-tag">{t('计划')}</span>}
+          {/* 标题截短：太长的标题会挤压中间浏览器工具栏，40 字足够辨认是哪一轮 */}
+          <span className="tb-title-text">{title.text.length > 40 ? title.text.slice(0, 40) + '…' : title.text}</span>
           {title.date && <span className="ch-date">{title.date}</span>}
         </div>
       )}
@@ -57,7 +59,7 @@ export function Titlebar({
           <em>{codeInfo.status}</em>
           <button
             className="icon-btn tb-code-btn"
-            title="放弃修改并重新读取"
+            title={t('放弃修改并重新读取')}
             onClick={() => codeControls?.reload()}
             disabled={!codeControls || codeControls.saving}
           >
@@ -69,7 +71,7 @@ export function Titlebar({
             disabled={!codeControls || !codeControls.canSave || codeControls.saving}
           >
             <Save size={13} />
-            {codeControls?.saving ? '保存中' : '保存'}
+            {codeControls?.saving ? t('保存中') : t('保存')}
           </button>
         </div>
       )}
@@ -82,17 +84,21 @@ export function Titlebar({
           与开关对象（对话卡/气泡）同处一条视觉线上，比挤在标题栏左端好找得多。
         */}
         {showBrowser && !browserMax && (
-          <button className="icon-btn tb-btn" title="内置浏览器" onClick={onToggleBrowser}>
-            <PanelRight size={15} />
+          <button
+            className="icon-btn tb-btn"
+            title={browserOpen ? t('关闭内置浏览器') : t('内置浏览器')}
+            onClick={onToggleBrowser}
+          >
+            {browserOpen ? <PanelRightClose size={15} /> : <PanelRight size={15} />}
           </button>
         )}
-        <button className="icon-btn tb-btn" title="最小化" onClick={() => window.qingniao.winMin()}>
+        <button className="icon-btn tb-btn" title={t('最小化')} onClick={() => window.qingniao.winMin()}>
           <Minus size={15} />
         </button>
         {/* 浏览器打开时这颗按钮接管面板放大/还原，关闭时回到窗口最大化 */}
         <button
           className="icon-btn tb-btn"
-          title={browserOpen ? (browserMax ? '还原对话布局' : '浏览器放大占满') : maxed ? '还原' : '最大化'}
+          title={browserOpen ? (browserMax ? t('还原对话布局') : t('浏览器放大占满')) : maxed ? t('还原') : t('最大化')}
           onClick={() => (browserOpen ? onBrowserMax() : window.qingniao.winMax())}
         >
           {browserOpen ? (
@@ -106,7 +112,7 @@ export function Titlebar({
         {/* mac 驻留在 Dock（点 Dock 图标唤回），没有「托盘」概念，文案按平台区分 */}
         <button
           className="icon-btn tb-btn"
-          title={navigator.userAgent.includes('Mac') ? '隐藏窗口（点 Dock 图标恢复）' : '隐藏到托盘'}
+          title={navigator.userAgent.includes('Mac') ? t('隐藏窗口（点 Dock 图标恢复）') : t('隐藏到托盘')}
           onClick={() => window.qingniao.winClose()}
         >
           <X size={15} />

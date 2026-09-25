@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
+import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
 import { ProjectPicker, AccessPicker } from './ProjectPicker'
@@ -206,7 +207,7 @@ function continuationText(list: MessageView[]): string {
         .trim()
     : ''
   if (!text) return ''
-  return lastAsst && lastAsst.parts.length ? RETRY_CONTINUE : text
+  return lastAsst && lastAsst.parts.length ? t(RETRY_CONTINUE) : text
 }
 
 /** 内核 todo 清单项（opencode todo.updated 事件） */
@@ -224,13 +225,13 @@ interface TodoItem {
  */
 function humanizeError(raw: string): string {
   if (!raw) return ''
-  if (/insufficient[_ ]credit|quota|balance|arrears|exceeded your current/i.test(raw)) return '账户额度不足或已欠费，请检查该提供商的余额。'
-  if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return 'API Key 无效或未通过认证，请到设置里检查该提供商的密钥。'
-  if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return '请求过于频繁，已被限流，请稍候片刻再试。'
-  if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return '请求的模型在该端点不存在或不可用，请更换模型。'
+  if (/insufficient[_ ]credit|quota|balance|arrears|exceeded your current/i.test(raw)) return t('账户额度不足或已欠费，请检查该提供商的余额。')
+  if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return t('API Key 无效或未通过认证，请到设置里检查该提供商的密钥。')
+  if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return t('请求过于频繁，已被限流，请稍候片刻再试。')
+  if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return t('请求的模型在该端点不存在或不可用，请更换模型。')
   // 图生图/文生图模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-image-* 提示走 /v1/images/generations）
-  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return '该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。'
-  if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return '无法连接模型端点，请检查 Base URL 与网络。'
+  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return t('该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。')
+  if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
   return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
 }
 
@@ -783,9 +784,9 @@ export function ChatView(p: Props) {
     oc.abort(sid, busyDir.current[sid] ?? dirRef.current).catch(() => { /* 已结束 */ })
     const why = text.replace(/\s+/g, ' ').trim().slice(0, 160)
     setError(
-      `已自动停止：工具「${tool || '未知'}」连续失败 ${n} 次` +
-        (why ? `（${why}）` : '') +
-        '。这类错误重试不会改变结果，所以替你叫停了——原因处理完后再发一句话即可继续。'
+      t('已自动停止：工具「{tool}」连续失败 {n} 次', { tool: tool || t('未知'), n }) +
+        (why ? t('（{why}）', { why }) : '') +
+        t('。这类错误重试不会改变结果，所以替你叫停了——原因处理完后再发一句话即可继续。')
     )
     onRefreshRef.current()
   }
@@ -842,7 +843,7 @@ export function ChatView(p: Props) {
     }
     const text = continuationText(list)
     if (!text) {
-      setError('找不到可重试的内容')
+      setError(t('找不到可重试的内容'))
       return
     }
     retries.current.delete(sid)
@@ -869,7 +870,7 @@ export function ChatView(p: Props) {
       const st = (e as Error & { status?: number }).status
       // 502/503 主进程代抛传输层故障，内核可能仍在跑，交给状态收尾
       if (st && st !== 502 && st !== 503) {
-        setError(('撤回失败：' + (e instanceof Error ? e.message : String(e))).slice(0, 120))
+        setError((t('撤回失败：') + (e instanceof Error ? e.message : String(e))).slice(0, 120))
         return
       }
     }
@@ -906,7 +907,7 @@ export function ChatView(p: Props) {
       // 502/503 是主进程代抛的传输层故障（内核仍在跑），不代表停止没送到
       if (!st || st === 502 || st === 503) return
       const msg = e instanceof Error ? e.message : String(e)
-      setError('停止失败：' + msg.slice(0, 120))
+      setError(t('停止失败：') + msg.slice(0, 120))
     })
   }
 
@@ -1160,7 +1161,7 @@ export function ChatView(p: Props) {
         }
       } else if (e.type === 'qingniao.kernel.unhealthy') {
         // 主进程自动重启内核后，本地 busy 状态全部失效，做一次整体重同步
-        setError('内核连接异常，正在自动恢复…')
+        setError(t('内核连接异常，正在自动恢复…'))
         for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
         if (sidRef.current) {
           setTodos([])
@@ -1404,7 +1405,7 @@ export function ChatView(p: Props) {
       cancelRetry(cur.sid)
       oc.abort(cur.sid, busyDir.current[cur.sid]).catch(() => { /* 内核已停/无此任务 */ })
       markBusy(cur.sid, false)
-      setError('网络已断开，任务自动暂停，恢复后自动执行。')
+      setError(t('网络已断开，任务自动暂停，恢复后自动执行。'))
     }
     const onOnline = () => {
       const cur = inflightRef.current
@@ -1497,7 +1498,7 @@ export function ChatView(p: Props) {
       const cand = cur?.models.find(chattable)
       if (!cand) return undefined
       p.onModelChange(`${pid}/${cand.id}`)
-      setNotice(`当前模型只能生成、不能对话，已切到「${cand.name || cand.id}」；出图、出片、配音都由对应工具完成。`)
+      setNotice(t('当前模型只能生成、不能对话，已切到「{name}」；出图、出片、配音都由对应工具完成。', { name: cand.name || cand.id }))
       return { providerID: pid, modelID: cand.id }
     }
     // 再看缺不缺图片/视频输入（附件要的，或桌面控制要看截屏要的）
@@ -1507,14 +1508,14 @@ export function ChatView(p: Props) {
     if (!cand) {
       if (lack.includes('video')) {
         // 图片收不到还有识图 MCP 代看，视频没有代看路径：换不到模型时只能提前讲明白
-        setNotice('这条附件是视频，而当前提供商里没有支持视频输入的模型可换——AI 这轮只会看到文件路径，读不到画面。可在 设置 → 模型 给支持视频的模型勾上「输入 · 视频」再发。')
+        setNotice(t('这条附件是视频，而当前提供商里没有支持视频输入的模型可换——AI 这轮只会看到文件路径，读不到画面。可在 设置 → 模型 给支持视频的模型勾上「输入 · 视频」再发。'))
       }
       return undefined // 原样发：路径照样能交给生图/识图工具处理
     }
     p.onModelChange(`${pid}/${cand.id}`)
     setNotice(
-      `当前模型不支持${lack.includes('image') && lack.includes('video') ? '图片/视频' : lack.includes('image') ? '图片' : '视频'}输入，` +
-        `已切到「${cand.name || cand.id}」以便看懂附件内容。`
+      t('当前模型不支持{what}输入，', { what: lack.includes('image') && lack.includes('video') ? t('图片/视频') : lack.includes('image') ? t('图片') : t('视频') }) +
+        t('已切到「{name}」以便看懂附件内容。', { name: cand.name || cand.id })
     )
     return { providerID: pid, modelID: cand.id }
   }
@@ -1529,14 +1530,14 @@ export function ChatView(p: Props) {
     if (text && isGenIntent(text) && !hasGenModel(p.settings)) {
       const needsModule = files.some((a) => a.mime.startsWith('image/') || a.mime.startsWith('video/'))
       setNotice(
-        (needsModule ? '这段附图要做成新图/新片，也' : '') +
-          '当前没有配置生图/生视频模型，AI 出不了真图。请在 设置 → 提供商 里加一个生图模型（如 flux / stable-diffusion / dall-e / *-image-*），否则 AI 只能靠代码画图、效果有限。'
+        (needsModule ? t('这段附图要做成新图/新片，也') : '') +
+          t('当前没有配置生图/生视频模型，AI 出不了真图。请在 设置 → 提供商 里加一个生图模型（如 flux / stable-diffusion / dall-e / *-image-*），否则 AI 只能靠代码画图、效果有限。')
       )
     }
     // 当前模型不能聊天，或看不懂本轮附件时，自动换成同提供商能胜任的模型（详见 resolveChatModel）
     const promptModel = resolveChatModel(files, text)
     if (busy && atts.length) {
-      setError('处理中不能发送附件，请等当前任务结束后再发送')
+      setError(t('处理中不能发送附件，请等当前任务结束后再发送'))
       return
     }
     setAtts([])
@@ -1575,7 +1576,7 @@ export function ChatView(p: Props) {
     }
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
-      const title = (text.length > 30 ? text.slice(0, 30) + '…' : text) || '发送了附件'
+      const title = (text.length > 30 ? text.slice(0, 30) + '…' : text) || t('发送了附件')
       try {
         const s = await oc.createSession(dir, title)
         s.title = title
@@ -1800,7 +1801,7 @@ export function ChatView(p: Props) {
     setPerms((prev) => prev.filter((x) => x.id !== req.id))
     void window.qingniao.replyPermission({ id: req.id, sessionID: req.sessionID, reply }).then((err) => {
       if (err) {
-        setError(`权限应答没能送达内核：${err}`)
+        setError(t('权限应答没能送达内核：{msg}', { msg: err }))
         setPerms((prev) => (prev.some((x) => x.id === req.id) ? prev : [...prev, req]))
       }
     })
@@ -1814,7 +1815,7 @@ export function ChatView(p: Props) {
   function replyModelAllow(req: ModelAuthAsk, scope: ModelAuthScope) {
     setModelAsks((prev) => prev.filter((x) => x.reqId !== req.reqId))
     void window.qingniao.replyModelAuth({ reqId: req.reqId, scope }).then((err) => {
-      if (err) setNotice(`授权未生效：${err}`)
+      if (err) setNotice(t('授权未生效：{msg}', { msg: err }))
     })
   }
 
@@ -1865,14 +1866,14 @@ export function ChatView(p: Props) {
     >
       {browserMax && floatOpen && (
         <>
-          <div className="float-head" title="拖动移动位置 · 双击复位"
+          <div className="float-head" title={t('拖动移动位置 · 双击复位')}
             onPointerDown={startFloatDrag}
             onDoubleClick={() => { setFloatPos(null); save('qingniao.floatPos', null) }}>
-            <span className="float-hint" title={panelUrl ? `当前页面：${panelUrl}` : undefined}>
+            <span className="float-hint" title={panelUrl ? t('当前页面：{url}', { url: panelUrl }) : undefined}>
               <span className="float-hint-dot" />
-              AI 可对话操作此浏览器
+              {t('AI 可对话操作此浏览器')}
             </span>
-            <button className="float-close" title="收起对话" onClick={() => setFloatOpen(false)}>
+            <button className="float-close" title={t('收起对话')} onClick={() => setFloatOpen(false)}>
               <X size={16} />
             </button>
           </div>
@@ -1895,13 +1896,13 @@ export function ChatView(p: Props) {
         <div className="col">
           {visibleMsgCount === 0 && !busy && (
             <div className="empty">
-              <div className="empty-title">新对话</div>
+              <div className="empty-title">{t('新对话')}</div>
               {panelOpen && panelUrl ? (
-                <div>在下方输入框提问，AI 会针对当前浏览器页面作答并直接操作这个浏览器</div>
+                <div>{t('在下方输入框提问，AI 会针对当前浏览器页面作答并直接操作这个浏览器')}</div>
               ) : (
-                <div>在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令</div>
+                <div>{t('在下方输入框描述任务，AI 会直接在这个项目里读取、修改代码并执行终端命令')}</div>
               )}
-              <div>Enter 发送 · Shift+Enter 换行 · 处理中可随时停止，已发送的消息可编辑后重发</div>
+              <div>{t('Enter 发送 · Shift+Enter 换行 · 处理中可随时停止，已发送的消息可编辑后重发')}</div>
             </div>
           )}
           {msgs.map((m) => {
@@ -1919,7 +1920,7 @@ export function ChatView(p: Props) {
               if (isCtxOnly(txt)) return null
               const fatts = m.parts
                 .filter((x): x is Part & { mime: string; url: string } => x.type === 'file' && !!x.mime && !!x.url)
-                .map((x) => ({ mime: x.mime, name: (x.filename || '附件').replace(/^.*[\\/]/, ''), url: x.url }))
+                .map((x) => ({ mime: x.mime, name: (x.filename || t('附件')).replace(/^.*[\\/]/, ''), url: x.url }))
               return <UserBubble key={m.info.id} text={txt} atts={fatts} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
             }
             return (
@@ -1936,7 +1937,7 @@ export function ChatView(p: Props) {
                 {!busy && !!usedByMsg[m.info.id]?.length && (
                   <div className="cu-models" title={usedByMsg[m.info.id].map((u) => `${u.label || u.id}（${u.provider || u.id}）`).join('\n')}>
                     <Cpu size={12} />
-                    <span>本轮另调用：{summarizeModels(usedByMsg[m.info.id])}</span>
+                    <span>{t('本轮另调用：')}{summarizeModels(usedByMsg[m.info.id])}</span>
                   </div>
                 )}
               </div>
@@ -1947,7 +1948,7 @@ export function ChatView(p: Props) {
             <div className="amsg">
               <div className="msgerr">
                 <AlertCircle size={13} /> <span>{error}</span>
-                <button className="icon-btn" title="关闭" onClick={() => setError('')}>
+                <button className="icon-btn" title={t('关闭')} onClick={() => setError('')}>
                   <X size={13} />
                 </button>
               </div>
@@ -1958,7 +1959,7 @@ export function ChatView(p: Props) {
             <div className="amsg">
               <div className="msgnotice">
                 <Info size={13} /> <span>{notice}</span>
-                <button className="icon-btn" title="关闭" onClick={() => setNotice('')}>
+                <button className="icon-btn" title={t('关闭')} onClick={() => setNotice('')}>
                   <X size={13} />
                 </button>
               </div>
@@ -1987,15 +1988,15 @@ export function ChatView(p: Props) {
           {busy && (
             <div className="amsg busyline">
               {terminalBlocked ? (
-                '终端运行中 · 新消息发送将接管任务'
+                t('终端运行中 · 新消息发送将接管任务')
               ) : (
                 <>
                   <LoaderCircle size={13} className="spin" />
                   {asks.length > 0
-                    ? '等待你回答'
+                    ? t('等待你回答')
                     : msgs.some((m) => m.info.role === 'assistant' && !turnBase.current.has(m.info.id))
-                      ? `处理中，已用时 ${turnElapsed}`
-                      : `正在思考，已用时 ${turnElapsed}`}
+                      ? t('处理中，已用时 {v}', { v: turnElapsed })
+                      : t('正在思考，已用时 {v}', { v: turnElapsed })}
                 </>
               )}
             </div>
@@ -2005,7 +2006,7 @@ export function ChatView(p: Props) {
 
       {!atBottom && (
         <div className="jumpwrap">
-          <button className="jump" title="回到底部" onClick={jumpBottom}>
+          <button className="jump" title={t('回到底部')} onClick={jumpBottom}>
             <ArrowDown size={16} />
           </button>
         </div>
@@ -2017,22 +2018,22 @@ export function ChatView(p: Props) {
           <div className="col">
             <button className="qhead" onClick={() => setQCollapsed((v) => !v)}>
               {qCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-              任务队列 · {curQueue.length} 条
-              <span className="q-sub">排队等当前任务完成</span>
+              {t('任务队列 · {n} 条', { n: curQueue.length })}
+              <span className="q-sub">{t('排队等当前任务完成')}</span>
             </button>
             {!qCollapsed &&
-              curQueue.map((t, i) => (
-                <div key={i} className="qitem" title={t}>
+              curQueue.map((qt, i) => (
+                <div key={i} className="qitem" title={qt}>
                   <span className="qi-no">{i + 1}</span>
-                  <span className="qi-text">{t}</span>
+                  <span className="qi-text">{qt}</span>
                   <span className="qacts">
-                    <button className="icon-btn" title="立即执行（中断当前任务）" onClick={() => queueSend(i)}>
+                    <button className="icon-btn" title={t('立即执行（中断当前任务）')} onClick={() => queueSend(i)}>
                       <Send size={13} />
                     </button>
-                    <button className="icon-btn" title="移回输入框编辑" onClick={() => queueEdit(i)}>
+                    <button className="icon-btn" title={t('移回输入框编辑')} onClick={() => queueEdit(i)}>
                       <Pencil size={13} />
                     </button>
-                    <button className="icon-btn danger" title="删除" onClick={() => dropQueueItem(sidRef.current, i)}>
+                    <button className="icon-btn danger" title={t('删除')} onClick={() => dropQueueItem(sidRef.current, i)}>
                       <Trash2 size={13} />
                     </button>
                   </span>
@@ -2043,21 +2044,21 @@ export function ChatView(p: Props) {
       )}
 
       {showTerms && (
-        <Modal title="运行中的终端" onClose={() => setShowTerms(false)}>
-          {terms.filter((x) => x.status === 'running').map((t) => (
-            <div key={t.id} className="term-row">
+        <Modal title={t('运行中的终端')} onClose={() => setShowTerms(false)}>
+          {terms.filter((x) => x.status === 'running').map((tm) => (
+            <div key={tm.id} className="term-row">
               <Terminal size={13} />
-              <span className="term-cmd" title={[t.command, ...(t.args ?? [])].filter(Boolean).join(' ')}>
-                {t.title || t.command}
+              <span className="term-cmd" title={[tm.command, ...(tm.args ?? [])].filter(Boolean).join(' ')}>
+                {tm.title || tm.command}
               </span>
-              {t.pid ? <span className="term-pid">PID {t.pid}</span> : null}
-              <button className="icon-btn danger" title="终止终端" onClick={() => killTerm(t)}>
+              {tm.pid ? <span className="term-pid">PID {tm.pid}</span> : null}
+              <button className="icon-btn danger" title={t('终止终端')} onClick={() => killTerm(tm)}>
                 <X size={13} />
               </button>
             </div>
           ))}
           {terms.filter((x) => x.status === 'running').length === 0 && (
-            <div className="mp-empty">当前没有运行中的终端</div>
+            <div className="mp-empty">{t('当前没有运行中的终端')}</div>
           )}
         </Modal>
       )}
@@ -2070,11 +2071,11 @@ export function ChatView(p: Props) {
         {retryState && (
           <div className="notify retry">
             <AlertCircle size={13} />
-            <span>任务已中断</span>
-            <button className="retrybtn" onClick={() => void retryNow()} title="让 AI 接着处理">
-              <RotateCw size={13} /> 重试
+            <span>{t('任务已中断')}</span>
+            <button className="retrybtn" onClick={() => void retryNow()} title={t('让 AI 接着处理')}>
+              <RotateCw size={13} /> {t('重试')}
             </button>
-            <button className="icon-btn" title="关闭" onClick={() => cancelRetry(p.sessionId)}>
+            <button className="icon-btn" title={t('关闭')} onClick={() => cancelRetry(p.sessionId)}>
               <X size={13} />
             </button>
           </div>
@@ -2089,10 +2090,10 @@ export function ChatView(p: Props) {
             rows={2}
             placeholder={
               busy
-                ? '当前任务执行中，输入新需求可加入队列'
+                ? t('当前任务执行中，输入新需求可加入队列')
                 : panelUrl && panelOpen
-                  ? '针对当前浏览器页面提问，AI 会直接操作这个浏览器'
-                  : 'Enter 发送 / Shift+Enter 换行'
+                  ? t('针对当前浏览器页面提问，AI 会直接操作这个浏览器')
+                  : t('Enter 发送 / Shift+Enter 换行')
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -2130,7 +2131,7 @@ export function ChatView(p: Props) {
                       <span>{a.name}</span>
                     </span>
                   )}
-                  <button className="catt-x" title="移除附件" onClick={() => setAtts((prev) => prev.filter((_, j) => j !== i))}>
+                  <button className="catt-x" title={t('移除附件')} onClick={() => setAtts((prev) => prev.filter((_, j) => j !== i))}>
                     <X size={10} />
                   </button>
                 </span>
@@ -2142,8 +2143,8 @@ export function ChatView(p: Props) {
               className="icon-btn"
               title={
                 busy
-                  ? '处理中不能上传附件'
-                  : '上传图片、视频或音频（图片配合生图模型可图生图；音频可让 AI 转文字）'
+                  ? t('处理中不能上传附件')
+                  : t('上传图片、视频或音频（图片配合生图模型可图生图；音频可让 AI 转文字）')
               }
               disabled={busy}
               onClick={() => void pickAtt()}
@@ -2163,13 +2164,13 @@ export function ChatView(p: Props) {
                 全屏浏览时不显示：浏览场景不需要切权限档位 */}
             {!p.codeMode && !browserMax && <AccessPicker access={p.access} onAccess={p.onAccess} />}
             {terms.some((x) => x.status === 'running') && (
-              <button className="crow-term" title="运行中的终端" onClick={() => setShowTerms(true)}>
+              <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
                 {terms.filter((x) => x.status === 'running').length}
               </button>
             )}
             {!p.codeMode && !browserMax && (
-              <button className="icon-btn globe" title="浏览模式（全屏浏览器，右下角对话）" onClick={openBrowseMode}>
+              <button className="icon-btn globe" title={t('浏览模式（全屏浏览器，右下角对话）')} onClick={openBrowseMode}>
                 <Globe size={14} />
               </button>
             )}
@@ -2177,7 +2178,8 @@ export function ChatView(p: Props) {
             <ModelPicker
               groups={groups}
               value={p.model}
-              codeMode={p.codeMode}
+              // 内置浏览器面板打开时右栏变窄：与代码模式一样只显示 / 后面的模型短名
+              codeMode={p.codeMode || panelOpen}
               onChange={p.onModelChange}
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
@@ -2187,11 +2189,11 @@ export function ChatView(p: Props) {
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
             {/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
             {busy ? (
-              <button className="send-round stop" title="停止当前任务，队列任务自动接续" onClick={() => void stopCurrent()}>
+              <button className="send-round stop" title={t('停止当前任务，队列任务自动接续')} onClick={() => void stopCurrent()}>
                 <Square size={15} fill="currentColor" strokeWidth={0} />
               </button>
             ) : (
-              <button className="send-round" disabled={!input.trim() && !atts.length} onClick={send} title="发送">
+              <button className="send-round" disabled={!input.trim() && !atts.length} onClick={send} title={t('发送')}>
                 <Send size={15} />
               </button>
             )}
@@ -2219,7 +2221,7 @@ export function ChatView(p: Props) {
       <button
         ref={fabRef}
         className="chat-fab"
-        title={floatOpen ? '收起对话（可拖动换位置）' : '打开对话（可拖动换位置）'}
+        title={floatOpen ? t('收起对话（可拖动换位置）') : t('打开对话（可拖动换位置）')}
         style={fabPos ? { right: fabPos.r, bottom: fabPos.b } : undefined}
         onPointerDown={startFabDrag}
         onClick={() => { if (!fabDragged.current) setFloatOpen((v) => !v) }}
@@ -2360,16 +2362,16 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
 
   const head = (
     <div className="bp-head">
-      <button className="icon-btn" disabled={!nav.back} title="后退" onClick={() => wvRef.current?.goBack()}>
+      <button className="icon-btn" disabled={!nav.back} title={t('后退')} onClick={() => wvRef.current?.goBack()}>
         <ArrowLeft size={15} />
       </button>
-      <button className="icon-btn" disabled={!nav.fwd} title="前进" onClick={() => wvRef.current?.goForward()}>
+      <button className="icon-btn" disabled={!nav.fwd} title={t('前进')} onClick={() => wvRef.current?.goForward()}>
         <ArrowRight size={15} />
       </button>
       <input
         className="bp-url"
         value={addr}
-        placeholder="输入网址回车打开"
+        placeholder={t('输入网址回车打开')}
         spellCheck={false}
         onChange={(e) => setAddr(e.target.value)}
         onKeyDown={(e) => {
@@ -2378,7 +2380,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
       />
       <button
         className={'icon-btn bp-star' + (starred ? ' starred' : '')}
-        title={starred ? '取消收藏' : '收藏此页面（全屏时顶部显示收藏条）'}
+        title={starred ? t('取消收藏') : t('收藏此页面（全屏时顶部显示收藏条）')}
         onClick={() => onToggleMark(addr, title || hostOf(addr))}
       >
         <Star size={14} fill={starred ? 'currentColor' : 'none'} />
@@ -2391,8 +2393,8 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
           className={'icon-btn bp-chat-switch' + (chatHidden ? ' off' : '')}
           title={
             chatHidden
-              ? 'AI 对话已隐藏 · 点击显示右下角气泡'
-              : 'AI 对话显示中 · 点击隐藏'
+              ? t('AI 对话已隐藏 · 点击显示右下角气泡')
+              : t('AI 对话显示中 · 点击隐藏')
           }
           onClick={onToggleChat}
         >
@@ -2426,7 +2428,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
                 <span className="bp-mark-t">{m.title}</span>
                 <button
                   className="bp-mark-x"
-                  title="取消收藏"
+                  title={t('取消收藏')}
                   onClick={(e) => {
                     e.stopPropagation()
                     onToggleMark(m.url, '')
@@ -2446,7 +2448,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
           partition="persist:webpanel"
           allowpopups={false}
         />
-        {!addr && <div className="bp-nourl">在顶部地址栏输入网址后回车打开</div>}
+        {!addr && <div className="bp-nourl">{t('在顶部地址栏输入网址后回车打开')}</div>}
       </aside>
     </>
   )
@@ -2691,7 +2693,7 @@ function Collapsible({
       {over && !live && (
         <button className="cbl-toggle" onClick={() => setOpen((v) => !v)}>
           <ChevronDown size={12} className={open ? 'up' : undefined} />
-          {open ? '收起' : '展开全文'}
+          {open ? t('收起') : t('展开全文')}
         </button>
       )}
     </div>
@@ -2744,12 +2746,12 @@ function UserBubble({
             }}
           />
           <div className="uedit-acts">
-            <span className="uedit-hint">更新这条消息，下方的 AI 回复会重新生成</span>
+            <span className="uedit-hint">{t('更新这条消息，下方的 AI 回复会重新生成')}</span>
             <button className="ghost" onClick={() => setEditing(false)}>
-              取消
+              {t('取消')}
             </button>
             <button className="primary" disabled={!draft.trim()} onClick={sendEdit}>
-              发送
+              {t('发送')}
             </button>
           </div>
         </div>
@@ -2782,13 +2784,13 @@ function UserBubble({
         {/* 操作列在气泡下方，hover 显示 */}
         <div className="uacts">
           {editable && (
-            <button className="icon-btn" title="编辑消息" onClick={() => { setDraft(text); setEditing(true) }}>
+            <button className="icon-btn" title={t('编辑消息')} onClick={() => { setDraft(text); setEditing(true) }}>
               <Pencil size={12} />
             </button>
           )}
           <button
             className="icon-btn"
-            title={copied ? '已复制' : '复制'}
+            title={copied ? t('已复制') : t('复制')}
             onClick={() => {
               navigator.clipboard?.writeText(text).catch(() => {})
               setCopied(true)
@@ -2811,7 +2813,7 @@ function TodoCard({ todos, live, bare }: { todos: TodoItem[]; live?: boolean; ba
       {!bare && (
         <div className="todo-head">
           <ListChecks size={13} />
-          任务清单
+          {t('任务清单')}
           <span className="todo-prog">{done}/{todos.length}</span>
         </div>
       )}
@@ -2895,7 +2897,7 @@ function AskModal({
   }
 
   return (
-    <Modal title={`助手提问 ${i + 1}/${req.questions.length}`} anchor="above" anchorRef={anchorRef} onClose={onReject}>
+    <Modal title={t('助手提问 {a}/{b}', { a: i + 1, b: req.questions.length })} anchor="above" anchorRef={anchorRef} onClose={onReject}>
       <div className="ask-q">
         <div className="ask-title">{q.question}</div>
         <div className="ask-opts">
@@ -2915,7 +2917,7 @@ function AskModal({
           <div className="ask-custom">
             <input
               value={draft[i] ?? ''}
-              placeholder="自定义回答，回车添加…"
+              placeholder={t('自定义回答，回车添加…')}
               onChange={(e) => setDraft((prev) => prev.map((d, k) => (k === i ? e.target.value : d)))}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -2925,7 +2927,7 @@ function AskModal({
               }}
             />
             <button type="button" className="ghost" onClick={addCustom}>
-              添加
+              {t('添加')}
             </button>
           </div>
         )}
@@ -2933,21 +2935,21 @@ function AskModal({
       <div className="ask-acts">
         {i > 0 && (
           <button className="ghost" onClick={() => setStep(i - 1)}>
-            上一步
+            {t('上一步')}
           </button>
         )}
         {!last && (
           <button className="primary" onClick={() => setStep(i + 1)}>
-            下一步
+            {t('下一步')}
           </button>
         )}
         {last && (
           <button className="primary" onClick={() => onReply(req.questions.map((_, k) => sel[k] ?? []))}>
-            提交答案
+            {t('提交答案')}
           </button>
         )}
         <button className="ghost" onClick={onReject}>
-          跳过
+          {t('跳过')}
         </button>
       </div>
     </Modal>
@@ -2976,42 +2978,42 @@ function PermModal({
   onReply: (r: 'once' | 'always' | 'reject') => void
 }) {
   const { kind, targets } = req
-  const label = PERM_LABEL[kind] ?? kind ?? '操作'
+  const rawLabel = PERM_LABEL[kind] ?? kind ?? t('操作')
+  const label = t(rawLabel)
   /** 命令类：整行等宽显示；文件类：缩成相对项目路径 */
   const isCmd = /bash|shell|command|exec/i.test(kind)
-  const shown = targets.map((t) => (isCmd ? t : relPath(t, dir)))
+  const shown = targets.map((tg) => (isCmd ? tg : relPath(tg, dir)))
 
   return (
-    <Modal title={`是否允许${label}？`} anchor="top" onClose={() => onReply('reject')}>
+    <Modal title={t('是否允许{what}？', { what: label })} anchor="top" onClose={() => onReply('reject')}>
       <div className="perm-q">
         <p className="perm-lead">
-          AI 想{label}，需要你确认：
+          {t('AI 想{what}，需要你确认：', { what: label })}
         </p>
         {shown.length > 0 && (
           <ul className="perm-list">
-            {shown.map((t, i) => (
+            {shown.map((tg, i) => (
               <li key={i} className={isCmd ? 'mono' : undefined} title={targets[i]}>
-                {t}
+                {tg}
               </li>
             ))}
           </ul>
         )}
         <p className="perm-note">
-          选「仅这一次」只放行这一下，之后同类操作仍会问你；
-          「总是允许」在本会话内不再询问。想彻底不再问，可把该项目的访问权限改为「完全控制」。
+          {t('选「仅这一次」只放行这一下，之后同类操作仍会问你；「总是允许」在本会话内不再询问。想彻底不再问，可把该项目的访问权限改为「完全控制」。')}
         </p>
       </div>
       <div className="perm-acts">
         <button className="primary" onClick={() => onReply('once')}>
-          仅这一次
+          {t('仅这一次')}
         </button>
         {req.always.length > 0 && (
           <button className="ghost" onClick={() => onReply('always')}>
-            总是允许
+            {t('总是允许')}
           </button>
         )}
         <button className="ghost danger-text" onClick={() => onReply('reject')}>
-          拒绝
+          {t('拒绝')}
         </button>
       </div>
     </Modal>
@@ -3046,8 +3048,9 @@ function summarizeModels(list: ModelUsed[]): string {
   }
   return [...byRole.entries()]
     .map(([role, items]) => {
+      const rl = MODEL_ROLE_LABEL[role]
       const names = [...new Set(items.map((x) => x.label || x.id))].join('、')
-      return `${MODEL_ROLE_LABEL[role] ?? role}「${names}」${items.length > 1 ? `×${items.length}` : ''}`
+      return `${rl ? t(rl) : role}${t('「{name}」', { name: names })}${items.length > 1 ? `×${items.length}` : ''}`
     })
     .join(' · ')
 }
@@ -3071,14 +3074,15 @@ function ModelAuthModal({
   req: ModelAuthAsk
   onReply: (scope: ModelAuthScope) => void
 }) {
-  const label = MODEL_ROLE_LABEL[req.role] ?? req.role ?? '调用模型'
+  const rawLabel = MODEL_ROLE_LABEL[req.role] ?? req.role ?? t('调用模型')
+  const label = t(rawLabel)
   const name = req.label || req.id
 
   return (
-    <Modal title="是否允许调用其他模型？" anchor="top" onClose={() => onReply('reject')}>
+    <Modal title={t('是否允许调用其他模型？')} anchor="top" onClose={() => onReply('reject')}>
       <div className="perm-q">
         <p className="perm-lead">
-          AI 要用「{name}」来{label}，需要你确认：
+          {t('AI 要用「{name}」来{what}，需要你确认：', { name, what: label })}
         </p>
         <ul className="perm-list">
           <li title={`${req.provider || req.id} / ${req.id}`}>
@@ -3087,22 +3091,23 @@ function ModelAuthModal({
           </li>
         </ul>
         <p className="perm-note">
-          这一步会调用<strong>除当前对话模型之外</strong>的模型，可能产生额外费用。
-          「仅这一次」只放行这一下；「本次会话」在应用重启前不再问；「永久允许」写进设置，之后可随时撤销。
+          {t('这一步会调用')}
+          <strong>{t('除当前对话模型之外')}</strong>
+          {t('的模型，可能产生额外费用。「仅这一次」只放行这一下；「本次会话」在应用重启前不再问；「永久允许」写进设置，之后可随时撤销。')}
         </p>
       </div>
       <div className="perm-acts">
         <button className="primary" onClick={() => onReply('once')}>
-          仅这一次
+          {t('仅这一次')}
         </button>
         <button className="ghost" onClick={() => onReply('session')}>
-          本次会话允许
+          {t('本次会话允许')}
         </button>
         <button className="ghost" onClick={() => onReply('always')}>
-          永久允许
+          {t('永久允许')}
         </button>
         <button className="ghost danger-text" onClick={() => onReply('reject')}>
-          拒绝
+          {t('拒绝')}
         </button>
       </div>
     </Modal>
@@ -3128,16 +3133,16 @@ const OUTPUT_CONFIRM_RE = /^(Edit applied successfully\.?|Wrote file successfull
 /** 内核工具的英文系统消息 → 中文；纯结果确认句（"写入成功"类）视为无信息量，返回空串让渲染层决定回退展示 */
 function cnOutput(text: string): string {
   if (OUTPUT_CONFIRM_RE.test(text)) return ''
-  const t = text
-    .replace(/^Edit applied successfully\.?/i, '编辑已应用。')
-    .replace(/^Wrote file successfully\.?/i, '文件写入成功。')
-    .replace(/^Update applied successfully\.?/i, '修改已应用。')
-    .replace(/^Aborted\.?/i, '已中止。')
+  const out = text
+    .replace(/^Edit applied successfully\.?/i, t('编辑已应用。'))
+    .replace(/^Wrote file successfully\.?/i, t('文件写入成功。'))
+    .replace(/^Update applied successfully\.?/i, t('修改已应用。'))
+    .replace(/^Aborted\.?/i, t('已中止。'))
     .replace(/^The (\w+) tool was called with invalid arguments:[\s\S]*$/i, (_m, n: string) => {
-      const zh = TOOL_META[n.toLowerCase()]?.name ?? n
-      return `「${zh}」工具的调用参数不完整，已让模型重写参数重试。`
+      const zh = t(TOOL_META[n.toLowerCase()]?.name ?? n)
+      return t('「{name}」工具的调用参数不完整，已让模型重写参数重试。', { name: zh })
     })
-  return t
+  return out
 }
 
 function str(v: unknown): string {
@@ -3146,10 +3151,10 @@ function str(v: unknown): string {
 
 /** 秒数 → 中文时长：1秒 / 45秒 / 1分20秒 */
 function fmtElapsed(s: number): string {
-  if (s < 60) return `${s}秒`
+  if (s < 60) return t('{n}秒', { n: s })
   const m = Math.floor(s / 60)
   const r = s % 60
-  return r === 0 ? `${m}分钟` : `${m}分${r}秒`
+  return r === 0 ? t('{n}分钟', { n: m }) : t('{m}分{r}秒', { m, r })
 }
 
 /** 从流式工具入参（JSON 片段，可能不完整）中抽出要展示的文本 */
@@ -3214,7 +3219,7 @@ function parseReadOutput(raw: string): { code: string; file?: string; list?: str
 function DirList({ list, file }: { list: string[]; file?: string }) {
   return (
     <div className="step-list">
-      <div className="step-list-head" title={file ?? ''}>{file ? relTarget(file) : '目录'} · {list.length} 项</div>
+      <div className="step-list-head" title={file ?? ''}>{file ? relTarget(file) : t('目录')} · {t('{n} 项', { n: list.length })}</div>
       {list.map((f) => (
         <div key={f} className="step-list-item" title={f}>{f}</div>
       ))}
@@ -3236,12 +3241,12 @@ function toolTarget(part: Part, projPath?: string): string {
   // 子任务用 description，其余工具用各自的目标字段
   let raw = str(inp.description) || str(inp.filePath) || str(inp.path) || str(inp.command) || str(inp.pattern) || str(inp.url)
   // 兜底内核生成的英文摘要 → 中文化（"4 todos"→"4条任务"、"Asked 2 questions"→"提问 2 个问题"）
-  const t = str(part.state?.title)
+  const ttl = str(part.state?.title)
   if (!raw) {
-    const asked = /^Asked (\d+) questions?$/i.exec(t)
-    if (asked) raw = `提问 ${asked[1]} 个问题`
-    else if (/todos?/i.test(t)) raw = t.replace(/\s*todos?\.?/i, '条任务').trim()
-    else raw = t
+    const asked = /^Asked (\d+) questions?$/i.exec(ttl)
+    if (asked) raw = t('提问 {n} 个问题', { n: asked[1] })
+    else if (/todos?/i.test(ttl)) raw = t('{v}条任务', { v: ttl.replace(/\s*todos?\.?/i, '').trim() })
+    else raw = ttl
   }
   const cut = raw.length > 90 ? raw.slice(0, 90) + '…' : raw
   return relTarget(cut, projPath)
@@ -3275,8 +3280,7 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
           body={<CodeBlock text={part.text} />}
         />
       )
-    }
-    return (
+    }    return (
       <Collapsible maxPx={520} forceText={part.text} live={live}>
         <Markdown text={part.text} />
       </Collapsible>
@@ -3311,10 +3315,10 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     if (tool === 'invalid') {
       // 无效调用：内核把整坨原始入参塞在 output 里（可达几十 KB），展开只给中文说明+截断原文
       const inner = str(toolIn?.tool)
-      const zh = TOOL_META[inner.toLowerCase()]?.name ?? inner
+      const zh = t(TOOL_META[inner.toLowerCase()]?.name ?? inner)
       const err = str(toolIn?.error)
       const cut = err.length > 2000 ? err.slice(0, 2000) + '\n…' : err
-      body = <CodeBlock text={inner ? `「${zh}」工具的调用参数不完整，已让模型重写参数重试。\n${cut}` : cut} />
+      body = <CodeBlock text={inner ? t('「{name}」工具的调用参数不完整，已让模型重写参数重试。', { name: zh }) + '\n' + cut : cut} />
     } else if (rawOut && tool === 'read') {
       const parsed = parseReadOutput(rawOut)
       body = parsed?.list ? <DirList list={parsed.list} file={parsed.file} /> : parsed ? <CodeBlock text={parsed.code} file={parsed.file} /> : <CodeBlock text={rawOut} />
@@ -3367,27 +3371,27 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
 /** 工具中文标签 → 进行时文案（running 状态下跟在名字后面的动词） */
 function doingLabel(name: string): string {
   switch (name) {
-    case '思考': return '正在思考'
-    case '读取': return '正在读取'
-    case '写入': case '编辑': case '应用补丁': return '正在写入'
-    case '查找文件': case '搜索内容': case '代码搜索': return '正在搜索'
-    case '终端': case '执行': return '正在执行'
-    case '抓取网页': case '网络搜索': return '正在查询'
-    case '子任务': return '正在执行子任务'
-    case '待办清单': return '正在整理任务'
-    case '提问': return '等待回答'
+    case '思考': return t('正在思考')
+    case '读取': return t('正在读取')
+    case '写入': case '编辑': case '应用补丁': return t('正在写入')
+    case '查找文件': case '搜索内容': case '代码搜索': return t('正在搜索')
+    case '终端': case '执行': return t('正在执行')
+    case '抓取网页': case '网络搜索': return t('正在查询')
+    case '子任务': return t('正在执行子任务')
+    case '待办清单': return t('正在整理任务')
+    case '提问': return t('等待回答')
     // 桌面控制家族：running 时跟的操作动词
-    case '写入剪贴板': return '正在放剪贴板'
-    case '查应用进程': return '正在查进程'
-    case '窗口列表': case '前台窗口': return '正在查看窗口'
-    case '控件树': return '正在读取控件树'
-    case '点击控件': return '正在点击'
-    case '写入控件文本': return '正在写入'
-    case '聚焦控件': case '聚焦窗口': return '正在聚焦'
-    case '发送按键': return '正在按键'
-    case '粘贴': return '正在粘贴'
-    case '读取输入框': return '正在核对输入框'
-    default: return '进行中'
+    case '写入剪贴板': return t('正在放剪贴板')
+    case '查应用进程': return t('正在查进程')
+    case '窗口列表': case '前台窗口': return t('正在查看窗口')
+    case '控件树': return t('正在读取控件树')
+    case '点击控件': return t('正在点击')
+    case '写入控件文本': return t('正在写入')
+    case '聚焦控件': case '聚焦窗口': return t('正在聚焦')
+    case '发送按键': return t('正在按键')
+    case '粘贴': return t('正在粘贴')
+    case '读取输入框': return t('正在核对输入框')
+    default: return t('进行中')
   }
 }
 
@@ -3435,13 +3439,13 @@ function StepLine({
         onClick={() => expandable && setOpen((v) => !v)}
       >
                 <span className="step-icon">{running && spin ? <LoaderCircle size={13} className="spin" /> : icon}</span>
-        <span className="step-name">{name}</span>
+        <span className="step-name">{t(name)}</span>
         {running && <span className="step-doing">{doingLabel(name)}</span>}
         {target && (
           <span className="step-target" title={target}>
-            <span className="step-target-text">{target}</span>
+            <span className="step-target-text">{t(target)}</span>
             {stats && (stats.additions > 0 || stats.deletions > 0) && (
-              <span className="step-stat" title={`新增 ${stats.additions} 行 · 删除 ${stats.deletions} 行`}>
+              <span className="step-stat" title={t('新增 {a} 行 · 删除 {b} 行', { a: stats.additions, b: stats.deletions })}>
                 {stats.additions > 0 && <span className="d-add">+{stats.additions}</span>}
                 {stats.deletions > 0 && <span className="d-del">-{stats.deletions}</span>}
               </span>
