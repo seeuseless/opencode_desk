@@ -653,7 +653,6 @@ export default function App() {
             refreshSignal={schedTick}
             onTaskSessionCreated={showScheduleSessionInSidebar}
             onNotice={setNotice}
-            onClose={toChat}
           />
         ) : (
         /* 模型清单走 chatProviders()：平台「内置模型」固定排最前，用户自建提供商接在后面 */

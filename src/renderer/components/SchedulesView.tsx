@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { GripVertical, LoaderCircle, Pencil, Play, Plus, Trash2, X } from 'lucide-react'
+import { GripVertical, LoaderCircle, Pencil, Play, Plus, Trash2 } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
@@ -30,8 +30,6 @@ interface Props {
   onTaskSessionCreated: () => void
   /** 保存 / 执行 / 删除失败时弹全局提示 */
   onNotice: (msg: string) => void
-  /** 关闭列表页回对话 */
-  onClose: () => void
 }
 
 /**
@@ -46,6 +44,8 @@ export function SchedulesView(p: Props) {
   const [editing, setEditing] = useState<ScheduleTask | 'new' | null>(null)
   /** 「立即执行」进行中的任务 id（按钮置灰防连点） */
   const [running, setRunning] = useState('')
+  /** 待删除任务：删除前二次确认 */
+  const [confirmDel, setConfirmDel] = useState<ScheduleTask | null>(null)
   /** 只接受最后一次拖拽响应，避免较慢的旧请求覆盖新顺序 */
   const reorderSeq = useRef(0)
 
@@ -109,9 +109,6 @@ export function SchedulesView(p: Props) {
             <Plus size={14} />
             新建计划任务
           </button>
-          <button className="icon-btn" title="关闭" onClick={p.onClose}>
-            <X size={17} />
-          </button>
         </div>
         <div className="spage-body">
           {tasks.length === 0 ? (
@@ -157,7 +154,7 @@ export function SchedulesView(p: Props) {
                   <button
                     className="icon-btn danger"
                     title="删除计划任务（已产出的会话保留）"
-                    onClick={() => void remove(t)}
+                    onClick={() => setConfirmDel(t)}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -179,6 +176,29 @@ export function SchedulesView(p: Props) {
           onClose={() => setEditing(null)}
           onNotice={p.onNotice}
         />
+      )}
+
+      {confirmDel && (
+        <Modal title="删除计划任务" onClose={() => setConfirmDel(null)}>
+          <p className="confirm-text">
+            确定删除「{confirmDel.name}」吗？删除后不再自动执行，已产出的会话会保留。
+          </p>
+          <div className="actions">
+            <button className="ghost" onClick={() => setConfirmDel(null)}>
+              取消
+            </button>
+            <button
+              className="primary danger-btn"
+              onClick={() => {
+                const target = confirmDel
+                setConfirmDel(null)
+                void remove(target)
+              }}
+            >
+              删除
+            </button>
+          </div>
+        </Modal>
       )}
     </>
   )
