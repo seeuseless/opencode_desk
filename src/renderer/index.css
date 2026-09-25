@@ -1184,9 +1184,11 @@ input, textarea { font: inherit; }
   border-radius: 3px; padding: 0 1px;
 }
 .pp-empty { padding: 10px 8px; font-size: 12.5px; color: var(--fg2); }
+/* 滚动只发生在最外层 menu-panel（340px 封顶）：列表自身不再限高，
+   否则搜索框 + 列表超出面板高度时内外各出一根滚动条 */
 .pp-list {
   display: flex; flex-direction: column; gap: 2px;
-  min-width: 240px; max-width: 300px; max-height: 328px; overflow-y: auto;
+  min-width: 240px; max-width: 300px;
 }
 .pp-item {
   display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;

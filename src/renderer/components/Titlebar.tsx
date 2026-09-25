@@ -103,7 +103,12 @@ export function Titlebar({
             <Maximize2 size={14} />
           )}
         </button>
-        <button className="icon-btn tb-btn" title="隐藏到托盘" onClick={() => window.qingniao.winClose()}>
+        {/* mac 驻留在 Dock（点 Dock 图标唤回），没有「托盘」概念，文案按平台区分 */}
+        <button
+          className="icon-btn tb-btn"
+          title={navigator.userAgent.includes('Mac') ? '隐藏窗口（点 Dock 图标恢复）' : '隐藏到托盘'}
+          onClick={() => window.qingniao.winClose()}
+        >
           <X size={15} />
         </button>
       </div>

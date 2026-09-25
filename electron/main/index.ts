@@ -1208,6 +1208,9 @@ function showMainWin(): void {
 }
 
 function createTray(): void {
+  // macOS 不建托盘：NSStatusItem 按 icon.png 原始尺寸渲染，1024px 图标在菜单栏占满整行；
+  // mac 的驻留恢复走 Dock——关窗隐藏后点 Dock 图标由 activate 事件唤回（见 app.whenReady 尾部）
+  if (process.platform === 'darwin') return
   if (tray) return
   const iconPath = app.isPackaged
     ? join(process.resourcesPath, 'icon.png')
@@ -1328,6 +1331,9 @@ app.whenReady().then(async () => {
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    // mac 没有托盘：红 X 隐藏（hide 未销毁）的窗口靠点 Dock 图标唤回——窗口还在列表里，
+    // 只按「数量为 0」重建的话隐藏窗口永远出不来
+    else showMainWin()
   })
 })
 
