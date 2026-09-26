@@ -188,7 +188,11 @@ input, textarea { font: inherit; }
 .col { width: 100%; max-width: var(--chat-content-width, 820px); margin: 0 auto; }
 
 .shell { display: flex; height: 100vh; }
-.app { flex: 1; display: flex; min-height: 0; background: var(--side-bg); }
+/* min-width:0 必须有：.app 是 .shell 的弹性子项，默认 min-width:auto 会被内容的固有最小宽度
+  （宽表格、长 URL 标题、超长终端命令这类不可断行内容）顶宽——整列被推出窗口右缘，
+  标题栏窗口按钮与输入行右侧图标全部被裁掉（拖窄窗口时必现）。归零后布局恒等于窗口宽，
+  超宽内容由 .msgs / 表格自身横向滚动消化 */
+.app { flex: 1; display: flex; min-height: 0; min-width: 0; background: var(--side-bg); }
 /* 右列：标题栏 + 内容区（侧栏独占左侧全高，一直顶到窗口最上面）。
    右列整体做成悬浮卡片：与窗口边缘留出缝隙露出底色，配圆角更有层次 */
 .rightcol {
@@ -648,8 +652,11 @@ input, textarea { font: inherit; }
 .md h3, .md h4 { font-size: 1.08em; }
 .md a { color: var(--accent); }
 .md blockquote { background: var(--bg3); border-radius: 8px; padding: 7px 12px; margin: 7px 0; color: var(--fg2); }
-.md table { border-collapse: collapse; margin: 9px 0; font-size: 13px; display: block; overflow-x: auto; }
-.md th, .md td { padding: 6px 12px; text-align: left; }
+.md table { border-collapse: collapse; margin: 9px 0; font-size: 13px; display: block; overflow-x: auto; max-width: 100%; }
+/* 单元格必须可断行：表格的固有最小宽度默认是最宽一行撑出来的，窄窗口时会把整个布局顶宽，
+   右上窗口按钮与输入行右侧图标全被挤出可视区。可断行后表格 min-content 收敛为单列宽，
+   超宽内容走表格自身的横向滚动（display:block + overflow-x:auto） */
+.md th, .md td { padding: 6px 12px; text-align: left; word-break: break-word; }
 .md th { background: var(--bg3); font-weight: 600; }
 .md tr:nth-child(even) td { background: color-mix(in srgb, var(--bg3) 55%, transparent); }
 .md hr { height: 1px; background: var(--bg3); border: none; margin: 12px 0; }

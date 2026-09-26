@@ -376,6 +376,17 @@ export function ChatView(p: Props) {
   /** 面板是否可见：只有用户点标题栏按钮/点对话里的链接/进浏览模式才会置 true */
   const [panelOpen, setPanelOpen] = useState(false)
   const [browserMax, setBrowserMax] = useState(false)
+  /**
+   * 窗口整体宽度是否够宽（≥1308）。窄于此值时输入行的模型名只显示 / 后的短名：
+   * 全名（provider/model 长串）会把输入行右侧的思考、发送挤到窗口边缘外，
+   * 短名与代码模式/浏览器面板同款规则（shortModelName）。
+   */
+  const [winWide, setWinWide] = useState(() => window.innerWidth >= 1308)
+  useEffect(() => {
+    const onResize = () => setWinWide(window.innerWidth >= 1308)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   /** 放大时右下角浮动聊天卡是否展开 */
   const [floatOpen, setFloatOpen] = useState(false)
   /** 全屏时彻底隐藏 AI 对话：浮动卡收起 + 右下角气泡一并消失（打游戏等完全不需要对话的场景） */
@@ -2178,8 +2189,8 @@ export function ChatView(p: Props) {
             <ModelPicker
               groups={groups}
               value={p.model}
-              // 内置浏览器面板打开时右栏变窄：与代码模式一样只显示 / 后面的模型短名
-              codeMode={p.codeMode || panelOpen}
+              // 窄窗口（<1308）/内置浏览器面板打开/代码模式：都只显示 / 后面的模型短名
+              codeMode={p.codeMode || panelOpen || !winWide}
               onChange={p.onModelChange}
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
