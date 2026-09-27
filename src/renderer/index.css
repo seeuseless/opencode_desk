@@ -1356,6 +1356,8 @@ input, textarea { font: inherit; }
 .setbody section { margin-bottom: 38px; }
 .setbody h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; margin-bottom: 14px; }
 .sub-title { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--fg); }
+/* 同一 section 内的第二个及以后的设置项：与上一项内容拉开距离，不挤在一起 */
+.sub-title:not(:first-of-type) { margin-top: 30px; }
 .chat-width-setting { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 .chat-width-setting input { flex: 1; min-width: 0; accent-color: var(--accent); }
 .chat-width-setting span { flex: none; min-width: 52px; text-align: right; color: var(--fg2); font-size: 12px; }

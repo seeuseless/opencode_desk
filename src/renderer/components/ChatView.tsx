@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, FoldVertical, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
@@ -53,8 +53,8 @@ interface Props {
   browserMaxSignal: number
   /** 纯写代码模式：关闭并隐藏内置浏览器、权限与思考入口 */
   codeMode: boolean
-  /** 是否显示「压缩上下文」手动按钮（设置 → 通用里开，默认关；自动压缩始终由内核负责） */
-  showCompactBtn?: boolean
+  /** 是否显示左侧「-」用户消息导航锚点条（设置 → 通用里开，默认关；上下文压缩由内核自动做） */
+  showUserAnchors?: boolean
   /** 上报浏览器面板开合与放大状态（标题栏浏览器按钮与最大化按钮据此决定行为与图标） */
   onBrowserUi: (s: { open: boolean; max: boolean }) => void
   /** 上报会话标题（首条用户信息；计划会话带标记与日期），由 App 转发到标题栏绘制 */
@@ -294,8 +294,6 @@ export function ChatView(p: Props) {
   const [queues, setQueues] = useState<Record<string, string[]>>({})
   const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
   const [qCollapsed, setQCollapsed] = useState(false)
-  /** 正在触发上下文压缩（按钮转圈防重复点） */
-  const [compacting, setCompacting] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
   // 滚轮上滑后这段时间内屏蔽「重新吸底」，防程序化滚动事件把用户位置抢回去
@@ -923,22 +921,6 @@ export function ChatView(p: Props) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(t('停止失败：') + msg.slice(0, 120))
     })
-  }
-
-  /** 手动触发上下文压缩（内核官方 compaction 端点）：历史对话摘要化，释放上下文窗口。
-   *  摘要由内核跑一轮模型调用生成，完成后 session.idle 会自动刷新历史视图，无需这边再拉。 */
-  async function compactContext() {
-    const sid = p.sessionId
-    if (!sid || busy || compacting) return
-    setCompacting(true)
-    try {
-      await oc.summarize(sid, dirRef.current)
-      setNotice(t('正在压缩上下文：历史对话将摘要化，完成后即可继续聊'))
-    } catch (e) {
-      setError(t('压缩失败：') + (e instanceof Error ? e.message : String(e)).slice(0, 120))
-    } finally {
-      setCompacting(false)
-    }
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
@@ -2073,8 +2055,8 @@ export function ChatView(p: Props) {
       </div>
 
       {/* 左侧用户消息锚点条：钉在对话区最左缘（侧栏菜单右侧），垂直居中、高度固定不随内容撑开。
-          图标紧凑排列（间距小），点击立即定位到该条用户消息 */}
-      {userAnchors.length > 1 && (
+          图标紧凑排列（间距小），点击立即定位到该条用户消息。设置 → 通用里开启才显示 */}
+      {p.showUserAnchors && userAnchors.length > 1 && (
         <div className="msg-anchors" aria-label={t('用户消息跳转')}>
           <div className="ma-dots">
             {userAnchors.map((a) => (
@@ -2254,18 +2236,6 @@ export function ChatView(p: Props) {
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
                 {terms.filter((x) => x.status === 'running').length}
-              </button>
-            )}
-            {/* 上下文压缩（内核官方 compaction）：长对话聊不动了点一下，历史摘要化释放窗口。
-                设置 → 通用里开启才显示；有会话且空闲才可点；摘要由内核跑一轮生成，完成后历史视图自动刷新 */}
-            {p.showCompactBtn && p.sessionId && !busy && (
-              <button
-                className="icon-btn"
-                title={t('压缩上下文：把历史对话摘要化，释放上下文窗口（长对话卡顿时用）')}
-                disabled={compacting}
-                onClick={() => void compactContext()}
-              >
-                {compacting ? <LoaderCircle size={14} className="spin" /> : <FoldVertical size={14} />}
               </button>
             )}
             {!p.codeMode && !browserMax && (

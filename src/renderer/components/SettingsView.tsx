@@ -71,9 +71,9 @@ interface Props {
   onNormalChatWidth: (width: number) => void
   projectSortMode: ProjectSortMode
   onProjectSortMode: (mode: ProjectSortMode) => void
-  /** 对话输入行是否显示「压缩上下文」按钮（默认不显示，通用页可开） */
-  compactBtn: boolean
-  onCompactBtn: (v: boolean) => void
+  /** 对话左侧「-」用户消息导航锚点条显隐（默认不显示，通用页可开） */
+  userAnchors: boolean
+  onUserAnchors: (v: boolean) => void
   /** 界面语言（App 持有，切换后整棵树重渲染） */
   lang: Lang
   onLang: (l: Lang) => void
@@ -909,13 +909,13 @@ export function SettingsView(p: Props) {
               {t('恢复默认')}
             </button>
           </div>
-          <h4 className="sub-title">{t('上下文压缩按钮')}</h4>
+          <h4 className="sub-title">{t('消息导航锚点')}</h4>
           <p className="sec-tip">
-            {t('在对话输入框旁显示「压缩上下文」按钮：点击把当前会话的历史对话摘要化，释放上下文窗口。上下文快满时内核也会自动压缩，此按钮只是手动入口。默认关闭。')}
+            {t('对话内容左侧显示一列「-」定位图标，每条用户消息对应一个，点击立即跳到那条消息；适合长对话快速回看。默认关闭。')}
           </p>
           <div className="switch-row">
-            <Switch checked={p.compactBtn} onChange={p.onCompactBtn} />
-            <span>{p.compactBtn ? t('已启用') : t('未启用')}</span>
+            <Switch checked={p.userAnchors} onChange={p.onUserAnchors} />
+            <span>{p.userAnchors ? t('已启用') : t('未启用')}</span>
           </div>
           <h4 className="sub-title">{t('项目文件夹排序')}</h4>
           <p className="sec-tip">{t('默认按最近任务先后排列，也可以固定顺序后手动调整。')}</p>
