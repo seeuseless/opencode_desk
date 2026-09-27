@@ -662,6 +662,44 @@ input, textarea { font: inherit; }
 }
 .retrybtn:hover { color: var(--accent); }
 
+/* 本地服务浮层（底部按钮点击向上弹出）：标题 + 每行一行，可点开、可一键停止 */
+.menu-panel.svc {
+  min-width: 260px; max-width: 340px;
+  padding: 10px 12px; gap: 6px;
+}
+.svc-head {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--fg2); font-size: 11.5px; font-weight: 600; letter-spacing: .02em;
+}
+.svc-head svg { color: var(--accent); }
+.svc-rows { display: flex; flex-direction: column; gap: 2px; }
+.svc-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; margin: 0 -6px; border-radius: 8px;
+  transition: background .12s;
+}
+.svc-row:hover { background: var(--bg3); }
+.svc-url {
+  color: var(--accent); font-weight: 600; font-size: 12.5px;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  cursor: pointer; flex: none;
+}
+.svc-url:hover { text-decoration: underline; }
+.svc-name {
+  flex: 1; min-width: 0; text-align: right;
+  color: var(--fg2); opacity: .65; font-size: 11.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.svc-row .icon-btn { flex: none; width: 18px; height: 18px; color: var(--fg2); }
+.svc-row .icon-btn:hover { color: var(--err); }
+/* 浅色主题：浮层里图标/文字一律灰调（accent 链接、红 hover 在浅底上太扎眼） */
+:root[data-theme='light'] .menu-panel.svc .svc-head svg,
+:root[data-theme='light'] .menu-panel.svc .svc-url,
+:root[data-theme='light'] .menu-panel.svc .svc-name,
+:root[data-theme='light'] .menu-panel.svc .icon-btn { color: var(--fg2); background: none; }
+:root[data-theme='light'] .menu-panel.svc .svc-url:hover { color: var(--fg); }
+:root[data-theme='light'] .menu-panel.svc .icon-btn:hover { color: var(--fg); }
+
 /* Markdown 正文（react-markdown 渲染，配色走主题变量） */
 .md { line-height: 1.75; }
 .md > *:first-child { margin-top: 0; }

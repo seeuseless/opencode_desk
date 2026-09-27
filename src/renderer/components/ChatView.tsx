@@ -5,19 +5,19 @@ import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
-  Square, Star, Terminal, Trash2, Wrench, X
+  Square, Star, Terminal, Trash2, Wrench, X, Server
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
-import { ProjectPicker, AccessPicker } from './ProjectPicker'
+import { ProjectPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
 import type { TitleInfo } from './Titlebar'
-import type { AccessLevel, Project } from './Sidebar'
+import type { Project } from './Sidebar'
 
 interface Props {
   project?: Project
@@ -43,10 +43,6 @@ interface Props {
   onPickDir: () => void
   /** 切换当前激活项目（点击左侧项目下拉中的某项） */
   onSwitchProject: (id: string) => void
-  /** 当前项目的访问权限档位（项目下拉右栏展示与切换） */
-  access: AccessLevel
-  /** 拨权限档位；切到「完全控制」的二次确认由 App 负责 */
-  onAccess: (level: AccessLevel) => void
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
@@ -99,6 +95,9 @@ function samePage(a: string | undefined, b: string): boolean {
 /** 任务中断后的提示条：不自动重发消息，交还用户点「重试」手动续跑 */
 /** 自动重试提示文案：续跑上一轮的半截任务，不必重复原文 */
 const RETRY_CONTINUE = '继续'
+/** 自动重试参数：每 10 秒自动续跑一次，最多 10 次；断网暂停、网络恢复自动续 */
+const AUTO_RETRY_DELAY = 10_000
+const AUTO_RETRY_MAX = 10
 
 /** 会话中断的识别：助手消息自带错误（非用户主动中止），或回合结束时还残留 running/pending 的工具调用（半截截断）。
  *  running/pending 工具 = 任务没真正跑完（即便已有半截文本，工具还在排队/执行中，回合未结束）；
@@ -234,15 +233,81 @@ function humanizeError(raw: string): string {
   // 图生图/文生图模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-image-* 提示走 /v1/images/generations）
   if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return t('该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。')
   if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
+  // 实测高频断流根因：上游 TLS 证书校验失败（unknown certificate verification error）。
+  // 常见于代理/中间人拦截或系统证书过期，重试无意义，应提示用户更换模型或检查网络代理。
+  if (/certificate|self[- ]?signed|TLS|SSL|verify/i.test(raw)) return t('模型端点 TLS 证书校验失败（可能被代理拦截或证书过期），请检查网络代理或更换模型。')
+  if (/aborted|interrupt|mid[- ]stream|Unexpected end|ECONNRESET|socket hang up/i.test(raw)) return t('回复被中断（上游连接断开），内容可能不完整，可点重试继续。')
   return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
 }
 
 /** 助手消息自带的失败原因：session.error 事件偶尔漏推，这是「这轮为什么空了」的唯一兜底展示 */
 function msgErrorText(m: MessageView): string {
   const e = (m.info as unknown as { error?: { name?: string; data?: { message?: string }; message?: string } }).error
-  if (!e || e.name === 'MessageAbortedError') return ''
+  if (!e) return ''
+  // MessageAbortedError 以前被无条件静默，但这正是「AI 吐了半截就停」最常见的样子：
+  // 上游断流 / 生成被迫中止时内核统一标成 Aborted。用户手动停止走的是另一条路径
+  // （stopCurrent 已取消重试并打标），这里把原因显示出来，让「突然停住」不再无声无息。
+  if (e.name === 'MessageAbortedError') return t('任务被中止（可能是上游断流或请求被终止）')
   return humanizeError(e.data?.message ?? e.message ?? e.name ?? '')
 }
+
+/**
+ * 回合收尾对账：拉一次 /message，把「只写进内核日志、没走事件」的失败补到界面上。
+ *
+ * 背景（2026-09-27 实测）：内核把大量断流/上游错误只写进 opencode.log 的
+ * `message=process error=`（unknown certificate verification / Rate limit exceeded /
+ * Bad Request / Aborted 等），**session.error 事件经常不发**。于是界面表现为
+ * 「AI 吐了半截就静默停住」——什么都没有，也没有重试入口。
+ *
+ * 这里做的两件事，都只在「错过了事件」时兜底，不重复事件已经处理过的路径：
+ *  1. 末尾助手消息带 error（msgErrorText 非空）→ 补一条红色错误条；
+ *  2. 末尾是中断风格（空壳 / 残留半截工具 / 非用户主动中止）→ 补一次中断重试提示。
+ * dir 若传 undefined（非当前会话 / 手机会话）就交给调用方已经定位好的实例目录。
+ */
+function turnErrorOf(list: MessageView[]): { message?: string; aborted?: 'retry' } | null {
+  const last = list[list.length - 1]
+  if (!last || last.info.role !== 'assistant') return null
+  const em = msgErrorText(last)
+  if (em) return { message: em }
+  if (isAbortedAssistant(last) || isEmptyTurn(last)) return { aborted: 'retry' }
+  return null
+}
+
+/**
+ * 从会话消息的终端工具命令里提取端口号（--port 9001 / localhost:9001 / :3000 / PORT=9001）。
+ * 「本地服务」卡片的次级锚点：不依赖 pty pid 父链（后台存活的进程会脱离终端），
+ * 对话里点过名的端口只要在 LISTENING 就显示——「当前对话启动了什么服务」最直接的证据。
+ */
+const CMD_PORT_RE = /--port[=\s]+(\d{2,5})|localhost:(\d{2,5})|127\.0\.0\.1:(\d{2,5})|\bPORT\s*[=:]\s*(\d{2,5})|listen.*?\b(\d{4,5})\b|\b(\d{4,5})\b\s*端口|(?:端口|port)\s*(\d{4,5})\b/gi
+/** 连接串（postgresql://…:5432/db 等）整段剥离：连接数据库 ≠ 启动服务，端口不当 hint（2026-09-27 误显示 5432 实测） */
+const CONN_STR_RE = /\b[a-z][a-z0-9+.-]*:\/\/\S+/gi
+/** 从一段命令文本里提取候选端口（排除系统端口与常见数据库端口），并入 into */
+function extractPortsText(text: string, into: Set<number>): void {
+  if (!text) return
+  const cleaned = text.replace(CONN_STR_RE, ' ')
+  CMD_PORT_RE.lastIndex = 0
+  let g: RegExpExecArray | null
+  while ((g = CMD_PORT_RE.exec(cleaned))) {
+    const n = Number(g[1] ?? g[2] ?? g[3] ?? g[4] ?? g[5] ?? g[6] ?? g[7])
+    if (n >= 1024 && n < 65536 && !SYSTEM_PORT_BLOCK.has(n)) into.add(n)
+    if (into.size >= 20) return
+  }
+}
+/** 从会话消息的终端工具命令里提取端口号集合 */
+function extractPortsFromMsgs(list: MessageView[]): number[] {
+  const found = new Set<number>()
+  for (const m of list) {
+    for (const pt of m.parts) {
+      const tool = (pt.tool ?? '').toLowerCase()
+      if (pt.type !== 'tool' || !(tool === 'bash' || tool === 'shell' || tool === 'execute')) continue
+      extractPortsText(String(pt.state?.input?.command ?? ''), found)
+      if (found.size >= 20) return [...found]
+    }
+  }
+  return [...found]
+}
+/** 排除的端口：系统/敏感 + 常见数据库等"连接对象"端口（本机常驻服务，不是当前任务启动的） */
+const SYSTEM_PORT_BLOCK = new Set([135, 139, 445, 1900, 3702, 5040, 5353, 5355, 5357, 7680, 1433, 1521, 3306, 5432, 6379, 9092, 11211, 27017])
 
 export function ChatView(p: Props) {
   const [msgs, setMsgs] = useState<MessageView[]>([])
@@ -352,6 +417,19 @@ export function ChatView(p: Props) {
   // 内核管理的终端（pty）：有 running 的才在项目名旁显示入口
   const [terms, setTerms] = useState<PtySession[]>([])
   const [showTerms, setShowTerms] = useState(false)
+  /** 本地服务浮层开合 + 点外关闭锚点 */
+  const [svcOpen, setSvcOpen] = useState(false)
+  const svcWrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!svcOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!svcWrapRef.current?.contains(e.target as Node)) setSvcOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [svcOpen])
+  /** 本机监听端口的服务（AI 起的 dev server / 后端等）：聊天窗口展示 + 一键停止 */
+  const [svcs, setSvcs] = useState<{ port: number; pid: number; name: string }[]>([])
   const asksRef = useRef<QuestionAsk[]>([])
   asksRef.current = asks
   /** 正在提交应答的请求 id：轮询对账时跳过，防止卡片闪回 */
@@ -529,16 +607,6 @@ export function ChatView(p: Props) {
   useEffect(() => {
     if (p.codeMode) closeBrowserPanel()
   }, [p.codeMode])
-
-  /** 浏览模式：面板放大全屏 + 右下角浮动对话卡，用户自己在地址栏输网址 */
-  function openBrowseMode() {
-    if (p.codeMode) return
-    setPanelBorn(true)
-    setPanelOpen(true)
-    setBrowserMax(true)
-    setFloatOpen(true)
-    setChatHidden(false)
-  }
 
   /**
    * 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关）。
@@ -758,6 +826,10 @@ export function ChatView(p: Props) {
   const toolFails = useRef<Map<string, { n: number; sig: string }>>(new Map())
   /** 已被熔断停下的会话：抑制自动重试提示，直到用户重新发消息 */
   const halted = useRef<Set<string>>(new Set())
+  /** 用户手动停止（点停止按钮）的会话：收尾对账不得自动续跑——他是亲手要停的 */
+  const userStopped = useRef<Set<string>>(new Set())
+  /** 断网时被暂停的自动重试会话：恢复联网后逐个重新排期 */
+  const retryWaiters = useRef<Set<string>>(new Set())
   /** onRefreshSessions 的最新引用（事件回调只注册一次，闭包里的 props 会过期） */
   const onRefreshRef = useRef(p.onRefreshSessions)
   onRefreshRef.current = p.onRefreshSessions
@@ -824,10 +896,9 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后登记一个「中断」状态：
-   * 顶部通知条显示「任务已中断」，**不自动重发消息**——续跑由用户点「重试」按钮触发。
-   * 自动重试会替用户重复发一条消息（或追加「继续」），既可能打乱对话、又未必是用户想要的，
-   * 所以中断后只提示、交还用户决定。
+   * 任务被中断（回合报错 / 回合结束时残留半截工具调用 / 内核重启）后登记并**自动重试**：
+   * 每 10 秒自动重发「继续」让 AI 从断点接下去，最多 AUTO_RETRY_MAX 次；
+   * 断网时暂停（onLine=false 不排期），恢复联网后由 onOnline 重新拉起。次数耗尽后提示用户手动重试。
    */
   function scheduleRetry(sid: string) {
     if (!sid || navigator.onLine === false) return
@@ -835,9 +906,69 @@ export function ChatView(p: Props) {
     if (foreignSids.current.has(sid)) return
     // 已因失败熔断停下：再挂「重试」提示等于鼓励用户去撞同一堵墙
     if (halted.current.has(sid)) return
-    if (retries.current.has(sid)) return
-    retries.current.set(sid, { count: 1, timer: undefined })
+    // 用户手动停止：刚叫停就自动续跑很突兀，交还用户自己决定
+    if (userStopped.current.has(sid)) return
+    // 已有计时器等它触发即可；count 从上次中断处保留续加（不能先 cancel，否则计数清零永远到不了上限）
+    const cur = retries.current.get(sid)
+    if (cur?.timer != null) return
+    const count = cur?.count ?? 0
+    // 已到次数上限：停自动，等用户手动重试
+    if (count >= AUTO_RETRY_MAX) return
+    // 立即排一次 10s 后的自动重试；续跑若再次中断，收尾对账会再次 scheduleRetry → count 续加
+    const timer = window.setTimeout(() => void runAutoRetry(sid), AUTO_RETRY_DELAY)
+    retries.current.set(sid, { count, timer })
     syncRetryView()
+  }
+
+  /** 排定一次自动重试：读回历史续跑上一轮；失败/中断由收尾对账再次 scheduleRetry 形成「每 10s 一次」的循环 */
+  async function runAutoRetry(sid: string) {
+    // 定时器已触发即视为已消耗
+    const prev = retries.current.get(sid)
+    if (prev) retries.current.set(sid, { ...prev, timer: undefined })
+    syncRetryView()
+    if (!sid || navigator.onLine === false) {
+      // 断网：不重试，恢复后由 onOnline 重新排期
+      retries.current.delete(sid)
+      syncRetryView()
+      return
+    }
+    if (retries.current.get(sid)?.count! >= AUTO_RETRY_MAX) return
+    const dir = busyDir.current[sid] ?? dirRef.current
+    let list: MessageView[]
+    try {
+      list = sid === sidRef.current ? msgs : await oc.messages(sid, dir)
+    } catch {
+      scheduleRetry(sid) // 拉不到就再等下一轮
+      return
+    }
+    // 续跑后若已成功（末条助手完全产出、无 error / 无中断特征）就不再重试
+    const turnErr = turnErrorOf(list)
+    const ok = list[list.length - 1]?.info.role === 'assistant' && !turnErr
+    if (ok) {
+      cancelRetry(sid)
+      return
+    }
+    const text = continuationText(list)
+    if (!text) {
+      cancelRetry(sid)
+      return
+    }
+    // 累加次数并继续（第 10 次也照常执行，执行完才停）
+    const r = retries.current.get(sid)
+    const count = (r?.count ?? 0) + 1
+    // 发「继续」续跑：不落用户气泡，走 autoContinue 通道
+    retries.current.set(sid, { count, timer: undefined })
+    syncRetryView()
+    markBusy(sid, true, dir)
+    autoContinuePending.current = true
+    await runPrompt(text, sid, dir)
+    // 已达上限：本轮执行完即停自动，提示手动重试
+    if (count >= AUTO_RETRY_MAX) {
+      retries.current.set(sid, { count, timer: undefined })
+      syncRetryView()
+      setError(sid === sidRef.current ? t('自动重试 {n} 次仍未成功，请稍后手动重试。', { n: AUTO_RETRY_MAX }) : '')
+    }
+    // runPrompt 内部 finally 已清 busy；若又中断会再次 scheduleRetry → 下一次 10s 后重试
   }
 
   /** 重试次数耗尽后的手动重试：读回会话历史后直接续跑上一轮 */
@@ -858,8 +989,7 @@ export function ChatView(p: Props) {
       setError(t('找不到可重试的内容'))
       return
     }
-    retries.current.delete(sid)
-    syncRetryView()
+    cancelRetry(sid)
     markBusy(sid, false)
     setError('')
     // 点「重试」发出去的是**续跑指令**（多半就是「继续」），界面不该冒出一个用户气泡。
@@ -910,6 +1040,7 @@ export function ChatView(p: Props) {
     if (!sid) return
     const dir = busyDir.current[sid]
     cancelRetry(sid)
+    userStopped.current.add(sid)
     markBusy(sid, false)
     delete busyDir.current[sid]
     // 只作废属于本会话的在途记录：别的会话那一条还活着，不能一起清
@@ -1117,10 +1248,26 @@ export function ChatView(p: Props) {
         const isCurrent = idleSid === sidRef.current
         oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
           .then((list) => {
-            // 回合结束但还残留半截工具调用（写入空转、断流截断）= 中断，自动续跑；
-            // 「最后一条是空的助手消息」= 模型请求中途断了，同样给中断提示（否则界面一片静默）
+            // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
             const last = list[list.length - 1]
-            if (last && (last.info.role === 'user' || isAbortedAssistant(last) || isEmptyTurn(last))) scheduleRetry(idleSid)
+            // 末条 user + 已 idle：AI 这轮没产出任何助手消息就结束了 → 中断续跑，但不当错误提示。
+            if (last && last.info.role === 'user') {
+              if (!userStopped.current.has(idleSid)) scheduleRetry(idleSid)
+            } else {
+              const turnErr = turnErrorOf(list)
+              if (turnErr?.message) {
+                // 有明确的失败原因（含 MessageAbortedError → 上/stream 断流）：当前会话显示红色错误条。
+                // 用户手动停止的会话既不提示也不续跑——停止按钮本身就是反馈。
+                if (isCurrent && !userStopped.current.has(idleSid)) setError(turnErr.message)
+                if (!userStopped.current.has(idleSid)) scheduleRetry(idleSid)
+              } else if (turnErr?.aborted) {
+                // 半截截断 / 空壳：中断提示 + 自动续跑（用户主动停的除外）
+                if (!userStopped.current.has(idleSid)) scheduleRetry(idleSid)
+              } else if (isCurrent) {
+                // 正常完成的助手回合，清一下可能残留的旧错误提示
+                setError('')
+              }
+            }
             if (!isCurrent) return
             setTodos([])
             setMsgs(hydrate(list, shown.current, texts.current))
@@ -1144,8 +1291,16 @@ export function ChatView(p: Props) {
               // 该会话最后一条助手消息已有完整文本 → 视为已完成，清 busy
               const last = [...list].reverse().find((m) => m.info.role === 'assistant' && (m.parts.some((x) => x.type === 'text' && x.text)))
               if (last) markBusy(s, false)
-              // 重连前任务被中断（断流截断/残留半截工具调用）→ 自动续跑
-              if (isAbortedAssistant(list[list.length - 1])) scheduleRetry(s)
+              // 重连前任务被中断（断流截断/残留半截工具调用）→ 自动续跑；
+              // 若带明确错误（certificate/限流/Aborted）→ 当前会话补一条红色错误条。
+              const turnErr = turnErrorOf(list)
+              if (turnErr?.message) {
+                // 用户手动停止的会话不弹提示也不续跑
+                if (s === sidRef.current && !userStopped.current.has(s)) setError(turnErr.message)
+                if (!userStopped.current.has(s)) scheduleRetry(s)
+              } else if (turnErr?.aborted) {
+                if (!userStopped.current.has(s)) scheduleRetry(s)
+              }
             })
             .catch(() => {})
           if (s === sidRef.current) {
@@ -1189,17 +1344,17 @@ export function ChatView(p: Props) {
         const owned = !!busySetRef.current[sid]
         if (owned) markBusy(sid, false)
         const isCurrent = sid === sidRef.current
+        // 用户手动停止：不弹「被中断」也不自动续跑，停止按钮本身就是反馈
+        const stopped = userStopped.current.has(sid)
+        if (owned && !stopped) scheduleRetry(sid)
         oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
           .then((list) => {
-            const last = list[list.length - 1]
-            // session.error 到达 = 任务已失败；只要本轮仍在处理中就自动续跑（continuationText 无内容时会自行取消）
-            if (owned) scheduleRetry(sid)
             if (!isCurrent) return
             setMsgs(hydrate(list, shown.current, texts.current))
-            setError(humanizeError(pr.error?.message ?? ''))
+            if (!stopped) setError(humanizeError(pr.error?.message ?? ''))
             p.onRefreshSessions()
           })
-          .catch(() => { if (isCurrent) setError(humanizeError(pr.error?.message ?? '')) })
+          .catch(() => { if (isCurrent && !stopped) setError(humanizeError(pr.error?.message ?? '')) })
       }
     })
     return off
@@ -1438,6 +1593,11 @@ export function ChatView(p: Props) {
   useEffect(() => {
     const inflightRef = inflight
     const onOffline = () => {
+      // 记住所有中断后待重试的会话（含正在排队等 10s 的），恢复联网后再拉起
+      for (const s of retries.current.keys()) {
+        cancelRetry(s)
+        retryWaiters.current.add(s)
+      }
       const cur = inflightRef.current
       if (!cur) return
       // 断网期间的中断不走自动重试（onLine=false 时不排期），恢复联网后由下面 onOnline 重发一遍
@@ -1447,6 +1607,12 @@ export function ChatView(p: Props) {
       setError(t('网络已断开，任务自动暂停，恢复后自动执行。'))
     }
     const onOnline = () => {
+      // 恢复联网：重新为全部暂停的会话排期自动重试；满足条件的会话由 runAutoRetry 续跑
+      if (retryWaiters.current.size) {
+        const waiters = [...retryWaiters.current]
+        retryWaiters.current.clear()
+        for (const s of waiters) if (s !== inflightRef.current?.sid) scheduleRetry(s)
+      }
       const cur = inflightRef.current
       if (!cur) return
       inflightRef.current = null
@@ -1488,6 +1654,52 @@ export function ChatView(p: Props) {
   function killTerm(t: PtySession) {
     setTerms((prev) => prev.filter((x) => x.id !== t.id))
     oc.killTerminal(t.id, dirRef.current).catch(() => { /* 已退出 */ })
+  }
+
+  // 本机端口服务探测（只认当前任务关联的进程/端口）：5 秒轮询；pty 事件也触发一次
+  // terms/msgs 走 ref 同步——轮询读的是最新数据，不等 React 重渲染
+  const termsRef = useRef<PtySession[]>([])
+  termsRef.current = terms
+  const msgsRef = useRef<MessageView[]>([])
+  msgsRef.current = msgs
+  useEffect(() => {
+    let alive = true
+    const sync = async () => {
+      const runTerms = termsRef.current.filter((x) => x.status === 'running')
+      const pids = runTerms.filter((x): x is PtySession & { pid: number } => typeof x.pid === 'number').map((x) => x.pid)
+      // 会话终端命令里点过名的端口：pty pid 关联失效（后台存活）时的兜底锚点
+      const hints = new Set(extractPortsFromMsgs(msgsRef.current))
+      // 终端自身的启动命令（pty command/args）也提取端口
+      for (const tm of runTerms) extractPortsText([tm.command, ...(tm.args ?? [])].join(' '), hints)
+      if (!pids.length && !hints.size) {
+        if (alive) setSvcs([])
+        return
+      }
+      try {
+        const list = await window.qingniao.netListeners(pids, [...hints])
+        if (alive) setSvcs(Array.isArray(list) ? list : [])
+      } catch { /* 主进程瞬时不可达 */ }
+    }
+    const t = window.setInterval(sync, 5000)
+    const off = window.qingniao.onEvent((raw) => {
+      const e = raw as { type: string }
+      if (e.type === 'pty.created' || e.type === 'pty.updated' || e.type === 'pty.exited' || e.type === 'pty.deleted') sync()
+    })
+    sync()
+    return () => {
+      alive = false
+      clearInterval(t)
+      off()
+    }
+  }, [])
+
+  /** 停止端口服务：按 pid 杀进程树；乐观移除，失败提示（下轮轮询会纠偏回来） */
+  async function stopSvc(s: { port: number; pid: number; name: string }) {
+    setSvcs((prev) => prev.filter((x) => x.pid !== s.pid))
+    const err = await window.qingniao.netKill(s.pid).catch((e) => String(e))
+    if (err) {
+      setError(t('停止 {name}（端口 {port}）失败：{err}', { name: s.name, port: s.port, err: String(err).slice(0, 100) }))
+    }
   }
 
   /** 回形针：弹系统对话框选图片/视频，追加进待发送附件条 */
@@ -1612,6 +1824,7 @@ export function ChatView(p: Props) {
     if (sid) {
       halted.current.delete(sid)
       toolFails.current.delete(sid)
+      userStopped.current.delete(sid)
     }
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
@@ -1784,11 +1997,16 @@ export function ChatView(p: Props) {
           const list = await oc.messages(sid, dir)
           setMsgs(hydrate(list, shown.current, texts.current))
           startTicker()
-          // 请求回来了、但最后一轮是条空壳助手消息（模型响应中途断掉）：内核不会报错、
-          // 也没有 idle 之外任何信号。这里补一次「中断」提示，给用户一个重试入口——
-          // 否则界面上只会看到 AI「突然就结束了」，既没原因也没法接着跑。
-          const last = list[list.length - 1]
-          if (last && isEmptyTurn(last)) scheduleRetry(sid)
+          // 回合对账：把「请求返回了、但最后一轮实际失败/被截断而**没走事件**」的情况补到界面。
+          // 例：内核把 unknown certificate verification / Rate limit exceeded 只落进 opencode.log，
+          // 没有 session.error 事件 → 这里读到 info.error 就补红色错误条；空壳/半截则补中断重试。
+          const turnErr = turnErrorOf(list)
+          if (turnErr?.message) {
+            setError(turnErr.message)
+            scheduleRetry(sid)
+          } else if (turnErr?.aborted) {
+            scheduleRetry(sid)
+          }
         } catch { /* 保留已渲染内容 */ }
       }
     }
@@ -2140,9 +2358,13 @@ export function ChatView(p: Props) {
         {retryState && (
           <div className="notify retry">
             <AlertCircle size={13} />
-            <span>{t('任务已中断')}</span>
-            <button className="retrybtn" onClick={() => void retryNow()} title={t('让 AI 接着处理')}>
-              <RotateCw size={13} /> {t('重试')}
+            <span>
+              {retryState.pending
+                ? t('任务已中断，正在自动重试（{n}/10），{s}s 后继续…', { n: Math.min(retryState.count + 1, 10), s: Math.ceil(AUTO_RETRY_DELAY / 1000) })
+                : t('任务已中断，自动重试已完成（{n}/10）。', { n: Math.min(retryState.count, 10) })}
+            </span>
+            <button className="retrybtn" onClick={() => void retryNow()} title={t('立即重试')}>
+              <RotateCw size={13} /> {t('立即重试')}
             </button>
             <button className="icon-btn" title={t('关闭')} onClick={() => cancelRetry(p.sessionId)}>
               <X size={13} />
@@ -2228,21 +2450,48 @@ export function ChatView(p: Props) {
                 onPickDir={p.onPickDir}
               />
             )}
-            {/* 访问权限：独立一颗按钮，紧挨「选择文件夹」右侧。放这儿才能常显当前档位。
-                它是**全局**一档（对所有文件夹生效），与左边选哪个项目无关。
-                全屏浏览时不显示：浏览场景不需要切权限档位 */}
-            {!p.codeMode && !browserMax && <AccessPicker access={p.access} onAccess={p.onAccess} />}
+            {/* 访问权限档位已移到 设置 → 通用（全局配置） */}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
                 {terms.filter((x) => x.status === 'running').length}
               </button>
             )}
-            {!p.codeMode && !browserMax && (
-              <button className="icon-btn globe" title={t('浏览模式（全屏浏览器，右下角对话）')} onClick={openBrowseMode}>
-                <Globe size={14} />
-              </button>
+            {/* 本地服务：当前任务启动的端口服务（图标仅在服务存在时显示），点击向上浮层展示与停止 */}
+            {svcs.length > 0 && (
+              <div className="menu-wrap svc" ref={svcWrapRef}>
+                <button
+                  type="button"
+                  className={'icon-btn globe' + (svcOpen ? ' on' : '')}
+                  title={t('本地服务')}
+                  onClick={() => setSvcOpen((v) => !v)}
+                >
+                  <Server size={14} />
+                </button>
+                {svcOpen && (
+                  <div className="menu-panel svc up">
+                    <div className="svc-head">
+                      <Server size={12} />
+                      <span>{t('本地服务')}</span>
+                    </div>
+                    <div className="svc-rows">
+                      {svcs.map((s) => (
+                        <div key={s.pid + ':' + s.port} className="svc-row">
+                          <a className="svc-url" title={t('在浏览器打开')} onClick={() => void window.qingniao.openExternal(`http://localhost:${s.port}`)}>
+                            localhost:{s.port}
+                          </a>
+                          <span className="svc-name" title={`${s.name} · pid ${s.pid}`}>{s.name.replace(/\.(exe|cmd|bat)$/i, '')}</span>
+                          <button className="icon-btn danger" title={t('停止该服务进程')} onClick={() => void stopSvc(s)}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
+            {/* 内置浏览器入口只在右上角标题栏（2026-09-27 用户要求：底部图标冗余） */}
             <span className="spacer" />
             <ModelPicker
               groups={groups}

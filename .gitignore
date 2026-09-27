@@ -19,7 +19,8 @@ dist
 .probe/
 /.qn-verify-config
 /.qn-verify-data
-/.workbuddy
+# .workbuddy 其余内容（tmp 等）不入库；memory 按 13-16 行规则只跟踪 MEMORY.md
+.workbuddy/tmp/
 /.gitcheck.txt
 
 # computer-use-mcp 自包含副本（scripts/prepare-cu-mcp.mjs 生成，dist 前自动重建，不入库）

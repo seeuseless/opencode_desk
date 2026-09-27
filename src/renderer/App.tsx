@@ -950,8 +950,6 @@ export default function App() {
                 onHead={setHead}
                 onOpenSettings={() => openSettingsAt('providers')}
                 onPickDir={addProject}
-                access={access}
-                onAccess={setAccess}
                 onSwitchProject={(id) => {
                   if (id === activeId) return
                   setActiveId(id)
@@ -1020,6 +1018,7 @@ export default function App() {
               onProjectSortMode={changeProjectSortMode}
               userAnchors={userAnchors}
               onUserAnchors={setUserAnchors}
+              onAccess={setAccess}
               lang={lang}
               onLang={changeLang}
                projectPath={activeProject?.path ?? null}

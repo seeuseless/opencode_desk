@@ -286,6 +286,83 @@ ipcMain.handle('workspace:delete', (_e, req: { projectPath: string; filePath: st
   return true
 })
 
+/**
+ * 当前任务关联的监听端口服务，供聊天窗口展示与一键停止。
+ * 实现：netstat -ano 解析 TCP LISTENING 行 → tasklist 映射 pid → 进程名。
+ * 锚点（不跑 PowerShell——2026-09-27 用户反馈：后台反复拉起 powershell.exe 观感差）：
+ *  1. hintPorts：对话终端命令里点过名的端口（--port 9001 / localhost:9001 等），LISTENING 即纳入；
+ *  2. ptyPids：监听 pid 与运行中终端 pid 直接相等（终端 shell 自己监听的场景）。
+ * 两者都不中就绝不显示——用户自己起的服务一概不出现。
+ *
+ * 降频：相同锚点集合 3s 内直接回缓存；外部仅 netstat/tasklist 两个快速调用且 windowsHide。
+ */
+export interface PortService { port: number; pid: number; name: string }
+const SYSTEM_PORT_RE = /^(135|139|445|5040|5353|5355|5357|7680|49[0-9]{3}|1433|1521|3306|5432|6379|9092|11211|27017)$/
+let svcCache: { key: string; list: PortService[]; at: number } | null = null
+
+ipcMain.handle(
+  'net:listeners',
+  async (_e, req: { ptyPids?: number[]; hintPorts?: number[] }): Promise<PortService[]> => {
+    if (process.platform !== 'win32') return []
+    const targets = new Set(((req as { ptyPids?: number[] })?.ptyPids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 4))
+    // 会话命令里出现过的端口（--port 9001 / localhost:9001 等）：只要在 LISTENING 就纳入——
+    // 不依赖进程父子关系（后台存活/daemon 的进程会脱离终端），对话命令是最直接的证据
+    const hints = new Set(((req as { hintPorts?: number[] })?.hintPorts ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n < 65536))
+    const key = [...targets].sort((a, b) => a - b).join(',') + '|' + [...hints].sort((a, b) => a - b).join(',')
+    if (svcCache && svcCache.key === key && Date.now() - svcCache.at < 3000) return svcCache.list
+    if (!targets.size && !hints.size) {
+      svcCache = { key, list: [], at: Date.now() }
+      return []
+    }
+    const { execFile } = await import('node:child_process')
+    const run = (file: string, args: string[]) =>
+      new Promise<string>((res) => execFile(file, args, { windowsHide: true, detached: false, maxBuffer: 8 * 1024 * 1024, encoding: 'utf8' } as never, (err, stdout) => res(err ? '' : String(stdout))))
+    const out = await run('netstat', ['-ano'])
+    if (!out) return []
+    // TCP  本地地址  远程地址  状态  PID（本地地址末段冒号后是端口；IPv6 是 [::]:port）
+    const map = new Map<number, number>() // port → pid（同端口 IPv4/IPv6 取其一）
+    for (const line of out.split('\n')) {
+      const m = /^\s*TCP\s+\S+?:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i.exec(line)
+      if (!m) continue
+      const port = Number(m[1])
+      const pid = Number(m[2])
+      if (port > 0 && pid > 4 && !map.has(port)) map.set(port, pid)
+    }
+    if (!map.size) return []
+    // pid → 进程名
+    const tl = await run('tasklist', ['/FO', 'CSV', '/NH'])
+    const names = new Map<number, string>()
+    for (const line of tl.split('\n')) {
+      const m = /^"([^"]+)","(\d+)"/.exec(line.trim())
+      if (m) names.set(Number(m[2]), m[1])
+    }
+    const list: PortService[] = []
+    for (const [port, pid] of map) {
+      if (SYSTEM_PORT_RE.test(String(port))) continue
+      // 对话命令里点过名的端口（hints）或终端 shell 自己在监听（targets 直接命中）
+      if (!hints.has(port) && !targets.has(pid)) continue
+      list.push({ port, pid, name: names.get(pid) || '未知进程' })
+    }
+    const sorted = list.sort((a, b) => a.port - b.port)
+    svcCache = { key, list: sorted, at: Date.now() }
+    return sorted
+  }
+)
+
+/** 停止监听端口的服务：按 pid 终止进程树（taskkill /T /F）；失败返回原因 */
+ipcMain.handle('net:kill', async (_e, pid: number): Promise<string> => {
+  const p = Number(pid)
+  if (!Number.isInteger(p) || p <= 4) return '非法进程 id'
+  if (process.platform !== 'win32') return '暂只支持 Windows'
+  const { execFile } = await import('node:child_process')
+  return new Promise((res) => {
+    execFile('taskkill', ['/PID', String(p), '/T', '/F'], { windowsHide: true }, (err, stdout) => {
+      if (err) res('停止失败：' + (String((err as { message?: string }).message ?? err).slice(0, 120)))
+      else res('')
+    })
+  })
+})
+
 // 聊天里图片/视频的「保存」：远程地址先下载到内存，本地路径直接读文件，再弹系统另存为对话框
 // 约定同 folder:open：返回空串表示成功（用户取消也算成功），失败返回原因
 ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) => {

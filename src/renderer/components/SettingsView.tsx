@@ -12,6 +12,7 @@ import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
 import type { ProjectSortMode, SettingsTab } from '../App'
+import type { AccessLevel } from './Sidebar'
 import { CODE_STYLES, CODE_STYLE_PREVIEWS, type CodeStyle } from '../codeStyle'
 
 /**
@@ -74,6 +75,8 @@ interface Props {
   /** 对话左侧「-」用户消息导航锚点条显隐（默认不显示，通用页可开） */
   userAnchors: boolean
   onUserAnchors: (v: boolean) => void
+  /** 拨全局访问权限档位（'default'/'full'）；切「完全控制」的二次确认由 App 负责 */
+  onAccess: (level: AccessLevel) => void
   /** 界面语言（App 持有，切换后整棵树重渲染） */
   lang: Lang
   onLang: (l: Lang) => void
@@ -916,6 +919,26 @@ export function SettingsView(p: Props) {
           <div className="switch-row">
             <Switch checked={p.userAnchors} onChange={p.onUserAnchors} />
             <span>{p.userAnchors ? t('已启用') : t('未启用')}</span>
+          </div>
+          <h4 className="sub-title">{t('访问权限')}</h4>
+          <p className="sec-tip">
+            {t('AI 在本机动文件的权限档位，全局生效。默认：改动文件、执行命令前先弹窗问你；完全控制：不再询问，直接读写文件、跑命令。')}
+          </p>
+          <div className="acct-tabs">
+            <button
+              type="button"
+              className={'seg-btn' + (!fullAccess ? ' on' : '')}
+              onClick={() => p.onAccess('default')}
+            >
+              {t('默认权限')}
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (fullAccess ? ' on' : '')}
+              onClick={() => p.onAccess('full')}
+            >
+              {t('完全控制')}
+            </button>
           </div>
           <h4 className="sub-title">{t('项目文件夹排序')}</h4>
           <p className="sec-tip">{t('默认按最近任务先后排列，也可以固定顺序后手动调整。')}</p>
