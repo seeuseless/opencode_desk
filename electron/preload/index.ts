@@ -36,11 +36,6 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */
   kernelHealth: (): Promise<boolean> => ipcRenderer.invoke('kernel:health'),
-  /** 当前任务关联的监听端口服务（端口/pid/进程名）：ptyPids=运行中终端 pid，hintPorts=对话命令里出现过的端口 */
-  netListeners: (ptyPids: number[], hintPorts?: number[]): Promise<{ port: number; pid: number; name: string }[]> =>
-    ipcRenderer.invoke('net:listeners', { ptyPids, hintPorts }),
-  /** 按 pid 终止进程树（taskkill /T /F）。返回空串 = 成功，否则是失败原因 */
-  netKill: (pid: number): Promise<string> => ipcRenderer.invoke('net:kill', pid),
   /** 第三方依赖清单（设置 → 依赖）：包名 + 真实版本号 + 真实协议，来自 package.json 与已安装的包 */
   depsList: (): Promise<DepItem[]> => ipcRenderer.invoke('deps:list'),
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),
