@@ -3,6 +3,15 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.6.2 — 2026-09-27
+
+修复版本：AI 执行命令不再弹出 PowerShell 窗口（固定走 Git Bash），退出应用彻底清干净内核进程树。
+
+### 修复
+
+- **AI 执行命令不再弹 PowerShell**：内核（opencode）在 Windows 上给 AI 选 shell 时默认优先 PowerShell——AI 跑 `npm run dev` 等命令会弹出可见的控制台窗口、拖慢系统。现在生成内核配置时把 `shell` 固定为 Git Bash（解析顺序：`OPENCODE_GIT_BASH_PATH` 环境变量 → PATH 里的 git 反推 `bin\bash.exe` → 常见安装位置；macOS/Linux 给 short name `bash` 按 PATH 解析），并写死常驻指令：严禁调用 powershell/pwsh/cmd 转调、严禁 PowerShell 语法。
+- **退出应用后不再「阴魂不散」**：原 `p.kill()` 只杀内核本体——MCP 子进程、终端 shell 全变孤儿；若退出恰好落在内核重启间隙，还会拉起一个无人管理的孤儿内核在后台继续跑任务（弹窗元凶）。现在退出走 `adapter.shutdown()`：`quitting` 标记阻断退出后的任何（重）启动，`taskkill /T /F` 杀整棵进程树；`window-all-closed` 与 `before-quit` 双入口兜底。
+
 ## v1.6.1 — 2026-09-27
 
 修复版本：AI 回复中断不再无声无息（错误透传到界面），访问权限与底部工具行布局调整。

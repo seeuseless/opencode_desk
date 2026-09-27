@@ -426,6 +426,52 @@ function collectVisionTargets(
 }
 
 /**
+ * 内核 agent 工具（bash/shell）用的 shell：
+ *
+ * **必须固定成 Git Bash，绝不走内核默认**——内核在 Windows 上的默认探测顺序是
+ * pwsh → powershell → git bash → cmd（对内核二进制的 EU() 实测），不写 shell 配置时
+ * AI 执行命令会弹出可见的 PowerShell 控制台窗口（用户实测跑 `npm run dev` 时弹窗、拖慢系统）。
+ *
+ * 解析全部走环境（不写死盘符路径，mac 等平台同规则）：
+ * - Windows：先认 OPENCODE_GIT_BASH_PATH（内核同款环境变量，用户可自行覆盖），
+ *   再沿 PATH 找 git.exe 反推 ..\..\bin\bash.exe（与内核解析逻辑一致，只认带 git.exe 的
+ *   目录防误吞 System32 的 WSL bash），最后扫常见安装位置。
+ * - macOS / Linux：给 short name "bash"，内核按 PATH 解析（macOS 自带 /bin/bash，Linux 发行版各异，
+ *   让内核用它在 PATH 里找到的那个）。
+ * - Windows 上一路找不到（罕见）返回 undefined 走内核默认。
+ */
+function agentShell(): string | undefined {
+  if (process.platform !== 'win32') return 'bash'
+  const gitBashEnv = process.env['OPENCODE_GIT_BASH_PATH']
+  if (gitBashEnv && existsSync(gitBashEnv)) return gitBashEnv
+  const bashBesideGit = (gitExe: string): string | undefined => {
+    // git.exe 在 <root>\cmd 或 <root>\mingw64\bin → bash.exe 在 <root>\bin
+    const candidate = join(gitExe, '..', '..', 'bin', 'bash.exe')
+    return existsSync(candidate) ? candidate : undefined
+  }
+  for (const dir of (process.env['PATH'] ?? '').split(';')) {
+    const d = dir.trim()
+    if (!d) continue
+    const gitExe = join(d, 'git.exe')
+    if (existsSync(gitExe)) {
+      const hit = bashBesideGit(gitExe) ?? (existsSync(join(d, 'bash.exe')) ? join(d, 'bash.exe') : undefined)
+      if (hit) return hit
+    }
+  }
+  const roots = [
+    process.env['ProgramFiles'],
+    process.env['ProgramFiles(x86)'],
+    process.env['LOCALAPPDATA'] && join(process.env['LOCALAPPDATA'], 'Programs'),
+    process.env['USERPROFILE'] && join(process.env['USERPROFILE'], 'scoop', 'apps', 'git', 'current')
+  ].filter((x): x is string => Boolean(x))
+  for (const root of roots) {
+    const hit = bashBesideGit(join(root, 'Git', 'cmd', 'git.exe'))
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/**
  * 生成内核配置：自定义提供商（OpenAI Chat 兼容，经 @ai-sdk/openai-compatible）+ MCP（含内置浏览器）。
  * opencode 默认放行全部工具执行，无需 permission 配置；端点必须提供 /chat/completions。
  */
@@ -611,7 +657,10 @@ export function writeOpencodeConfig(s: Settings): void {
       '**写裸名（少前缀等）会报「工具不存在」**，只能照清单里的全名调。\n' +
       '- **没有桌面控制能力**：遇到「打开某个应用 / 在桌面上操作 / 帮我点一下微信」这类要求，' +
       '直接如实说明「青鸟目前不支持操控桌面应用」；**不要试图用 `bash` 跑 PowerShell / pyautogui 模拟键鼠来绕过**——' +
-      '这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。`bash` 只允许用来「启动一个进程」。'
+      '这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。`bash` 只允许用来「启动一个进程」。\n' +
+      '- **执行命令一律用 bash（Git Bash）语法**：路径用正斜杠、环境变量用 `export`/`$VAR`。' +
+      '**严禁调用 powershell / pwsh / powershell.exe / pwsh.exe（含 `cmd /c` 转调），严禁写 PowerShell 语法' +
+      '（`$env:`、`Get-Content`、`Write-Host`、`-ErrorAction` 之类）**——那会在用户桌面上弹出 PowerShell 窗口，明确违反用户要求。'
   )
   instructions.push(routing)
   // 文件系统边界（2026-09-24 用户要求）：青鸟自身数据只放 ~/.qingniaoai，项目操作不越界。
@@ -698,8 +747,11 @@ export function writeOpencodeConfig(s: Settings): void {
     writeFileSync(attach, lines.join('\n') + '\n')
     instructions.push(attach)
   }
+  const shell = agentShell()
   const cfg = {
     $schema: 'https://opencode.ai/config.json',
+    // AI 执行命令固定走 Git Bash（找不到才回落内核默认），根绝 PowerShell 弹窗——见 agentShell 注释
+    ...(shell ? { shell } : {}),
     provider,
     mcp,
     /**

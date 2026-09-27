@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import net from 'node:net'
@@ -72,6 +72,13 @@ class Adapter {
   private base = ''
   private sseAbort: AbortController | null = null
   private stopping = false
+  /**
+   * 应用退出标记（区别于 stopping）：stop() 在重启流程里也会被调（stop→start 属正常轮换），
+   * 但应用退出后 start() **绝不能**再拉起新内核——否则退出落在「stop 完、start 未跑」的重启
+   * 间隙时，stop 杀了个空、start 重置 stopping 又 spawn，产出一个无人管理的孤儿内核，
+   * 应用都退了它还在后台跑 AI 任务（旧配置下就是弹 PowerShell 窗口的元凶）。
+   */
+  private quitting = false
   /** 重启串行化：正在进行 + 待补一次（连续拨开关时合并，绝不并发 kill/spawn） */
   private restarting = false
   private restartAgain = false
@@ -113,6 +120,8 @@ class Adapter {
   // ---------- 生命周期 ----------
 
   async start(): Promise<void> {
+    // 应用已退出（shutdown）：拒绝任何（重）启动，防孤儿内核——见 quitting 注释
+    if (this.quitting) return
     this.stopping = false
     mkdirSync(qingniaoHome(), { recursive: true })
     mkdirSync(opencodeDataDir(), { recursive: true })
@@ -244,7 +253,28 @@ class Adapter {
     this.sseAbort = null
     const p = this.proc
     this.proc = null
-    p?.kill()
+    if (!p) return
+    // Windows 上必须杀整棵树：p.kill() 只终止内核本身，它的 MCP 子进程 / pty shell / 正在执行的
+    // bash 会话全部变成孤儿继续存活（pty shell 在 Windows 默认还是 PowerShell——用户退出后
+    // 「还会弹 PowerShell」的另一来源）。taskkill /T /F 一次带走上上下下。
+    if (process.platform === 'win32' && p.pid) {
+      try {
+        spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      } catch {
+        /* 失败走下面的兜底 */
+      }
+    }
+    try {
+      p.kill()
+    } catch {
+      /* 进程已退出 */
+    }
+  }
+
+  /** 应用退出专用：置 quitting 后任何人（含进行中的 restart 轮次）都无法再拉起新内核 */
+  shutdown(): void {
+    this.quitting = true
+    this.stop()
   }
 
   /** 设置变更后重启（provider/MCP 写盘 + env 重启生效）。

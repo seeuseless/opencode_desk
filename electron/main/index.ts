@@ -1394,6 +1394,13 @@ app.on('window-all-closed', () => {
   // 不做的话连接会随进程一起断，MCP 侧 fetch 抛错 → 按 fail-open 放行 → 模型照调，白问一场。
   rejectAllPending()
   relay.stop()
-  adapter.stop()
+  // shutdown 而非 stop：置 quitting 阻断任何进行中的内核重启轮次，杀进程树（含 MCP/pty 子进程），
+  // 防止「应用退了、孤儿内核还在后台跑任务」——见 adapter.shutdown 注释
+  adapter.shutdown()
   app.quit()
+})
+
+// before-quit 兜底（更新器安装等 app.quit() 入口）：window-all-closed 理论上必发，这里双保险且幂等
+app.on('before-quit', () => {
+  adapter.shutdown()
 })
