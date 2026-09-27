@@ -76,6 +76,8 @@ export default function App() {
     const value = load<string>('qingniao.projectSortMode', 'activity')
     return value === 'fixed' ? 'fixed' : 'activity'
   })
+  /** 对话输入行「压缩上下文」按钮显隐：默认不启用，设置 → 通用里开 */
+  const [compactBtn, setCompactBtn] = useState<boolean>(() => load('qingniao.compactBtn', false))
   const [projectOrder, setProjectOrder] = useState<string[]>(() => load<string[]>('qingniao.projectOrder', []))
   const [activeId, setActiveId] = useState('')
   /** 每个文件夹独立的展开状态（用户自己点出来的，切视图不影响） */
@@ -186,6 +188,8 @@ export default function App() {
   useEffect(() => save('qingniao.expanded', expanded), [expanded])
 
   useEffect(() => save('qingniao.projectSortMode', projectSortMode), [projectSortMode])
+
+  useEffect(() => save('qingniao.compactBtn', compactBtn), [compactBtn])
 
   useEffect(() => save('qingniao.projectOrder', projectOrder), [projectOrder])
 
@@ -941,6 +945,7 @@ export default function App() {
                 browserToggleSignal={browserSignal}
                 browserMaxSignal={browserMaxSignal}
                 codeMode={codeMode}
+                showCompactBtn={compactBtn}
                 onBrowserUi={setBrowserUi}
                 onHead={setHead}
                 onOpenSettings={() => openSettingsAt('providers')}
@@ -1013,6 +1018,8 @@ export default function App() {
                onNormalChatWidth={setNormalChatWidth}
               projectSortMode={projectSortMode}
               onProjectSortMode={changeProjectSortMode}
+              compactBtn={compactBtn}
+              onCompactBtn={setCompactBtn}
               lang={lang}
               onLang={changeLang}
                projectPath={activeProject?.path ?? null}

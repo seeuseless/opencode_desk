@@ -187,6 +187,29 @@ input, textarea { font: inherit; }
 .spacer { flex: 1; }
 .col { width: 100%; max-width: var(--chat-content-width, 820px); margin: 0 auto; }
 
+/* 对话左侧用户消息锚点条：钉在对话区(main)最左缘——正好是侧栏菜单右边；脱离滚动流。
+   垂直居中 + 固定高度，消息再多也不撑开；图标紧凑排列（上下间距小），悬停单个图标弹出标题气泡 */
+.msg-anchors {
+  position: absolute; left: 3px; top: 50%; transform: translateY(-50%);
+  height: 300px; z-index: 8;
+  display: flex; align-items: center;
+}
+.ma-dots {
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  height: 100%; overflow: hidden;
+  border-radius: 8px; padding: 3px 1px;
+}
+/* 图标数超过窄条容量时自动压缩：默认 14px 高、间距 2px，不够压时收到最小 7px */
+.msg-anchor {
+  display: flex; align-items: center; justify-content: center;
+  flex: 0 1 auto; height: 14px; min-height: 7px; width: 18px; padding: 0; border-radius: 5px;
+  color: var(--fg2); background: transparent; border: none;
+  opacity: .5; transition: opacity .12s, background .12s, color .12s;
+}
+.ma-dots:hover .msg-anchor { opacity: 1; }
+.msg-anchor:hover { background: var(--side-hover); color: var(--accent); }
+.msg-anchor:active { transform: scale(.94); }
+
 .shell { display: flex; height: 100vh; }
 /* min-width:0 必须有：.app 是 .shell 的弹性子项，默认 min-width:auto 会被内容的固有最小宽度
   （宽表格、长 URL 标题、超长终端命令这类不可断行内容）顶宽——整列被推出窗口右缘，
@@ -377,7 +400,7 @@ input, textarea { font: inherit; }
 /* ================= 主区 ================= */
 /* flex column 子项默认 min-height:auto，内容多时会撑破父容器——弹性子项（.main/.content/.msgs）必须 min-height:0，
    .msgs 的 overflow-y:auto 才能在其内部滚动而不是把整个界面往下顶 */
-.main { flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.main { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
 /* 内容容器：中间工作区 + 最右侧对话；计划任务也只占中间，不再卸载对话 */
 .content { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: row; }
 .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -776,17 +799,20 @@ input, textarea { font: inherit; }
 
 /* 过程步骤行：图标 + 中文名 + 目标，默认折叠详情 */
 .step { margin: 2px 0; }
-/* 步骤行左边缘与正文对齐；点击展开无需背景提示，保持纯净 */
+/* 步骤行左边缘与正文对齐；点击展开无需背景提示，保持纯净。
+   整行文字刻意比正文浅一档（长期使用不喧宾夺主），路径也不再用 accent 色——
+   带强调色看起来像可点的链接，实际只是过程记录 */
 .step-sum {
   display: flex; align-items: center; gap: 7px; width: 100%;
-  background: transparent; border: none; color: var(--fg2);
+  background: transparent; border: none;
+  color: color-mix(in srgb, var(--fg2) 82%, transparent);
   padding: 4px 0; border-radius: 7px; font-size: 12.5px; text-align: left;
 }
 .step-sum:not(:disabled) { cursor: pointer; }
 .step-sum:disabled { cursor: default; }
 .step-icon { display: inline-flex; flex-shrink: 0; }
 .step-name { font-weight: 500; flex-shrink: 0; }
-.step-target { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; color: var(--step-path); font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; }
+.step-target { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; color: inherit; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; }
 .step-target-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 文件差量增减行数：+ 绿 / - 红，紧跟目标路径之后（不贴行最右） */
 .step-stat {
@@ -1896,6 +1922,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
   box-shadow: 0 14px 34px var(--shadow);
 }
 .mp-head { display: flex; align-items: center; gap: 6px; }
+
+/* 设置页开关行：开关 + 状态文字横排（通用页的「上下文压缩按钮」等用） */
+.switch-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--fg); }
 .mp-title { flex: 1; font-size: 12.5px; font-weight: 600; color: var(--side-fg); }
 /* 换码按钮：与标题行同高的小图标按钮，悬停用侧栏自身的悬浮色 */
 .mp-rot {

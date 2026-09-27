@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, FoldVertical, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
@@ -53,6 +53,8 @@ interface Props {
   browserMaxSignal: number
   /** 纯写代码模式：关闭并隐藏内置浏览器、权限与思考入口 */
   codeMode: boolean
+  /** 是否显示「压缩上下文」手动按钮（设置 → 通用里开，默认关；自动压缩始终由内核负责） */
+  showCompactBtn?: boolean
   /** 上报浏览器面板开合与放大状态（标题栏浏览器按钮与最大化按钮据此决定行为与图标） */
   onBrowserUi: (s: { open: boolean; max: boolean }) => void
   /** 上报会话标题（首条用户信息；计划会话带标记与日期），由 App 转发到标题栏绘制 */
@@ -292,6 +294,8 @@ export function ChatView(p: Props) {
   const [queues, setQueues] = useState<Record<string, string[]>>({})
   const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
   const [qCollapsed, setQCollapsed] = useState(false)
+  /** 正在触发上下文压缩（按钮转圈防重复点） */
+  const [compacting, setCompacting] = useState(false)
   const [atBottom, setAtBottom] = useState(true)
   const atBottomRef = useRef(true)
   // 滚轮上滑后这段时间内屏蔽「重新吸底」，防程序化滚动事件把用户位置抢回去
@@ -316,7 +320,6 @@ export function ChatView(p: Props) {
   // 打字机：partID → 已吐出的字符数；ticker 定时器；被插队的队列项下标
   const shown = useRef<Map<string, number>>(new Map())
   const ticker = useRef<number | null>(null)
-  const hijack = useRef<number | null>(null)
   // 草稿首发创建的会话：跳过一次历史重载，避免闪掉乐观插入的用户消息
   const justCreated = useRef('')
   // 写入/编辑进行中的内容预览（partID → 已流出的文件内容）
@@ -922,6 +925,22 @@ export function ChatView(p: Props) {
     })
   }
 
+  /** 手动触发上下文压缩（内核官方 compaction 端点）：历史对话摘要化，释放上下文窗口。
+   *  摘要由内核跑一轮模型调用生成，完成后 session.idle 会自动刷新历史视图，无需这边再拉。 */
+  async function compactContext() {
+    const sid = p.sessionId
+    if (!sid || busy || compacting) return
+    setCompacting(true)
+    try {
+      await oc.summarize(sid, dirRef.current)
+      setNotice(t('正在压缩上下文：历史对话将摘要化，完成后即可继续聊'))
+    } catch (e) {
+      setError(t('压缩失败：') + (e instanceof Error ? e.message : String(e)).slice(0, 120))
+    } finally {
+      setCompacting(false)
+    }
+  }
+
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
   // 平台「内置模型」的计价信息（限免/折扣/倍率）一并带过去，二级列表里要打标签、写倍率。
   //
@@ -1248,14 +1267,9 @@ export function ChatView(p: Props) {
     if (busy || !p.sessionId) return
     const q = queues[p.sessionId]
     if (!q?.length) return
-    let i = 0
-    if (hijack.current != null) {
-      i = Math.min(hijack.current, q.length - 1)
-      hijack.current = null
-    }
     const sid = p.sessionId
-    const text = q[i]
-    dropQueueItem(sid, i)
+    const text = q[0]
+    dropQueueItem(sid, 0)
     void runPrompt(text, sid, busyDir.current[sid])
   }, [busy, p.sessionId, queues])
 
@@ -1312,6 +1326,38 @@ export function ChatView(p: Props) {
     atBottomRef.current = true
     setAtBottom(true)
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }
+
+  /** 「用户消息锚点」竖排条数据：每条可见的用户消息对应一个跳转点（id + 首行预览） */
+  const userAnchors = useMemo(() => {
+    if (!msgs.length) return []
+    const list: { id: string; label: string }[] = []
+    for (const m of msgs) {
+      if (m.info.role !== 'user') continue
+      if (autoContinueIds.current.has(m.info.id)) continue
+      const txt = m.parts
+        .filter((x) => x.type === 'text' && !x.synthetic)
+        .map((x) => x.text)
+        .join('')
+      if (isCtxOnly(txt)) continue
+      const label = txt.trim().split('\n')[0] || ''
+      list.push({ id: m.info.id, label: label.slice(0, 24) })
+    }
+    return list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs])
+
+  /** 点击左侧用户锚点：立即定位到对应用户消息（不用平滑滚动，点了就到位） */
+  function jumpToUserMsg(id: string) {
+    const el = scrollRef.current?.querySelector<HTMLElement>(`.umsg-anchor[data-uid="${id}"]`)
+    if (!el) return
+    const box = scrollRef.current
+    if (!box) return
+    // 消息定位到滚动容器中上方一点，露出锚点条与气泡
+    const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 64
+    atBottomRef.current = false
+    setAtBottom(false)
+    box.scrollTo({ top: Math.max(0, top), behavior: 'auto' })
   }
 
   // 执行中每秒刷新一次（用时数值由 busySince 起算）
@@ -1769,8 +1815,15 @@ export function ChatView(p: Props) {
   /** 队列项立即执行：中断当前任务，插队优先 */
   function queueSend(i: number) {
     if (busy && sidRef.current) {
-      hijack.current = i
-      oc.abort(sidRef.current, busyDir.current[sidRef.current]).catch(() => { /* 已结束 */ })
+      // 中断当前回合后**延时主动执行**这条队列项，而不是依赖「busy 翻转 → 队列消费 effect」：
+      // abort 只发 REST 请求，内核不一定回 session.idle（尤其终端 long-run），busy 可能一直 true，
+      // 那样队列消费 effect（!busy 才触发）永不跑，点「立即执行」就毫无反应（实测）。见 send() 同款做法。
+      const sid = sidRef.current
+      const text = (queues[sid] ?? [])[i]
+      dropQueueItem(sid, i)
+      cancelRetry(sid)
+      oc.abort(sid, busyDir.current[sid]).catch(() => { /* 已结束 */ })
+      window.setTimeout(() => runPrompt(text, sid, busyDir.current[sid]), 900)
     } else {
       const sid = sidRef.current
       const text = (queues[sid] ?? [])[i]
@@ -1932,7 +1985,11 @@ export function ChatView(p: Props) {
               const fatts = m.parts
                 .filter((x): x is Part & { mime: string; url: string } => x.type === 'file' && !!x.mime && !!x.url)
                 .map((x) => ({ mime: x.mime, name: (x.filename || t('附件')).replace(/^.*[\\/]/, ''), url: x.url }))
-              return <UserBubble key={m.info.id} text={txt} atts={fatts} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
+              return (
+                <div key={m.info.id} className="umsg-anchor" data-uid={m.info.id}>
+                  <UserBubble key={m.info.id} text={txt} atts={fatts} editable={!busy} onSend={(t) => void resendMessage(m.info.id, t)} />
+                </div>
+              )
             }
             return (
               <div key={m.info.id} className="amsg">
@@ -2014,6 +2071,25 @@ export function ChatView(p: Props) {
           )}
         </div>
       </div>
+
+      {/* 左侧用户消息锚点条：钉在对话区最左缘（侧栏菜单右侧），垂直居中、高度固定不随内容撑开。
+          图标紧凑排列（间距小），点击立即定位到该条用户消息 */}
+      {userAnchors.length > 1 && (
+        <div className="msg-anchors" aria-label={t('用户消息跳转')}>
+          <div className="ma-dots">
+            {userAnchors.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="msg-anchor"
+                onClick={() => jumpToUserMsg(a.id)}
+              >
+                <Minus size={12} strokeWidth={3.2} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!atBottom && (
         <div className="jumpwrap">
@@ -2178,6 +2254,18 @@ export function ChatView(p: Props) {
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
                 {terms.filter((x) => x.status === 'running').length}
+              </button>
+            )}
+            {/* 上下文压缩（内核官方 compaction）：长对话聊不动了点一下，历史摘要化释放窗口。
+                设置 → 通用里开启才显示；有会话且空闲才可点；摘要由内核跑一轮生成，完成后历史视图自动刷新 */}
+            {p.showCompactBtn && p.sessionId && !busy && (
+              <button
+                className="icon-btn"
+                title={t('压缩上下文：把历史对话摘要化，释放上下文窗口（长对话卡顿时用）')}
+                disabled={compacting}
+                onClick={() => void compactContext()}
+              >
+                {compacting ? <LoaderCircle size={14} className="spin" /> : <FoldVertical size={14} />}
               </button>
             )}
             {!p.codeMode && !browserMax && (
@@ -3337,11 +3425,15 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
       // 优先展示写入的代码内容（part 入参），其次内核差量，最后工具输出
       if (inContent) {
         const file = str(toolIn?.filePath) || str(toolIn?.path) || fd?.file || toolTarget(part, projectPath)
-        body = tool === 'write'
-          ? <CodeBlock text={inContent} file={file} />
-          : tool === 'apply_patch'
-            ? <CodeBlock text={inContent} diff file={file} />
+        // edit 的 newString 是不含 +/- 标记的纯新代码，直接当 diff 渲染会缺失增删着色与标记；
+        // 内核算好的整轮差量 fd.patch 带完整 +/- 行，展开应优先用它，才能看到红绿增减效果
+        if (tool === 'edit' && fd?.patch) {
+          body = <CodeBlock text={fd.patch} diff file={fd.file || file} />
+        } else {
+          body = tool === 'write'
+            ? <CodeBlock text={inContent} file={file} />
             : <CodeBlock text={inContent} diff file={file} />
+        }
       } else if (fd?.patch) {
         body = <CodeBlock text={fd.patch} diff file={fd.file} />
       } else if (rawOut) {
@@ -3487,6 +3579,12 @@ function renderDiffLines(text: string): DiffLine[] {
   let hunkDels = 0
   let hunkSeen = false
   text.split('\n').forEach((l, i) => {
+    // 文件头噪音：==== 分隔线与 ---/+++ 文件路径行——文件名已在工具行目标处显示，重复无意义。
+    // 只在第一个 @@ hunk 出现前过滤：hunk 之后的 ---/+ 是正常 diff 内容（如删除 markdown 分隔线）
+    if (!hunkSeen) {
+      if (/^={10,}\s*$/.test(l)) return
+      if (/^--- /.test(l) || /^\+\+\+ /.test(l)) return
+    }
     const hunk = /^@@\s+(?:\d+,\d+\s+)?@@/.exec(l)
     if (hunk) {
       lines.push({ key: `hunk-${i}`, kind: 'ctx', marker: '', content: l })

@@ -378,6 +378,10 @@ export const oc = {
       }
     }),
   abort: (id: string, directory?: string) => call(`/session/${id}/abort${dirQ(directory)}`, { method: 'POST' }),
+  /** 上下文压缩（内核官方 compaction）：把当前会话历史摘要化，释放上下文窗口。
+   *  内核本身也有 compactIfNeeded/compactAfterOverflow 自动压缩；这里是手动触发的入口。 */
+  summarize: (id: string, directory?: string) =>
+    call(`/session/${id}/summarize${dirQ(directory)}`, { method: 'POST' }),
   /** 注入「仅上下文」消息（noReply：不触发 AI 回复，但后续 prompt 自动带上它）——项目记忆用此机制自动喂给新会话 */
   injectContext: (id: string, directory: string | undefined, text: string) =>
     call(`/session/${id}/message${dirQ(directory)}`, {
