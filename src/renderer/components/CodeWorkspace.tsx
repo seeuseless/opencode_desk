@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { loadLanguage, type LanguageName } from '@uiw/codemirror-extensions-langs'
 import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import type { EditorView } from '@codemirror/view'
 import { tags as tg } from '@lezer/highlight'
 import { FileCode2, X } from 'lucide-react'
 import { t } from '../i18n'
@@ -51,6 +52,8 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  /** CodeMirror 实例：保存时直接取实时 doc——keydown 那一刻 React state 可能落后一帧 */
+  const viewRef = useRef<EditorView | null>(null)
   const file = activePath ? files[activePath] ?? null : null
   const tabs = Object.values(files)
   const dirty = !!file && file.content !== file.savedContent
@@ -111,26 +114,79 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
   }, [file?.path])
 
   async function save(): Promise<boolean> {
-    if (!file || !dirty || saving) return false
-    setSaving(true)
+    if (!activePath || saving) return false
+    const savingPath = activePath
+    const saved = files[savingPath]
+    if (!saved) return false
+    // 关键：Ctrl+S 那一刻 React state 的 content 可能落后编辑器一帧——最后一个字符的
+    // onChange 还没 flush，按旧内容保存后 dirty 圆点仍在，用户得再按一次（实测）。
+    // 所以保存前先从 CodeMirror 实例取实时 doc，同步回 state，再用它落盘。
+    let content = saved.content
+    const view = viewRef.current
+    if (view) {
+      const live = view.state.doc.toString()
+      if (live !== content) {
+        content = live
+        setFiles((current) => {
+          const cur = current[savingPath]
+          if (!cur) return current
+          return { ...current, [savingPath]: { ...cur, content: live } }
+        })
+      }
+    }
+    if (content === saved.savedContent) return false // 无改动
+    const diskContent = content
     setError('')
+    setSaving(true)
     try {
       const result = await window.qingniao.workspaceWrite(
         project.path,
-        file.path,
-        file.content,
-        file.mtimeMs
+        savingPath,
+        diskContent,
+        saved.mtimeMs
       )
-      setFiles((current) => ({
-        ...current,
-        [file.path]: { ...file, savedContent: file.content, mtimeMs: result.mtimeMs }
-      }))
+      // 函数式更新且**绝不覆盖 content**：await IPC 往返期间用户还在继续输入，
+      // 旧闭包快照直接展开会把期间的新输入整个回滚（实测：新建文件粘贴/快打后 Ctrl+S 内容截断）。
+      // 只更新 savedContent 与 mtimeMs——保存期间新输入的部分仍正确地保持「未保存」状态
+      setFiles((current) => {
+        const cur = current[savingPath]
+        if (!cur) return current
+        return { ...current, [savingPath]: { ...cur, savedContent: diskContent, mtimeMs: result.mtimeMs } }
+      })
       return true
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       return false
     } finally {
       setSaving(false)
+    }
+  }
+
+  /** Ctrl+N 新建文件：弹系统「另存为」对话框选路径（默认当前活动文件所在目录），创建后打开新 tab */
+  async function newFile(): Promise<void> {
+    if (saving) return
+    const dir = file && file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''
+    try {
+      const r = await window.qingniao.workspaceNewFile(project.path, dir)
+      if (!r) return // 用户取消
+      // 回读一次拿真实 mtimeMs：新建时空文件已在磁盘上，直接用 0 会导致保存时「文件已被修改」误判
+      const result = await window.qingniao.workspaceRead(project.path, r.path)
+      setFiles((current) => {
+        if (current[r.path]) return current // 已在打开列表（重复新建同名）不覆盖内容
+        return {
+          ...current,
+          [r.path]: {
+            path: r.path,
+            content: result.content,
+            savedContent: result.content,
+            mtimeMs: result.mtimeMs
+          }
+        }
+      })
+      setActivePath(r.path)
+      onActiveFile?.(r.path)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }
 
@@ -150,13 +206,29 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 's') return
-      e.preventDefault()
-      void save()
+      if (!(e.ctrlKey || e.metaKey)) return
+      const k = e.key.toLowerCase()
+      // Ctrl+S 保存
+      if (k === 's') {
+        e.preventDefault()
+        void save()
+        return
+      }
+      // Ctrl+N 新建文件（弹保存路径对话框）
+      if (k === 'n') {
+        e.preventDefault()
+        void newFile()
+        return
+      }
+      // Ctrl+W 关闭当前 tab
+      if (k === 'w') {
+        e.preventDefault()
+        if (activePath) closeTab(activePath)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [file?.path, dirty, saving])
+  }, [file?.path, dirty, saving, activePath])
 
   function openTab(path: string): void {
     setActivePath(path)
@@ -258,6 +330,7 @@ export function CodeWorkspace({ project, filePath, openFiles, onActiveFile, onSt
           height="100%"
           theme="none"
           extensions={[language, editorHighlight]}
+          onCreateEditor={(view) => { viewRef.current = view }}
           onChange={(content) => {
             setFiles((current) => ({
               ...current,

@@ -238,6 +238,54 @@ ipcMain.handle('workspace:write', (_e, req: {
   return { mtimeMs: statSync(real).mtimeMs }
 })
 
+/**
+ * 代码编辑器「新建文件」：先弹系统「另存为」对话框选一个目标文件（默认落在当前目录），
+ * 校验选中的路径**仍在项目目录内**后落盘一个空文件，返回相对路径给渲染层直接打开新 tab。
+ * 用户取消返回 null。
+ */
+ipcMain.handle('workspace:newFile', async (_e, req: { projectPath: string; dirPath?: string }) => {
+  const { root, target: dir } = workspaceFile(req?.projectPath, req?.dirPath ?? '')
+  const realDir = workspaceTargetRealPath(root, dir)
+  if (!statSync(realDir).isDirectory()) throw new Error('所选路径不是目录')
+  const win = BrowserWindow.getFocusedWindow() ?? mainWin
+  const opts = {
+    title: '新建文件',
+    buttonLabel: '新建',
+    defaultPath: join(realDir, 'untitled.ts'),
+    properties: ['createDirectory', 'showOverwriteConfirmation'] as ('createDirectory' | 'showOverwriteConfirmation')[]
+  }
+  const r = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+  if (r.canceled || !r.filePath) return null
+  const target = resolve(root, r.filePath)
+  if (!insideWorkspace(root, target)) throw new Error('文件路径超出项目目录')
+  if (!existsSync(target)) writeFileSync(target, '') // 落盘空占位，编辑器打开后 Ctrl+S 正常覆盖
+  return { path: relative(root, target).split(sep).join('/') }
+})
+
+/** 代码编辑器「新建文件夹」（右键目录菜单）：在指定目录下创建一个新目录 */
+ipcMain.handle('workspace:newDir', (_e, req: { projectPath: string; parentDir: string; name: string }) => {
+  const { root, target: parent } = workspaceFile(req?.projectPath, req?.parentDir)
+  const realParent = workspaceTargetRealPath(root, parent)
+  if (!statSync(realParent).isDirectory()) throw new Error('所选路径不是目录')
+  const name = String(req?.name ?? '').trim()
+  if (!name || /[\\/:*?"<>|]/.test(name)) throw new Error('文件夹名不合法')
+  const target = resolve(realParent, name)
+  if (!insideWorkspace(root, target)) throw new Error('文件路径超出项目目录')
+  if (existsSync(target)) throw new Error('同名文件或文件夹已存在')
+  mkdirSync(target, { recursive: false })
+  return { path: relative(root, target).split(sep).join('/') }
+})
+
+/** 代码编辑器「删除」（右键文件/文件夹菜单）：文件直接删，文件夹递归删。
+ *  仅能在项目目录内操作；删除前渲染层已弹确认框。 */
+ipcMain.handle('workspace:delete', (_e, req: { projectPath: string; filePath: string }) => {
+  const { root, target } = workspaceFile(req?.projectPath, req?.filePath)
+  const real = workspaceTargetRealPath(root, target)
+  if (real === root) throw new Error('不能删除项目根目录')
+  rmSync(real, { recursive: true, force: true })
+  return true
+})
+
 // 聊天里图片/视频的「保存」：远程地址先下载到内存，本地路径直接读文件，再弹系统另存为对话框
 // 约定同 folder:open：返回空串表示成功（用户取消也算成功），失败返回原因
 ipcMain.handle('media:save', async (_e, req: { source: string; name?: string }) => {

@@ -5,9 +5,10 @@ import {
   CircleUser,
   Code2,
   FileCode2,
+  FilePlus2,
   Folder,
-  FolderOpen,
   FolderPlus,
+  FolderOpen,
   LoaderCircle,
   ListTodo,
   LogIn,
@@ -139,6 +140,13 @@ export function Sidebar(p: Props) {
   const [confirmDelSess, setConfirmDelSess] = useState<{ proj: Project; sess: Session } | null>(null)
   /** 项目行右键菜单（自绘，位置跟鼠标）；记录坐标与目标项目 */
   const [menu, setMenu] = useState<{ x: number; y: number; proj: Project } | null>(null)
+  /** 文件树节点右键菜单：目标项目 + 被右键的节点 */
+  const [treeMenu, setTreeMenu] = useState<{ x: number; y: number; proj: Project; node: WorkspaceNode } | null>(null)
+  /** 删除文件/文件夹前的确认弹窗 */
+  const [confirmDelNode, setConfirmDelNode] = useState<{ proj: Project; node: WorkspaceNode } | null>(null)
+  /** 「新建文件夹」命名输入弹窗（目标是所在目录） */
+  const [newDirAsk, setNewDirAsk] = useState<{ proj: Project; parent: string } | null>(null)
+  const [delNodeBusy, setDelNodeBusy] = useState(false)
   const projectSort = useDragSort((from, to) => p.onReorderProjects(from, to))
 
   const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
@@ -178,14 +186,24 @@ export function Sidebar(p: Props) {
 
   function renderTree(proj: Project, nodes: WorkspaceNode[], depth: number): React.ReactNode {
     const opened = openDirs[proj.id] ?? []
+    // 文件夹行沿用原缩进（14px 起，每层 +14）；**文件行**统一再多缩 10px——
+    // 文件夹下的文件要和文件夹行拉开层次，不贴着左缘
     return nodes.map((node) => {
-      const rowStyle = { marginLeft: `${14 + depth * 14}px` }
+      const rowStyle = node.type === 'file'
+        ? { marginLeft: `${24 + depth * 14}px` }
+        : { marginLeft: `${14 + depth * 14}px` }
       if (node.type === 'directory') {
         const isOpen = opened.includes(node.path)
         const key = treeKey(proj.path, node.path)
         return (
           <div key={node.path}>
-            <div className="sess code-tree-row" style={rowStyle} onClick={() => toggleDir(proj, node.path)} title={node.path}>
+            <div
+              className="sess code-tree-row"
+              style={rowStyle}
+              onClick={() => toggleDir(proj, node.path)}
+              onContextMenu={(e) => openTreeMenu(proj, node, e)}
+              title={node.path}
+            >
               {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               {isOpen ? <FolderOpen size={14} className="code-file-ico" /> : <Folder size={14} className="code-file-ico" />}
               <span className="sess-title">{node.name}</span>
@@ -203,6 +221,7 @@ export function Sidebar(p: Props) {
           className={'sess code-tree-row code-file' + (proj.id === p.activeId && node.path === p.selectedFile ? ' on' : '')}
           style={rowStyle}
           onClick={() => p.onPickFile(proj, node.path)}
+          onContextMenu={(e) => openTreeMenu(proj, node, e)}
           title={node.path}
         >
           <FileCode2 size={13} className="code-file-ico" />
@@ -223,6 +242,53 @@ export function Sidebar(p: Props) {
       y: Math.min(e.clientY, window.innerHeight - h - 8),
       proj
     })
+  }
+
+  /** 打开文件树节点右键菜单：记录坐标与目标（文件/文件夹） */
+  function openTreeMenu(proj: Project, node: WorkspaceNode, e: React.MouseEvent): void {
+    e.preventDefault()
+    e.stopPropagation()
+    const w = 178
+    const h = 136
+    setTreeMenu({
+      x: Math.min(e.clientX, window.innerWidth - w - 8),
+      y: Math.min(e.clientY, window.innerHeight - h - 8),
+      proj,
+      node
+    })
+  }
+
+  /** 刷新目录树某个目录层（新建/删除后重读内容） */
+  async function refreshDir(proj: Project, dirPath: string): Promise<void> {
+    const key = treeKey(proj.path, dirPath)
+    setTreeLoading((m) => ({ ...m, [key]: true }))
+    setTreeError((m) => ({ ...m, [key]: '' }))
+    try {
+      const nodes = await window.qingniao.workspaceList(proj.path, dirPath)
+      setTreeMap((m) => ({ ...m, [key]: nodes }))
+    } catch (e) {
+      setTreeError((m) => ({ ...m, [key]: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setTreeLoading((m) => ({ ...m, [key]: false }))
+    }
+  }
+
+  /** 删除文件/文件夹（确认弹窗里点「删除」触发）；删除后刷新所在层 */
+  async function deleteTreeNode(proj: Project, node: WorkspaceNode): Promise<void> {
+    setDelNodeBusy(true)
+    try {
+      await window.qingniao.workspaceDelete(proj.path, node.path)
+      const parentDir = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : ''
+      const isOpen = (openDirs[proj.id] ?? []).includes(node.path)
+      if (node.type === 'directory' && isOpen) {
+        setOpenDirs((m) => ({ ...m, [proj.id]: (m[proj.id] ?? []).filter((x) => x !== node.path) }))
+      }
+      await refreshDir(proj, parentDir)
+    } catch (e) {
+      setTreeError((m) => ({ ...m, [treeKey(proj.path, '')]: e instanceof Error ? e.message : String(e) }))
+    } finally {
+      setDelNodeBusy(false)
+    }
   }
 
   const mobileOn = !!p.mobile?.enabled
@@ -517,6 +583,50 @@ export function Sidebar(p: Props) {
             </div>
           </Modal>
         )}
+
+        {/* 删除文件/文件夹确认：文件不可恢复，文件夹连同其下所有内容一起删 */}
+        {confirmDelNode && (
+          <Modal title={confirmDelNode.node.type === 'directory' ? t('删除文件夹') : t('删除文件')} onClose={() => setConfirmDelNode(null)}>
+            <p className="confirm-text">
+              {confirmDelNode.node.type === 'directory'
+                ? t('确定删除文件夹「{name}」吗？里面所有文件会一并删除，不可恢复。', { name: confirmDelNode.node.name })
+                : t('确定删除文件「{name}」吗？不可恢复。', { name: confirmDelNode.node.name })}
+            </p>
+            <div className="actions">
+              <button className="ghost" onClick={() => setConfirmDelNode(null)} disabled={delNodeBusy}>
+                {t('取消')}
+              </button>
+              <button
+                className="primary danger-btn"
+                disabled={delNodeBusy}
+                onClick={() => {
+                  void deleteTreeNode(confirmDelNode.proj, confirmDelNode.node)
+                  setConfirmDelNode(null)
+                }}
+              >
+                {delNodeBusy ? t('删除中…') : t('删除')}
+              </button>
+            </div>
+          </Modal>
+        )}
+
+        {/* 新建文件夹命名输入 */}
+        {newDirAsk && (
+          <NewDirModal
+            proj={newDirAsk.proj}
+            parent={newDirAsk.parent}
+            onClose={() => setNewDirAsk(null)}
+            onCreated={async (path) => {
+              await refreshDir(newDirAsk.proj, newDirAsk.parent)
+              // 展开新目录所在层
+              setOpenDirs((m) => {
+                const opened = m[newDirAsk.proj.id] ?? []
+                return opened.includes(newDirAsk.parent) ? m : { ...m, [newDirAsk.proj.id]: [...opened, newDirAsk.parent] }
+              })
+              setNewDirAsk(null)
+            }}
+          />
+        )}
       </aside>
 
       {/* 项目右键菜单：自绘（与全局控件风格一致，不用原生菜单）。点空白处/Esc/滚动都收起 */}
@@ -576,7 +686,126 @@ export function Sidebar(p: Props) {
           </div>
         </div>
       )}
+
+      {/* 文件树节点右键菜单：文件夹支持新建文件/新建文件夹/删除，文件只有删除 */}
+      {treeMenu && (
+        <div
+          className="ctx-mask"
+          onMouseDown={() => setTreeMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault()
+            setTreeMenu(null)
+          }}
+        >
+          <div
+            className="ctxmenu"
+            style={{ left: treeMenu.x, top: treeMenu.y }}
+            onMouseDown={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            {treeMenu.node.type === 'directory' && (
+              <>
+                <button
+                  className="ctx-item"
+                  onClick={() => {
+                    // 新建文件：弹系统另存为对话框，默认落在该目录
+                    window.qingniao
+                      .workspaceNewFile(treeMenu.proj.path, treeMenu.node.path)
+                      .then((r) => {
+                        if (r) {
+                          void refreshDir(treeMenu.proj, treeMenu.node.path)
+                          p.onPickFile(treeMenu.proj, r.path)
+                        }
+                      })
+                      .catch(() => {})
+                    setTreeMenu(null)
+                  }}
+                >
+                  <FilePlus2 size={14} />
+                  {t('新建文件')}
+                </button>
+                <button
+                  className="ctx-item"
+                  onClick={() => {
+                    setNewDirAsk({ proj: treeMenu.proj, parent: treeMenu.node.path })
+                    setTreeMenu(null)
+                  }}
+                >
+                  <FolderPlus size={14} />
+                  {t('新建文件夹')}
+                </button>
+                <div className="ctx-sep" />
+              </>
+            )}
+            <button
+              className="ctx-item danger"
+              onClick={() => {
+                setConfirmDelNode({ proj: treeMenu.proj, node: treeMenu.node })
+                setTreeMenu(null)
+              }}
+            >
+              <Trash2 size={14} />
+              {treeMenu.node.type === 'directory' ? t('删除文件夹') : t('删除文件')}
+            </button>
+          </div>
+        </div>
+      )}
     </>
+  )
+}
+
+/** 新建文件夹：输入名字后调用主进程创建，成功后回调 onCreated(相对路径) */
+function NewDirModal({
+  proj,
+  parent,
+  onClose,
+  onCreated
+}: {
+  proj: Project
+  parent: string
+  onClose: () => void
+  onCreated: (path: string) => Promise<void> | void
+}) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  async function submit() {
+    const n = name.trim()
+    if (!n || busy) return
+    setBusy(true)
+    setErr('')
+    try {
+      const r = await window.qingniao.workspaceNewDir(proj.path, parent, n)
+      await onCreated(r.path)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title={t('新建文件夹')} onClose={onClose}>
+      <p className="confirm-text">{t('在「{dir}」下新建文件夹', { dir: parent || proj.name })}</p>
+      <input
+        autoFocus
+        className="field-input"
+        value={name}
+        placeholder={t('文件夹名')}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void submit()
+          if (e.key === 'Escape') onClose()
+        }}
+      />
+      {err && <p className="confirm-text hint">{err}</p>}
+      <div className="actions">
+        <button className="ghost" onClick={onClose} disabled={busy}>
+          {t('取消')}
+        </button>
+        <button className="primary" onClick={() => void submit()} disabled={busy || !name.trim()}>
+          {busy ? t('创建中…') : t('创建')}
+        </button>
+      </div>
+    </Modal>
   )
 }
 

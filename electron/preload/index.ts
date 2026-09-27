@@ -121,6 +121,15 @@ const api = {
     expectedMtimeMs: number
   ): Promise<{ mtimeMs: number }> =>
     ipcRenderer.invoke('workspace:write', { projectPath, filePath, content, expectedMtimeMs }),
+  /** 代码编辑器「新建文件」：弹系统另存为对话框选路径（校验在项目内），返回相对路径；取消返回 null */
+  workspaceNewFile: (projectPath: string, dirPath?: string): Promise<{ path: string } | null> =>
+    ipcRenderer.invoke('workspace:newFile', { projectPath, dirPath }),
+  /** 代码编辑器「新建文件夹」：在指定目录下创建子目录，返回相对路径 */
+  workspaceNewDir: (projectPath: string, parentDir: string, name: string): Promise<{ path: string }> =>
+    ipcRenderer.invoke('workspace:newDir', { projectPath, parentDir, name }),
+  /** 代码编辑器「删除」文件或文件夹（文件夹递归删除），仅限项目目录内 */
+  workspaceDelete: (projectPath: string, filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('workspace:delete', { projectPath, filePath }),
   /** 计划任务清单（左栏「计划任务」区块）；数据与调度器都在主进程 */
   scheduleList: (): Promise<ScheduleTask[]> => ipcRenderer.invoke('schedule:list'),
   /** 新建/保存计划任务（同一 id 即覆盖），返回落盘后的最新清单 */
