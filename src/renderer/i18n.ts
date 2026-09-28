@@ -321,6 +321,11 @@ const TW_COMPONENTS: Record<string, string> = {
   分: '分',
   启用该任务: '啟用該任務',
   '关闭后不再自动执行，仍可随时手动「立即执行」': '關閉後不再自動執行，仍可隨時手動「立即執行」',
+  错过后补跑: '錯過後補跑',
+  '第 {n} 条：{txt}': '第 {n} 條：{txt}',
+  '第 {n} 条（无文字）': '第 {n} 條（無文字）',
+  '到点时电脑关着或应用没开，下次启动会补跑那一次（仅限 24 小时内，且只补最近一次）':
+    '到點時電腦關著或應用沒開，下次啟動會補跑那一次（僅限 24 小時內，且只補最近一次）',
   '保存中…': '儲存中…',
   '该模型在配置里设为「不支持思考」，故思考档位不可用': '該模型在設定裡設為「不支援思考」，故思考檔位不可用',
   '思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）':
@@ -1020,6 +1025,11 @@ const EN_COMPONENTS: Record<string, string> = {
   分: 'min',
   启用该任务: 'Enable this task',
   '关闭后不再自动执行，仍可随时手动「立即执行」': 'When off it will not run automatically; "Run now" stays available',
+  错过后补跑: 'Catch up if missed',
+  '第 {n} 条：{txt}': 'Message {n}: {txt}',
+  '第 {n} 条（无文字）': 'Message {n} (no text)',
+  '到点时电脑关着或应用没开，下次启动会补跑那一次（仅限 24 小时内，且只补最近一次）':
+    'If the machine is off or the app is closed at that time, the next launch runs it once (within 24h, most recent occurrence only)',
   '保存中…': 'Saving…',
   '该模型在配置里设为「不支持思考」，故思考档位不可用': 'This model is configured as "no thinking", so the thinking picker is unavailable',
   '思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）':

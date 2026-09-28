@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SCHEDULE_PREFIX, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -1245,7 +1245,7 @@ export function ChatView(p: Props) {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }
 
-  /** 「用户消息锚点」竖排条数据：每条可见的用户消息对应一个跳转点（id + 首行预览） */
+  /** 「用户消息锚点」竖排条数据：每条可见的用户消息对应一个跳转点（id + 首行预览，给悬停提示用） */
   const userAnchors = useMemo(() => {
     if (!msgs.length) return []
     const list: { id: string; label: string }[] = []
@@ -1258,7 +1258,8 @@ export function ChatView(p: Props) {
         .join('')
       if (isCtxOnly(txt)) continue
       const label = txt.trim().split('\n')[0] || ''
-      list.push({ id: m.info.id, label: label.slice(0, 24) })
+      // 只用于悬停提示，截到 60 字：再多原生提示会拉成一条横穿屏幕的长条
+      list.push({ id: m.info.id, label: label.slice(0, 60) })
     }
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1814,7 +1815,7 @@ export function ChatView(p: Props) {
    * 「计划」会话另标日期——同一条计划每天产一个会话，光看标题分不出是哪天跑的。
    * 标题本体画在标题栏（放大按钮那一行），这里算好后上报给 App 转发。
    */
-  const isSchedule = !!p.session?.title?.startsWith(SCHEDULE_PREFIX)
+  const isSchedule = isScheduleSession(p.session?.title)
   const firstUserText = useMemo(() => {
     for (const m of msgs) {
       if (m.info.role !== 'user') continue
@@ -1990,11 +1991,14 @@ export function ChatView(p: Props) {
       {p.showUserAnchors && userAnchors.length > 1 && (
         <div className="msg-anchors" aria-label={t('用户消息跳转')}>
           <div className="ma-dots">
-            {userAnchors.map((a) => (
+            {userAnchors.map((a, i) => (
               <button
                 key={a.id}
                 type="button"
                 className="msg-anchor"
+                // 悬停提示：光看一列小横条分不出对应哪条消息，把该条用户消息的首行摆出来
+                // （userAnchors 里已经截好 24 字）。只有附件没有文字的退化成「第 n 条」。
+                title={a.label ? t('第 {n} 条：{txt}', { n: i + 1, txt: a.label }) : t('第 {n} 条（无文字）', { n: i + 1 })}
                 onClick={() => jumpToUserMsg(a.id)}
               >
                 <Minus size={12} strokeWidth={3.2} />
