@@ -24,12 +24,15 @@
 }
 /* 简约浅：#ECECEC 灰底窗体，聊天区与输入框是白色内容面 */
 :root[data-theme='light'] {
-  --bg: #ececec; --bg2: #f5f5f5; --bg3: #e3e3e3; --line: #dcdcdc;
+  --bg: #ececec; --bg2: #f5f5f5; --bg3: #f5f5f5; --line: #dcdcdc;
   --fg: #1f232b; --fg2: #6b7280; --accent: #3b6ef5; --on-accent: #ffffff;
   --ok: #177a4a; --err: #c2404f; --run: #3b6ef5; --shadow: rgba(30, 40, 70, 0.12);
   --content: #ffffff;
   --field-bg: #ffffff; --field-line: #DBDBDB;
   --ai: #f1f1f1;
+  /* --bg3 提到 #f5f5f5 后与侧栏底色（--side-bg 跟随 --bg2）同色，行悬浮/选中就看不见了。
+     侧栏另用极淡一层黑当悬浮层（设置区的悬浮走 --bg3 = #f5f5f5，不压黑） */
+  --side-hover: rgba(0, 0, 0, 0.045);
 }
 /* 克莱因蓝：国际克莱因蓝深蓝块，右侧浅蓝白内容面 */
 :root[data-theme='klein'] {
@@ -379,10 +382,6 @@ input, textarea { font: inherit; }
 }
 .foot-btn:hover { background: var(--side-hover); color: var(--side-fg); }
 .foot-btn.on { background: var(--side-hover); color: var(--side-fg); }
-/* 简约浅主题下 --side-hover 是 #e3e3e3，落在 #f5f5f5 的面板上就是一块灰补丁；
-   底栏这两个小方块改用极淡的一层黑，观感与左栏菜单的浅色一致 */
-:root[data-theme='light'] .foot-btn:hover,
-:root[data-theme='light'] .foot-btn.on { background: rgba(0, 0, 0, 0.045); }
 
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -513,8 +512,7 @@ input, textarea { font: inherit; }
   padding: 11px 12px; margin: 0 -12px 2px; border-radius: 10px;
 }
 .scard:hover { background: var(--bg3); }
-/* 简约浅下 --bg3 是 #e3e3e3，落在白底上是一块灰补丁；改用极淡一层黑（同 .foot-btn 的处理） */
-:root[data-theme='light'] .scard:hover { background: rgba(0, 0, 0, 0.045); }
+/* 简约浅下悬浮层不再压一层黑（那在白内容面上就是一块灰补丁），直接走 --bg3 = #f5f5f5 */
 .scard.off { opacity: 0.55; }
 .scard-main { flex: 1; min-width: 0; cursor: pointer; }
 .scard-name {

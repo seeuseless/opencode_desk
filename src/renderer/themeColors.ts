@@ -66,7 +66,9 @@ export function deriveVars(c: CustomColors): Record<string, string> {
   const dark = luminance(hexToRgb(c.bg)) < 0.35
   const content = dark ? c.bg : mix(c.bg, '#ffffff', 0.6)
   const bg2 = dark ? mix(c.bg, '#ffffff', 0.035) : mix(c.bg, '#ffffff', 0.05)
-  const bg3 = dark ? mix(c.bg, '#ffffff', 0.08) : mix(c.bg, '#000000', 0.03)
+  // 浅色下 bg3 往白里提而不是往黑里压：往黑压出来的那层灰落在浅面板/白内容面上就是一块脏补丁
+  // （内置「简约浅」已把 --bg3 定为 #f5f5f5，自定义主题这里跟同一口径）
+  const bg3 = dark ? mix(c.bg, '#ffffff', 0.08) : mix(c.bg, '#ffffff', 0.35)
   const line = dark ? mix(c.bg, '#ffffff', 0.13) : mix(c.bg, '#000000', 0.09)
   const fg2 = mix(c.fg, c.bg, 0.42)
   const fieldBg = dark ? bg2 : content
