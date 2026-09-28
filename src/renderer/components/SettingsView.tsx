@@ -135,8 +135,6 @@ interface Draft {
   baseURL: string
   apiKey: string
   modelsText: string
-  /** 生视频任务查询地址模板（可选，见 ProviderCfg.videoPoll） */
-  videoPoll: string
   /** 每个模型已编辑过的接入参数（键=模型 ID）；没编辑过的模型用 MODEL_DEFAULTS */
   cfgs: Record<string, ModelCfg>
 }
@@ -268,16 +266,12 @@ const PROVIDER_PRESETS: {
    * 名字里带 tts/image/video 的能自动认出，这里写出来只是让配置更明确、便于将来改名。
    */
   gen?: Record<string, GenKind>
-  /** 生视频任务查询地址模板（带生视频模型的模板预填，省得用户去查文档） */
-  videoPoll?: string
 }[] = [
   {
     id: 'agnes',
     name: 'agnes',
     baseURL: 'https://api.agnes-ai.cn/v1',
-    models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash'],
-    // agnes 的进度查询不在标准 /videos/{id} 上，而在同源 /agnesapi 上按查询参数问（与 media-mcp 内置兜底同形）
-    videoPoll: '{origin}/agnesapi?video_id={video_id}&model_name={model}'
+    models: ['agnes-3.0-flash', 'agnes-image-2.5-flash', 'agnes-video-2.5-flash']
   },
   {
     id: 'mimo',
@@ -436,7 +430,7 @@ export function SettingsView(p: Props) {
     setFormMsg(null)
     setModelForm(null)
     setModelDel(null)
-    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })
+    setDraft({ isNew: true, index: -1, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })
   }
 
   /** 应用提供商模板：本机已有同 ID 的配置原样带出（模型/参数/Base URL），但绝不带入 API Key */
@@ -465,8 +459,6 @@ export function SettingsView(p: Props) {
       baseURL: savedBase ?? preset.baseURL,
       apiKey: '',
       modelsText: ids.join('\n'),
-      // 已存过的配置带出现有值；全新填写时用模板预填的查询地址（agnes 这类非标准端点省得用户去查文档）
-      videoPoll: cur?.videoPoll ?? preset.videoPoll ?? '',
       cfgs
     })
     setFormMsg({ text: t('已填充模板，请填写 API Key'), bad: false })
@@ -485,7 +477,6 @@ export function SettingsView(p: Props) {
       baseURL: c.baseURL,
       apiKey: c.apiKey,
       modelsText: c.models.map((m) => m.id).join('\n'),
-      videoPoll: c.videoPoll ?? '',
       cfgs: Object.fromEntries(c.models.map((m) => [m.id, m]))
     })
   }
@@ -608,9 +599,27 @@ export function SettingsView(p: Props) {
     return lab ? t(lab) : role
   }
 
+  /**
+   * 提供商 ID：界面不再让用户填（名称已经够看了），首次保存时按名称生成，之后**冻结不变**。
+   *
+   * 冻结很重要：这个 ID 是提供商的机器身份 —— opencode.json 的 provider ID、密钥环境变量
+   * （QN_KEY_<ID>）、以及「永久允许调用」清单里的 `provider/model` 都按它认，跟着名称变的话，
+   * 改个名就会让用户攒下的授权记录与内核配置一起失效。同名两家自动加数字后缀，
+   * 不必再让用户自己想一个。
+   */
+  function uniqueProviderId(raw: string, name: string, selfIndex: number): string {
+    const taken = new Set(providers.filter((_, i) => i !== selfIndex).map((p) => p.id))
+    const base = (raw.trim() || slugify(name)).toLowerCase()
+    if (!taken.has(base)) return base
+    for (let n = 2; ; n++) {
+      const cand = `${base}-${n}`
+      if (!taken.has(cand)) return cand
+    }
+  }
+
   async function saveDraft() {
     if (!draft || busySelf) return
-    const id = (draft.id.trim() || slugify(draft.name)).toLowerCase()
+    const id = uniqueProviderId(draft.id, draft.name, draft.index)
     if (!draft.baseURL.trim()) {
       setFormMsg({ text: t('请填写 Base URL'), bad: true })
       return
@@ -619,14 +628,13 @@ export function SettingsView(p: Props) {
       setFormMsg({ text: t('提供商 ID 已存在：') + id, bad: true })
       return
     }
+    // 同名两家由 uniqueProviderId 加后缀避开了，走不到上面那句；留着当兜底
     const cfg: ProviderCfg = {
       id,
       name: draft.name.trim() || id,
       baseURL: draft.baseURL.trim(),
       apiKey: draft.apiKey.trim(),
       enabled: draft.isNew ? true : providers[draft.index].enabled,
-      // 留空不落这个键：生成工具会自己按默认的两种查询地址形态试
-      ...(draft.videoPoll.trim() ? { videoPoll: draft.videoPoll.trim() } : {}),
       models: parseModels(draft.modelsText).map((mid) => draft.cfgs[mid] ?? { id: mid, ...defaultModelCfg() })
     }
     const list = draft.isNew ? [...providers, cfg] : providers.map((x, i) => (i === draft.index ? cfg : x))
@@ -1079,6 +1087,10 @@ export function SettingsView(p: Props) {
                     <div className="prow-name">
                       {c.name}
                       <span className="chip">{t('{n} 个模型', { n: c.models.length })}</span>
+                      {/* ID 不让用户填了，但列在这儿：改名后还能对上号，内核配置与授权记录都按它认 */}
+                      <span className="prow-id" title={t('内部标识：内核配置与「永久允许」清单按它认，创建后不再变化')}>
+                        {c.id}
+                      </span>
                     </div>
                     <div className="prow-url">{c.baseURL}</div>
                   </div>
@@ -1249,7 +1261,7 @@ export function SettingsView(p: Props) {
               <button
                 type="button"
                 className="preset-chip"
-                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', videoPoll: '', cfgs: {} })}
+                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })}
               >
                 {t('手动填写')}
               </button>
@@ -1264,23 +1276,11 @@ export function SettingsView(p: Props) {
             />
           </label>
           <label>
-            ID
-            <input value={draft.id} placeholder={t('留空自动生成，如 deepseek')} onChange={(e) => setDraft({ ...draft, id: e.target.value })} />
-          </label>
-          <label>
             Base URL
             <input
               value={draft.baseURL}
               placeholder="https://api.deepseek.com"
               onChange={(e) => setDraft({ ...draft, baseURL: e.target.value })}
-            />
-          </label>
-          <label title={t('创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个')}>
-            <span className="lab-soft">{t('视频任务查询地址（可选）')}</span>
-            <input
-              value={draft.videoPoll}
-              placeholder={t('如 https://xx/videos/{video_id}')}
-              onChange={(e) => setDraft({ ...draft, videoPoll: e.target.value })}
             />
           </label>
           <label>

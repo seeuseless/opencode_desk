@@ -161,14 +161,6 @@ export interface ProviderCfg {
   apiKey: string
   enabled: boolean
   models: ModelCfg[]
-  /**
-   * 生视频任务查询地址模板（可选），占位符 {video_id} / {model} / {baseURL} / {origin}。
-   *
-   * 创建任务各家都是 POST {baseURL}/videos，但查询进度没有统一约定：agnes 在 {origin}/agnesapi，
-   * OpenAI 兼容端点在 {baseURL}/videos/{video_id}。留空时生视频工具按这两种依次试并记住命中的那个，
-   * 只有两种都不对的提供商才需要手工填这一条。
-   */
-  videoPoll?: string
 }
 
 /** 自定义 MCP 服务器（local 用 command，remote 用 url） */

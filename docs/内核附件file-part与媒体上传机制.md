@@ -74,10 +74,12 @@
   `'auto'`（含旧配置里没这个键）仍按 `TTS_MODEL_RE` / `IMAGE_MODEL_RE` / `VIDEO_MODEL_RE` 判，所以老配置行为不变；
   名字认不出的（seedream、即梦那类）在设置里点一下「生图」就进目标清单，反过来名字像生图的对话模型点「对话」即可排除。
   快速填充模板按名字把 `gen` 与输入类型一起预填，用户改得动。
-- **生视频查询地址**（各家约定最乱的一处）：`check_video` 依次问 ① 提供商表单「生视频任务查询地址」里填的模板
-  （占位符 `{origin} {baseURL} {video_id} {model}`，经 `ProviderCfg.videoPoll` 注入成目标上的 `poll`）、
-  ② `{origin}/agnesapi?video_id&model_name`、③ `{baseURL}/videos/{video_id}`；
+- **生视频查询地址**（各家约定最乱的一处）：`check_video` 依次问 ① `{baseURL}/videos/{video_id}`（OpenAI 兼容标准）、
+  ② `{origin}/agnesapi?video_id&model_name`（agnes 专用端点，MCP 内置兜底）；
   问通的那个按目标记账（`pollPicks`），一次出片轮询几十次不会反复重探。
+  早期版本曾在提供商表单里给过「生视频任务查询地址」手填模板（`ProviderCfg.videoPoll`），已移除 ——
+  绝大多数家要么是标准路径要么是上面那个内置兜底，为一家非标端点让所有用户在表单里填 URL 不划算；
+  真遇到第三种约定时，正确做法是给该家的目标加一个协议 profile，而不是重新把这个输入框加回来。
   任务已完成但响应里没有直链（各家字段不同，或直链已过期）时，再退一步请求 `{baseURL}/videos/{video_id}/content`
   直接把字节存进媒体目录。
 - **生图请求形态按「依次试」而非「按家配表」**（`generateImage`，记账在 `imgShapePicks`）：

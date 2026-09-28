@@ -450,11 +450,7 @@ const TW_SETTINGS: Record<string, string> = {
   手动填写: '手動填寫',
   名称: '名稱',
   '如 DeepSeek': '如 DeepSeek',
-  '留空自动生成，如 deepseek': '留空自動生成，如 deepseek',
-  '如 https://xx/videos/{video_id}': '如 https://xx/videos/{video_id}',
-  '创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个':
-    '建立任務各家都是 POST {baseURL}/videos，查詢進度卻沒有統一約定：留空時工具會依次試 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，並記住問通的那個',
-  '视频任务查询地址（可选）': '影片任務查詢位址（可選）',
+  '内部标识：内核配置与「永久允许」清单按它认，创建后不再变化': '內部標識：內核設定與「永久允許」清單按它認，建立後不再變動',
   隐藏: '隱藏',
   显示: '顯示',
   '拖动左侧手柄可调整顺序': '拖動左側握把可調整順序',
@@ -1157,10 +1153,8 @@ const EN_SETTINGS: Record<string, string> = {
   手动填写: 'Manual entry',
   名称: 'Name',
   '如 DeepSeek': 'e.g. DeepSeek',
-  '留空自动生成，如 deepseek': 'Leave empty to auto-generate, e.g. deepseek',
-  '创建任务各家都是 POST {baseURL}/videos，查询进度却没有统一约定：留空时工具会依次试 {origin}/agnesapi 和 {baseURL}/videos/{video_id}，并记住问通的那个':
-    'Video tasks are POSTed to {baseURL}/videos everywhere, but progress polling is not standardized: if left empty the tool tries {origin}/agnesapi then {baseURL}/videos/{video_id} and remembers the one that works',
-  '视频任务查询地址（可选）': 'Video task poll URL (optional)',
+  '内部标识：内核配置与「永久允许」清单按它认，创建后不再变化':
+    'Internal identifier: the kernel config and the "always allow" list key on it; it never changes after creation',
   隐藏: 'Hide',
   显示: 'Show',
   '拖动左侧手柄可调整顺序': 'Drag the handle to reorder',
@@ -1258,7 +1252,6 @@ const EN_SETTINGS: Record<string, string> = {
   扣积分: 'Points',
   删除计划任务: 'Delete Scheduled Task',
   编辑提供商: 'Edit Provider',
-  '如 https://xx/videos/{video_id}': 'e.g. https://xx/videos/{video_id}',
   '整个目录一起删掉，不可恢复。': ' and cannot be recovered.'
 }
 

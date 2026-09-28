@@ -32,6 +32,16 @@ const api = {
     return () => ipcRenderer.removeListener('opencode:event', handler)
   },
   info: (): Promise<{ workspace: string }> => ipcRenderer.invoke('app:info'),
+  /**
+   * UI 数据（项目清单 / 排序 / 展开态 / 主题…）的读写，落 ~/.qingniaoai/ui-store.json。
+   * 事实源在主进程而非 localStorage —— 后者按 origin 隔离，dev 与安装版各存一份（见 main/uistore.ts）。
+   * get 返回全量快照（启动时一次灌进 localStorage 缓存），set 写单个键。
+   */
+  uiStore: {
+    get: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('ui:store:get'),
+    set: (key: string, value: unknown): Promise<Record<string, unknown>> => ipcRenderer.invoke('ui:store:set', { key, value }),
+    del: (key: string): Promise<Record<string, unknown>> => ipcRenderer.invoke('ui:store:del', key)
+  },
   pickDir: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDir'),
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */

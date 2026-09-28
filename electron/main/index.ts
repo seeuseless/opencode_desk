@@ -15,6 +15,7 @@ import type { SkillDraft, SkillItem, SkillScope } from './types.ts'
 import { readSchedules, removeSchedule, reorderSchedules, runScheduleNow, startScheduler, upsertSchedule } from './scheduler.ts'
 import type { ScheduleTask } from './types.ts'
 import { localUsage } from './usage.ts'
+import { delUiStore, loadUiStore, setUiStore } from './uistore.ts'
 
 /**
  * 主进程职责：
@@ -97,6 +98,12 @@ ipcMain.handle('opencode:api', (_e, path: string, opts?: { method?: string; body
 )
 
 ipcMain.handle('app:info', () => ({ workspace }))
+
+// 渲染层 UI 数据（项目清单、排序、展开态、主题…）→ ~/.qingniaoai/ui-store.json
+// 放主进程而不是 localStorage：后者按 origin 隔离，dev 与安装版会各存一份（见 uistore.ts）
+ipcMain.handle('ui:store:get', () => loadUiStore())
+ipcMain.handle('ui:store:set', (_e, req: { key: string; value: unknown }) => setUiStore(String(req?.key), req?.value))
+ipcMain.handle('ui:store:del', (_e, key: string) => delUiStore(String(key)))
 
 // 本机用量统计（设置 → 使用量）：从内核会话存储聚合，不依赖平台
 ipcMain.handle('usage:local', (_e, range?: { from?: string; to?: string }) => localUsage(range?.from ?? '', range?.to ?? ''))

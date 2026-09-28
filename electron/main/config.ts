@@ -71,8 +71,6 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
           baseURL: String(p.baseURL ?? ''),
           apiKey: String(p.apiKey ?? ''),
           enabled: p.enabled !== false,
-          // 视频任务查询地址模板：留空不落盘（生成工具会按默认几种形态试）
-          ...(String(p.videoPoll ?? '').trim() ? { videoPoll: String(p.videoPoll).trim() } : {}),
           models: Array.isArray(p.models) ? p.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
         }))
     : []
@@ -540,9 +538,7 @@ export function writeOpencodeConfig(s: Settings): void {
               provider: p.name || p.id,
               baseURL: p.baseURL.trim().replace(/\/+$/, ''),
               apiKey: p.apiKey.trim(),
-              model: m.id,
-              // 查询地址模板只有生视频用得上：填过就带上，工具据此优先
-              ...(role === 'video' && p.videoPoll ? { poll: p.videoPoll } : {})
+              model: m.id
             }))
         : []
     )
