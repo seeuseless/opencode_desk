@@ -23,7 +23,7 @@ import { Modal } from './Modal'
 import { useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { t } from '../i18n'
-import { SCHEDULE_PREFIX, fmtYmd } from '../oc'
+import { isScheduleSession, fmtYmd } from '../oc'
 import type { ProjectSortMode } from '../App'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
 
@@ -398,8 +398,8 @@ export function Sidebar(p: Props) {
                         title={s.title}
                       >
                         <span className="sess-title">{s.title ?? s.id}</span>
-                        {/* 计划会话：同一条计划每天产一个会话，光看标题分不出是哪天跑的，标上日期 */}
-                        {s.title?.startsWith(SCHEDULE_PREFIX) && s.time?.created && (
+                        {/* 计划会话（含补跑那一次）：同一条计划每天产一个会话，光看标题分不出是哪天跑的，标上日期 */}
+                        {isScheduleSession(s.title) && s.time?.created && (
                           <span className="sess-date">{fmtYmd(s.time.created)}</span>
                         )}
                         {!!p.busyIds[s.id] && (

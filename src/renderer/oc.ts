@@ -185,6 +185,13 @@ export interface Session {
 
 /** 计划任务产出的会话标题前缀（主进程建会话时加的，见 electron/main/scheduler.ts） */
 export const SCHEDULE_PREFIX = '[计划] '
+/** 错过执行时刻后补跑的那一次，标题前缀不同（多带原定时刻，见 scheduler.ts 的 sessionTitle） */
+export const CATCHUP_PREFIX = '[补跑] '
+
+/** 是不是计划任务产出的会话（含补跑那一次） */
+export function isScheduleSession(title: string | undefined): boolean {
+  return !!title && (title.startsWith(SCHEDULE_PREFIX) || title.startsWith(CATCHUP_PREFIX))
+}
 
 /** 本地时区的 Y-m-d */
 export function fmtYmd(t: number): string {

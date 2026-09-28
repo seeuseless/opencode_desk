@@ -140,6 +140,8 @@ export function SchedulesView(p: Props) {
                   <div className="scard-sub">
                     {specLabel(tk.spec)} · {t('上次执行')} {ranLabel(tk.lastRun)}
                     {tk.enabled ? '' : ' · ' + t('已停用')}
+                    {/* 补跑只在「启用 且 开着 catchUp」时才真的会发生，关掉的那条不必占地方 */}
+                    {tk.enabled && tk.catchUp !== false ? ' · ' + t('错过后补跑') : ''}
                   </div>
                 </div>
                 <div className="scard-acts">
@@ -230,6 +232,8 @@ function ScheduleModal({
   const [day, setDay] = useState(spec?.kind === 'weekly' ? spec.day : 1)
   const [hours, setHours] = useState(spec?.kind === 'hourly' ? String(spec.everyHours) : '1')
   const [enabled, setEnabled] = useState(initial?.enabled ?? true)
+  /** 补跑默认开：老存档没这个键，按开处理（与主进程 normalizeTask 的缺省一致） */
+  const [catchUp, setCatchUp] = useState(initial?.catchUp !== false)
   const [saving, setSaving] = useState(false)
 
   async function save(): Promise<void> {
@@ -245,6 +249,7 @@ function ScheduleModal({
       prompt: prompt.trim(),
       spec: sp,
       enabled,
+      catchUp,
       createdAt: initial?.createdAt ?? Date.now(),
       order: initial?.order ?? 0,
       nextRun: initial?.nextRun ?? Date.now()
@@ -336,6 +341,15 @@ function ScheduleModal({
             <span className="lab-tip">{t('关闭后不再自动执行，仍可随时手动「立即执行」')}</span>
           </div>
           <Switch checked={enabled} onChange={setEnabled} />
+        </div>
+        <div className="sched-on">
+          <div>
+            <b>{t('错过后补跑')}</b>
+            <span className="lab-tip">
+              {t('到点时电脑关着或应用没开，下次启动会补跑那一次（仅限 24 小时内，且只补最近一次）')}
+            </span>
+          </div>
+          <Switch checked={catchUp} onChange={setCatchUp} />
         </div>
         {initial?.lastError && <p className="form-msg bad">{t('上次执行失败：')}{initial.lastError}</p>}
         <div className="actions">

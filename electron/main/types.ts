@@ -628,8 +628,22 @@ export interface ScheduleTask {
   createdAt: number
   /** 列表顺序，越小越靠前；旧数据按 createdAt 倒序初始化 */
   order: number
-  /** 持久化的下次执行时刻（错过即跳过、推进到下个周期） */
+  /**
+   * 持久化的下次执行时刻。
+   *
+   * 过期后是否补跑见 `catchUp`：
+   *  - catchUp 开（默认）：过期未超 CATCHUP_WINDOW 的一次保留原值，交给 tick 补跑；
+   *  - 关掉、或过期太久：读盘时直接推进到下个周期，本次不再执行。
+   */
   nextRun: number
+  /**
+   * 错过执行时刻（当时电脑关机 / 应用没在跑）后，下次启动是否补跑那一次。
+   *
+   * 缺省视为开。老存档没有这个键，不该因为没记录过就变成「一律不补」。
+   * 关掉的理由：「每天 5 点看一眼某行情」这种，错过那一点的数据本来就已经陈了，
+   * 补跑只会让 AI 拿着今天的数据编昨天的日报。
+   */
+  catchUp?: boolean
   lastRun?: number
   /** 最近一次执行产出的内核会话 id（点开可看结果） */
   lastSession?: string
@@ -642,4 +656,6 @@ export interface ScheduleRan {
   taskId: string
   sessionId: string
   name: string
+  /** 本次是「错过后的补跑」：原定执行时刻（ms），正常到点执行时为空 */
+  catchUp?: { at: number }
 }

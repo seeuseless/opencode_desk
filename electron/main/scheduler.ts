@@ -6,9 +6,14 @@
  * 复用渲染层同一条 REST 链路（adapter.api，model 不传自动回落默认档），
  * 会话随即出现在左栏任务列表里，点「计划任务」行可跳回看结果。
  *
- * 进程关窗后驻留托盘（win:close 只隐藏窗口），调度器照跑；
- * 应用完全没在跑导致错过执行时刻的（nextRun 过期超 3 个 tick 窗口），**跳过本次**：
- * 读盘归一化时把过期的 nextRun 推进到下一个周期（窗口内的刚过点不算错过，留给 tick 触发）。
+ * 进程关窗后驻留托盘（win:close 只隐藏窗口），调度器照跑。
+ *
+ * **错过执行时刻**（电脑关机、应用没开）后的补跑语义：
+ *  - 任务开着 `catchUp`（默认）且错过未超过 CATCHUP_WINDOW（24h）→ 读盘时保留过期的
+ *    nextRun 原值，启动后第一轮 tick 就把它补跑掉，会话标题带 `[补跑]` 与原定时刻；
+ *  - 错过更久、或任务关了 catchUp → 读盘时把 nextRun 推进到下个周期，本次不补。
+ * 无论哪种都**只补最近那一次**（连续错过多次也只跑一遍，不连环发会话），
+ * 且补跑后 nextRun 直接落到未来，不会再立刻触发第二次。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -20,10 +25,17 @@ const TICK_MS = 30_000
 const DAY_MS = 86_400_000
 const HOUR_MS = 3_600_000
 /**
- * 「错过」判据：nextRun 过期超过 3 个 tick 才认为当时应用没在跑 → 跳过推进下个周期；
- * 窗口内（正常 tick 抖动 / 刚过点）保留 nextRun 原值，交给 tick 触发执行。
+ * 「刚过点」判据：nextRun 过期超过 3 个 tick 才认为当时应用没在跑（而不是正常 tick 抖动）。
+ * 窗口内的保留 nextRun 原值，交给 tick 正常触发。
  */
 const STALE_MS = 3 * TICK_MS
+/**
+ * 补跑窗口：错过执行时刻超过这么久就不再补，直接推进到下个周期。
+ *
+ * 24 小时是权衡出来的：只覆盖「电脑睡一觉 / 忘开机」这种最常见的场景；
+ * 关机越久，那个时刻的数据越陈，补跑只会让 AI 拿着新数据编旧报告。
+ */
+const CATCHUP_WINDOW = 24 * HOUR_MS
 /** 内置「任务」目录（startScheduler 注入，= 主进程 index.ts 的 workspace） */
 let workspace = ''
 /** 执行完成通知（index.ts 注入：转发 schedule:ran 给渲染层） */
@@ -48,7 +60,7 @@ function isValidSpec(x: unknown): x is ScheduleSpec {
   return s.kind === 'hourly' && Number(s.everyHours) >= 1 && Number(s.everyHours) <= 24
 }
 
-/** 单条归一化：缺字段补默认，过期的 nextRun 重算到下个周期（即「错过跳过」语义） */
+/** 单条归一化：缺字段补默认；过期的 nextRun 按 catchUp 与补跑窗口决定「留着补跑」还是「推进到下个周期」 */
 function normalizeTask(x: unknown): ScheduleTask | null {
   const t = x as Partial<ScheduleTask> | null
   if (!t || typeof t.id !== 'string' || !t.id.trim()) return null
@@ -58,6 +70,10 @@ function normalizeTask(x: unknown): ScheduleTask | null {
   const now = Date.now()
   const lastRun = Number(t.lastRun) > 0 ? Number(t.lastRun) : undefined
   const nextRun = Number(t.nextRun) > 0 ? Number(t.nextRun) : 0
+  // 缺省视为开：老存档没这个键，不该因为「没记录过」就一律不补
+  const catchUp = t.catchUp !== false
+  // 刚过点（tick 抖动内）一律留着；错过较久则看 catchUp 与窗口
+  const keepForCatchUp = catchUp && nextRun > 0 && nextRun <= now - STALE_MS && nextRun >= now - CATCHUP_WINDOW
   return {
     id: t.id,
     name: t.name,
@@ -66,7 +82,8 @@ function normalizeTask(x: unknown): ScheduleTask | null {
     enabled: t.enabled !== false,
     createdAt: Number(t.createdAt) > 0 ? Number(t.createdAt) : now,
     order: Number.isFinite(Number(t.order)) ? Number(t.order) : 0,
-    nextRun: nextRun > now - STALE_MS ? nextRun : nextRunAfter(spec, now, lastRun),
+    nextRun: nextRun > now - STALE_MS || keepForCatchUp ? nextRun : nextRunAfter(spec, now, lastRun),
+    catchUp,
     ...(lastRun ? { lastRun } : {}),
     ...(typeof t.lastSession === 'string' ? { lastSession: t.lastSession } : {}),
     ...(typeof t.lastError === 'string' && t.lastError ? { lastError: t.lastError } : {})
@@ -121,7 +138,25 @@ export function nextRunAfter(spec: ScheduleSpec, from: number, anchor?: number):
   return t
 }
 
-/** 新建：补 createdAt / nextRun；编辑：保留执行历史（lastRun/lastSession/lastError），按新 spec 重算 nextRun */
+/** spec 拍平成可比对的元组（判「用户只是改了个名字」还是「真的改了周期」用） */
+function specKey(s: ScheduleSpec): string {
+  if (s.kind === 'hourly') return `hourly:${s.everyHours}`
+  if (s.kind === 'daily') return `daily:${s.hour}:${s.minute}`
+  return `weekly:${s.day}:${s.hour}:${s.minute}`
+}
+function sameSpec(a: ScheduleSpec, b: ScheduleSpec): boolean {
+  return specKey(a) === specKey(b)
+}
+
+/**
+ * 新建：补 createdAt / nextRun；
+ * 编辑：保留执行历史（lastRun/lastSession/lastError），按新 spec 重算 nextRun ——
+ * **但周期没改时，要把还等着补跑的那一次留住**。
+ *
+ * 为什么不能一律重算（2026-09-29 实测踩到）：应用在 08:00 启动、正准备补跑 07:00 那一次，
+ * 用户在这 15 秒内进表单改了个名字点了保存，`nextRunAfter(spec, now)` 就把它推到明天，
+ * 补跑被一次改名静默吃掉。周期真的改了（7:00 → 9:00）则该丢掉旧时刻：新周期从现在起生效。
+ */
 export function upsertSchedule(t: ScheduleTask): ScheduleTask[] {
   const norm = normalizeTask(t)
   if (!norm) throw new Error('计划任务数据不合法')
@@ -134,7 +169,9 @@ export function upsertSchedule(t: ScheduleTask): ScheduleTask[] {
     norm.lastRun = old.lastRun
     norm.lastSession = old.lastSession
     norm.lastError = old.lastError
-    norm.nextRun = nextRunAfter(norm.spec, now, old.lastRun)
+    // old 已被 readSchedules 归一化过：待补跑的那一次原样留在 old.nextRun 上
+    const pending = old.nextRun <= now - STALE_MS && sameSpec(old.spec, norm.spec) && norm.catchUp
+    norm.nextRun = pending ? old.nextRun : nextRunAfter(norm.spec, now, old.lastRun)
     list.splice(list.indexOf(old), 1, norm)
   } else {
     norm.createdAt = now
@@ -164,11 +201,25 @@ export function reorderSchedules(ids: string[]): ScheduleTask[] {
   return next
 }
 
+/** 会话标题：正常到点是「[计划] 名」，补跑带「[补跑]」与原定时刻 —— 否则用户看到早上 8 点
+ *  执行了一条「5 点的日报」会以为定时错了；原定时刻也得写进去，才好判断补的是哪一次 */
+function sessionTitle(task: ScheduleTask, catchUpAt?: number): string {
+  if (!catchUpAt) return '[计划] ' + task.name
+  return '[补跑] ' + task.name + '（原定 ' + fmtLocal(catchUpAt) + '）'
+}
+
+const p2 = (n: number): string => String(n).padStart(2, '0')
+/** 本地时间 YYYY-MM-DD HH:mm */
+function fmtLocal(t: number): string {
+  const d = new Date(t)
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+}
+
 /** 执行一次：建会话 + 异步发送 prompt；内核受理后立即返回，不等待本轮对话完成 */
-async function runTask(task: ScheduleTask): Promise<{ sessionId?: string; error?: string }> {
+async function runTask(task: ScheduleTask, catchUpAt?: number): Promise<{ sessionId?: string; error?: string }> {
   if (!workspace) return { error: '执行目录未初始化' }
   const qs = '?directory=' + encodeURIComponent(workspace)
-  const r1 = await adapter.api('/session' + qs, 'POST', { title: '[计划] ' + task.name })
+  const r1 = await adapter.api('/session' + qs, 'POST', { title: sessionTitle(task, catchUpAt) })
   if (r1.status >= 400) return { error: String(r1.data ?? '创建会话失败') }
   const sid = (r1.data as { id?: string } | null)?.id
   if (!sid) return { error: '创建会话未返回 id' }
@@ -219,7 +270,7 @@ export async function runScheduleNow(id: string): Promise<{ ok: boolean; session
   }
 }
 
-/** 一轮 tick：到点的执行，错过的（过期超三个 tick）不补、推进周期 */
+/** 一轮 tick：到点的执行；错过未超窗口且任务开着 catchUp 的补跑一次（标题与通知都带「补跑」） */
 async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
@@ -234,19 +285,52 @@ async function tick(): Promise<void> {
       const list = readSchedules()
       const task = list.find((x) => x.id === id)
       if (!task || !task.enabled || task.nextRun > now || runningTaskIds.has(task.id)) continue
+      // 过期超过三个 tick = 当时应用没在跑。补跑的话这次就是补那一轮；
+      // 不补的话 readSchedules 归一化时已把 nextRun 推进到下个周期，落不到这里。
+      const missed = task.nextRun < now - STALE_MS
       runningTaskIds.add(task.id)
       try {
-        // 到点（或 tick 抖动内）：先领取本轮，再执行。错过的在 readSchedules 归一化时已推进过，不会落在这里补跑。
+        // 先领取本轮（nextRun 推到未来）再执行：保证补跑不会立刻再触发第二次，
+        // 执行中崩溃也不会重复创建同一轮会话。
+        const dueAt = task.nextRun
         claimSchedule(list, task)
-        const res = await runTask(task)
+        const res = await runTask(task, missed ? dueAt : undefined)
         writeRunResult(id, res)
-        if (res.sessionId) onRan?.({ taskId: id, sessionId: res.sessionId, name: task.name })
+        if (res.sessionId)
+          onRan?.({
+            taskId: id,
+            sessionId: res.sessionId,
+            name: task.name,
+            ...(missed ? { catchUp: { at: dueAt } } : {})
+          })
       } finally {
         runningTaskIds.delete(task.id)
       }
     }
   } finally {
     ticking = false
+  }
+}
+
+/** 还有到点 / 待补跑的任务没处理吗（决定启动期还要不要继续等内核） */
+function hasPending(): boolean {
+  const now = Date.now()
+  return readSchedules().some((t) => t.enabled && t.nextRun <= now)
+}
+
+/**
+ * 开机补跑要「打开应用就跑」，不能干等一个 tick 周期。
+ *
+ * 内核是 startScheduler 之前才刚 spawn 的，第一次 tick 撞上 `isHealthy() === false`
+ * 会整轮跳过（nextRun 不动），于是一次补跑要等满 30 秒才发生。这里加一条短间隔重试阶梯：
+ * 还有待办就每 2 秒再试一次，最多约 16 秒；处理完（nextRun 已推到未来）立刻收手。
+ * 与定时 tick 共用 tick() 自身的 ticking 锁与 per-task 锁，不会重复创建会话。
+ */
+async function catchUpOnStart(): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    await tick()
+    if (!hasPending()) return
+    await new Promise((r) => setTimeout(r, 2000))
   }
 }
 
@@ -257,7 +341,7 @@ export function startScheduler(ws: string, notify: (r: ScheduleRan) => void): vo
     timer = setInterval(() => {
       void tick()
     }, TICK_MS)
-    void tick()
+    void catchUpOnStart()
   }
 }
 

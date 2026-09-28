@@ -720,7 +720,8 @@ export default function App() {
 
   // 计划任务在后台（托盘驻留时）到点执行：主进程推过来后，补拉内置「任务」目录的会话列表，
   // 新出现的「[计划] xxx」会话展开目录即可见（与 refreshSessions 同样的只补不覆盖合并）；
-  // 同时自增 tick 让计划任务列表页重读一次，「上次执行/失败」不会停在旧值
+  // 同时自增 tick 让计划任务列表页重读一次，「上次执行/失败」不会停在旧值。
+  // 补跑那次的辨识靠会话标题里的「[补跑]…（原定 …）」，不在这里弹窗打扰（notice 是阻塞式 Modal）。
   const [schedTick, setSchedTick] = useState(0)
   useEffect(() => {
     const off = window.qingniao.onScheduleRan(() => {
