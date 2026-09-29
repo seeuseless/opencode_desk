@@ -146,8 +146,9 @@ const TOOLS = [
       '创建视频生成任务（异步，出片通常要几分钟）。用户要求「生视频 / 做个视频 / 让这张图动起来 / ' +
       '按这段音乐出片 / 照这段视频的风格再生成」时都调用本工具——素材是图就传 images、音频传 audios、' +
       '视频传 videos（首尾帧约束构图用 first_frame / last_frame），文字照样放 prompt；什么都不传就是纯文字生视频。' +
-      '本工具只返回 video_id，不会等待出片——拿到 video_id 后告知用户"视频生成中"，随后反复调用 check_video 轮询：' +
-      '每次查询内部已静默等约 12 秒，返回"还在生成中"就立即再查即可，两次之间用一句话向用户播报进度（让用户看到事情在推进，不会手误点停止）。' +
+      '本工具只返回 video_id，不会等待出片——拿到 video_id 后一句话告知用户"视频生成中"，随后反复调用 check_video 轮询：' +
+      '每次查询内部已静默等约 12 秒，返回"还在生成中"就立即再查即可。' +
+      '轮询期间不要再向用户播报进度（界面的工具状态已可见，中间的话是多余的），只在拿到 video_id 时和完成/失败时说一次话。' +
       '完成或失败都要把结果原样转达，视频 URL 与本地文件路径两者都要告诉用户：本地路径用反引号包起来（防止 Markdown 吞掉转义），' +
       '展示视频直接用 ![视频](本地路径) 的形式内嵌——客户端优先播放本地文件，远程 URL 可能过期，不要把 URL 当视频地址贴出来。' +
       '同一 video_id 不要重复 create。' +
@@ -193,7 +194,9 @@ const TOOLS = [
     name: 'check_video',
     description:
       '查询 create_video 任务的进度。返回 生成中 / 已完成（含视频 URL 与本地文件路径）/ 失败（含原因）。' +
-      '每次调用内部已静默等待约 12 秒；返回"还在生成中"时先给用户播报一句进度，然后立即再调本工具，直到完成或失败。' +
+      '每次调用内部已静默等待约 12 秒；返回"还在生成中"时直接再调本工具继续查，直到完成或失败。' +
+      '轮询期间不要向用户重复播报进度——界面上工具调用本身有"进行中"状态提示，用户看得见；只在这两个时刻说一次话：' +
+      '拿到 video_id 时（告知视频生成中、通常要几分钟）和完成/失败时（把结果原样转达）。' +
       '**失败或"已停止查询"就停下**：不要重查、不要重新创建同一个任务，把原因如实告诉用户。' +
       '完成时把结果原样转达，并直接用 ![视频](本地路径) 的形式内嵌本地文件路径展示（路径用反引号包住另一行给出）——客户端优先播放本地文件，远程 URL 可能过期。',
     inputSchema: {
@@ -694,8 +697,8 @@ async function createVideo(args) {
   await markUsed(who)
   return (
     `视频任务已创建（生视频由 ${t.provider || t.id} 提供，模型 ${t.label || t.id}，mode=${body.mode}）：` +
-    `video_id=${videoId}。出片通常要几分钟：请告知用户"视频生成中"，` +
-    `然后先调 check_video（video_id=${videoId}）轮询，每次返回"还在生成中"就播报名进度并立即再查，直到完成或失败。` +
+    `video_id=${videoId}。出片通常要几分钟：向用户说一次"视频生成中"即可，` +
+    `然后调 check_video（video_id=${videoId}）轮询，每次返回"还在生成中"就立即再查（不要播报进度、不要停），直到完成或失败。` +
     warn
   )
 }
@@ -773,7 +776,7 @@ async function checkVideo(args) {
     }
     await new Promise((ok) => setTimeout(ok, 3000))
   }
-  return `还在生成中（video_id=${videoId}，status=${last?.status ?? last?.state ?? '未知'}）。这很正常，出片通常要几分钟：请先用一句话向用户播报进度（如"还在渲染中，请稍等"），再直接调用一次 check_video（video_id=${videoId}）继续查，不要停。`
+  return `还在生成中（video_id=${videoId}，status=${last?.status ?? last?.state ?? '未知'}）。这很正常，出片通常要几分钟：直接再调用一次 check_video（video_id=${videoId}）继续查，不要停，也不要向用户播报进度——界面的工具状态已可见，中间的话是多余的。`
 }
 
 createInterface({ input: process.stdin }).on('line', async (line) => {

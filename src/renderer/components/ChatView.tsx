@@ -1905,9 +1905,20 @@ export function ChatView(p: Props) {
             }
             return (
               <div key={m.info.id} className="amsg">
-                {m.parts.map((part) => (
-                  <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
-                ))}
+                {partRows(m.parts, p.project?.path).map((row) => {
+                  if (row.kind === 'part') {
+                    const part = row.part
+                    return (
+                      <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
+                    )
+                  }
+                  // 相邻重复工具归组：组内最后一个 part 代表渲染，挂 ×N 角标
+                  const last = row.last
+                  const running = row.parts.find((x) => x.state?.status === 'running')
+                  return (
+                    <PartView key={last.id} part={last} projectPath={p.project?.path} preview={running ? previews[running.id] : previews[last.id]} previewParts={row.parts} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} count={row.parts.length} />
+                  )
+                })}
                 {!busy && m.info.id === lastAid && msgErrorText(m) && (
                   <div className="msgerr">
                     <AlertCircle size={13} /> <span>{msgErrorText(m)}</span>
@@ -2842,7 +2853,22 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   question: { name: '提问', icon: <HelpCircle size={13} /> },
   skill: { name: '技能', icon: <Sparkles size={13} /> },
   retry: { name: '重试', icon: <RotateCw size={13} /> },
-  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> }
+  invalid: { name: '无效调用', icon: <AlertCircle size={13} /> },
+  // 内置 MCP（resources/mcp/）：内核按 serverInfo.name 加前缀注册（qingniao-media → media_、
+  // qingniao-music → music_、qingniao-tts → tts_、qingniao-asr → asr_、qingniao-vision → vision_、
+  // panel-browser → panel_），渲染层拿到的就是前缀名
+  media_generate_image: { name: '生成图片', icon: <Film size={13} /> },
+  media_create_video: { name: '生成视频', icon: <Film size={13} /> },
+  media_check_video: { name: '查视频任务', icon: <Film size={13} /> },
+  music_generate_music: { name: '生成音乐', icon: <Music size={13} /> },
+  music_check_music: { name: '查音乐任务', icon: <Music size={13} /> },
+  tts_generate_speech: { name: '配音', icon: <Music size={13} /> },
+  asr_transcribe_audio: { name: '听写', icon: <Music size={13} /> },
+  vision_describe_image: { name: '识图', icon: <Search size={13} /> },
+  panel_navigate: { name: '浏览器导航', icon: <Globe size={13} /> },
+  panel_snapshot: { name: '页面快照', icon: <Globe size={13} /> },
+  panel_click: { name: '点击元素', icon: <MousePointerClick size={13} /> },
+  panel_type: { name: '元素输入', icon: <Keyboard size={13} /> }
 }
 
 /** 内核提问应答弹窗：一问一答逐步进行（上一步/下一步），最后一步提交全部答案 */
@@ -3216,7 +3242,7 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-function toolTarget(part: Part, projPath?: string): string {
+function rawToolTarget(part: Part, projPath?: string): string {
   // 待办清单工具的输出是 JSON 数组（已渲染成任务卡），其标题「N todos」无信息量，不展示在工具行
   if ((part.tool ?? '').toLowerCase().includes('todo')) return ''
   // 无效调用的内核标题是英文「Invalid Tool」，折叠行只留中文名+错误图标
@@ -3233,8 +3259,50 @@ function toolTarget(part: Part, projPath?: string): string {
     else if (/todos?/i.test(ttl)) raw = t('{v}条任务', { v: ttl.replace(/\s*todos?\.?/i, '').trim() })
     else raw = ttl
   }
-  const cut = raw.length > 90 ? raw.slice(0, 90) + '…' : raw
-  return relTarget(cut, projPath)
+  return relTarget(raw, projPath)
+}
+
+/** 工具行的目标（展示用）：相对化后截断到 90 字符 */
+function toolTarget(part: Part, projPath?: string): string {
+  const s = rawToolTarget(part, projPath)
+  return s.length > 90 ? s.slice(0, 90) + '…' : s
+}
+
+/** 相邻重复归组的签名：同工具 + 同目标（不截断全文，避免长路径误合并） */
+function toolSig(part: Part, projPath?: string): string {
+  return (part.tool ?? '').toLowerCase() + '｜' + rawToolTarget(part, projPath)
+}
+
+/** 一条消息的过程行：普通 part 原样出；连续重复的工具行（模型对同一目标反复调同一工具）
+ *  归成一组，由组内最后一个 part 代表渲染，StepLine 挂 ×N 角标。
+ *  只在**相邻**时归组：中间插了别的操作再读回来通常有信号，保持可见。
+ *  组尾失败的归组不合并：连续失败是模型打转的信号（toolFails 熔断兜底最多 3 次），
+ *  逐行标红比藏进 ×N 更有用。 */
+type PartRow =
+  | { kind: 'part'; part: Part }
+  | { kind: 'group'; parts: Part[]; last: Part }
+
+function partRows(parts: Part[], projectPath?: string): PartRow[] {
+  const rows: PartRow[] = []
+  let i = 0
+  while (i < parts.length) {
+    const p = parts[i]
+    if (p.type !== 'tool') {
+      rows.push({ kind: 'part', part: p })
+      i++
+      continue
+    }
+    const sig = toolSig(p, projectPath)
+    let j = i + 1
+    while (j < parts.length && parts[j].type === 'tool' && toolSig(parts[j], projectPath) === sig) j++
+    const run = parts.slice(i, j)
+    const last = run[run.length - 1]
+    const groupable = run.length >= 2 && (last.state?.status ?? 'pending') !== 'error'
+    if (groupable) rows.push({ kind: 'group', parts: run, last })
+    else for (const x of run) rows.push({ kind: 'part', part: x })
+    i = j
+  }
+  return rows
 }
 
 /** 展示用：绝对路径裁剪为项目相对路径 */
@@ -3246,7 +3314,18 @@ function relTarget(s: string, projPath?: string): string {
   return s
 }
 
-function PartView({ part, projectPath, preview, live, diffs }: { part: Part; projectPath?: string; preview?: string; live?: boolean; diffs?: FileDiff[] }) {
+function PartView({ part, projectPath, preview, live, diffs, count, previewParts }: {
+  part: Part
+  projectPath?: string
+  /** 该工具组正在流式写入的入参预览：普通行是自己；重复归组时组内最后一个正在写就显示它的 */
+  preview?: string
+  live?: boolean
+  diffs?: FileDiff[]
+  /** 重复调用归组的次数（≥2 时 StepLine 挂 ×N 角标） */
+  count?: number
+  /** 重复归组里整组正在运行的 part（多个并行跑时同时转圈） */
+  previewParts?: Part[]
+}) {
   // 内核自己塞的过程说明文本（synthetic）不渲染：read 工具会先吐一条
   //   Called the Read tool with the following input: {"filePath":"D:\...\xxx.mp3"}
   // 再跟着文件内容。工具行本身已经写了「读取 + 路径」，这条纯属重复，
@@ -3339,17 +3418,21 @@ function PartView({ part, projectPath, preview, live, diffs }: { part: Part; pro
     } else if (rawOut) {
       body = <CodeBlock text={rawOut} />
     }
+    // 组内若有其他 part 在并行跑（罕见），整行也保持转圈而非「已完成」
+    const anyRun = (previewParts ?? [part]).some((x) => x.type === 'tool' && x.state?.status === 'running')
+    const stFinal = anyRun ? 'running' : st
     return (
       <StepLine
         icon={meta.icon}
         name={meta.name}
-        status={st}
+        status={stFinal}
         target={toolTarget(part, projectPath)}
         preview={preview}
         body={body}
         hideErr={readMiss}
         stats={fd && (fd.additions || fd.deletions) ? { additions: fd.additions, deletions: fd.deletions } : undefined}
-        spin={st === 'running' && tool !== 'bash' && tool !== 'shell' && tool !== 'execute'}
+        spin={stFinal === 'running' && tool !== 'bash' && tool !== 'shell' && tool !== 'execute'}
+        count={count}
       />
     )
   }
@@ -3393,7 +3476,8 @@ function StepLine({
   body,
   hideErr,
   stats,
-  spin = true
+  spin = true,
+  count
 }: {
   icon: ReactNode
   name: string
@@ -3407,6 +3491,8 @@ function StepLine({
   stats?: { additions: number; deletions: number }
   /** running 时图标位是否转圈：终端类长跑命令不转，避免看起来像一直加载 */
   spin?: boolean
+  /** 相邻重复调用的归组次数：显示 ×N 角标（组内最后一次的代表行） */
+  count?: number
 }) {
   const [open, setOpen] = useState(false)
   const expandable = !!body
@@ -3439,6 +3525,7 @@ function StepLine({
                 {stats.deletions > 0 && <span className="d-del">-{stats.deletions}</span>}
               </span>
             )}
+            {count && count > 1 && <span className="step-rep" title={t('同一操作连续重复 {n} 次', { n: count })}>×{count}</span>}
           </span>
         )}
         {status === 'error' && !hideErr && <AlertCircle size={13} className="step-err" />}

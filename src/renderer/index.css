@@ -791,6 +791,11 @@ input, textarea { font: inherit; }
 }
 .step-stat .d-add { color: var(--ok); }
 .step-stat .d-del { color: var(--err); }
+/* 相邻重复调用归组的 ×N 角标：与增减行数字同区，中性色 */
+.step-rep {
+  flex-shrink: 0; color: inherit; opacity: 0.75;
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+}
 .step-err { color: var(--err); flex-shrink: 0; }
 .step-chev { flex-shrink: 0; transition: transform 0.15s; }
 .step-chev.up { transform: rotate(180deg); }
