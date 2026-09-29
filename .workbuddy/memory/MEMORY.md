@@ -22,3 +22,16 @@
 
 ## 主题/样式
 - 主题用 `:root[data-theme='...']` 切换；浅色（light）下浮层类 UI 要灰调（--fg2），不要 accent/绿/红扎眼色。
+- **设置页不要胶囊底色**：用户明确反感 `background: var(--bg2)` + 描边的「卡片按钮」行（如主题背景图槽位），
+  改为无底色的裸行 + 缩略图自身可点（`.bg-slot-main`）+ 悬停才显形的角标动作钮。
+- **`dialog.showOpenDialog` 的 `filters.extensions` 绝不能带前导点**：传 `.jpg` 会被 Windows 拼成 `..jpg` 通配，
+  **文件列表直接空掉，用户一张都选不了**（2026-09-29 踩过）。一律 `slice(1)` 去掉点，并加「所有文件」兜底档。
+- **主进程改动必须重启整个 App 才生效**（`electron-vite dev` 自动重启；`build` 产物要手动重启），
+  渲染层/CSS 改动热更新即可。遇到「代码改了但行为没变」先确认是不是主进程。
+- **右列（`.rightcol`）已废除悬浮卡片设计**（2026-09-29）：不再有 `margin:8px 8px 8px 0` + `border-radius:12px`，
+  和侧栏一样直接贴满窗口边缘、四角切平。用户明确不要「窗口顶/右/下留缝隙、透底色、圆角」。
+  不要再给右列加回外边距或圆角，也不要按浏览器状态写贴顶补丁。
+- **`electron-vite build` 在沙箱下会静默失败**（`safe-delete` shim 拦 `out/` 批量清空，退出码 0 但产物没更新）
+  → 一律用 `NODE_OPTIONS= npx electron-vite build` 构建，否则改了 CSS 但界面没变化会怀疑人生。
+
+

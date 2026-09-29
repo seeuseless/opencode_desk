@@ -11,7 +11,7 @@ import { Modal } from './components/Modal'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import { getLang, setLang, t, type Lang } from './i18n'
 import { load, save } from './store'
-import { CUSTOM_ID, THEMES } from './theme'
+import { CUSTOM_ID, THEMES, DEFAULT_THEME_BG, type ThemeBgCfg, type ThemeBgSlot, type ThemeBgMode } from './theme'
 import { DEFAULT_CUSTOM, DERIVED_KEYS, deriveVars, type CustomColors } from './themeColors'
 import { CODE_STYLES, type CodeStyle } from './codeStyle'
 
@@ -62,6 +62,14 @@ export default function App() {
   }
   const [theme, setTheme] = useState<string>(loadTheme)
   const [custom, setCustom] = useState<CustomColors>(() => load('qingniao.themeColors', DEFAULT_CUSTOM))
+  // 主题背景图（设置 → 通用 → 主题背景图）：持久化 themes 目录里的图片路径，data URL 按需经主进程读出
+  const [themeBg, setThemeBg] = useState<ThemeBgCfg>(() => {
+    const cfg = load<Partial<ThemeBgCfg>>('qingniao.themeBg', DEFAULT_THEME_BG)
+    const mode: ThemeBgMode = cfg.mode === 'full' || cfg.mode === 'split' ? cfg.mode : 'none'
+    return { mode, full: typeof cfg.full === 'string' ? cfg.full : null, left: typeof cfg.left === 'string' ? cfg.left : null, right: typeof cfg.right === 'string' ? cfg.right : null }
+  })
+  /** 图片路径 → data URL（SettingsView 缩略图与 CSS 变量共用，路径没变就不重读） */
+  const [bgUrls, setBgUrls] = useState<Record<string, string>>({})
   const [codeStyle, setCodeStyle] = useState<CodeStyle>(() => {
     const value = load<string>('qingniao.codeStyle', 'github')
     return CODE_STYLES.some((x) => x.id === value) ? value as CodeStyle : 'github'
@@ -175,6 +183,58 @@ export default function App() {
       for (const k of DERIVED_KEYS) el.style.removeProperty(k)
     }
   }, [theme, custom])
+
+  // 主题背景图：持久化 + 把 themes 目录里的图片路径解析成 data URL 写进 CSS 变量
+  // （--side-bg-image 铺到左侧栏，--content-bg-image 铺到右侧内容区；整屏一张时两处同图）
+  useEffect(() => { save('qingniao.themeBg', themeBg) }, [themeBg])
+
+  useEffect(() => {
+    const el = document.documentElement
+    el.dataset.themeBg = themeBg.mode
+    let alive = true
+    void (async () => {
+      // 路径没变就吃缓存，不重复读盘
+      const next: Record<string, string> = {}
+      for (const slot of ['full', 'left', 'right'] as ThemeBgSlot[]) {
+        const path = themeBg[slot]
+        if (!path || bgUrls[path]) continue
+        const url = await window.qingniao.readThemeBg(path)
+        if (!alive) return
+        if (url) next[path] = url
+      }
+      if (!alive) return
+      const urls = { ...bgUrls, ...next }
+      const imgVar = (path: string | null): string | null => (path && urls[path] ? `url("${urls[path]}")` : null)
+      // 整屏一张：左右两块铺同一幅；左右分开：各铺各的；不使用：两侧都不铺
+      const sideImg = themeBg.mode === 'split' ? imgVar(themeBg.left) : themeBg.mode === 'full' ? imgVar(themeBg.full) : null
+      const contentImg = themeBg.mode === 'full' ? imgVar(themeBg.full) : themeBg.mode === 'split' ? imgVar(themeBg.right) : null
+      for (const [k, v] of [['--side-bg-image', sideImg], ['--content-bg-image', contentImg]] as const) {
+        if (v) el.style.setProperty(k, v)
+        else el.style.removeProperty(k)
+      }
+      // 右列铺了图才把各层面转半透明（图在 .rightcol 自身，层面不透明就全被盖住）；
+      // 左右分开时若只配了左侧，这里保持 off，右列仍是原来的实底色
+      el.dataset.bgContent = contentImg ? 'on' : 'off'
+      if (Object.keys(next).length) setBgUrls((prev) => ({ ...prev, ...next }))
+    })()
+    return () => { alive = false }
+  }, [themeBg, bgUrls])
+
+  /** 设置 → 通用 → 主题背景图：挑图（主进程复制进 themes 目录）落到对应槽位，data URL 先行用于即时预览 */
+  async function pickThemeBg(slot: ThemeBgSlot) {
+    try {
+      const r = await window.qingniao.pickThemeBg()
+      if (!r) return
+      setBgUrls((prev) => ({ ...prev, [r.path]: r.url }))
+      setThemeBg((c) => ({ ...c, [slot]: r.path }))
+    } catch { /* 对话框失败静默 */ }
+  }
+  function clearThemeBg(slot: ThemeBgSlot) {
+    setThemeBg((c) => ({ ...c, [slot]: null }))
+  }
+  function setThemeBgMode(mode: ThemeBgMode) {
+    setThemeBg((c) => ({ ...c, mode }))
+  }
 
   // 语言：模块变量已在事件里拨过（见 changeLang），这里只同步 <html lang>
   useEffect(() => {
@@ -1011,6 +1071,11 @@ export default function App() {
               custom={custom}
               onCustom={(k, v) => setCustom((c) => ({ ...c, [k]: v }))}
               onResetCustom={() => setCustom(DEFAULT_CUSTOM)}
+              themeBg={themeBg}
+              bgUrls={bgUrls}
+              onThemeBgPick={pickThemeBg}
+              onThemeBgClear={clearThemeBg}
+              onThemeBgMode={setThemeBgMode}
               codeStyle={codeStyle}
               onCodeStyle={setCodeStyle}
                normalChatWidth={normalChatWidth}

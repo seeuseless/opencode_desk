@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
 import { AccountPanel } from './AccountPanel'
 import { UpdatePanel } from './UpdatePanel'
-import { getThemeList, CUSTOM_ID } from '../theme'
+import { getThemeList, CUSTOM_ID, type ThemeBgCfg, type ThemeBgMode, type ThemeBgSlot } from '../theme'
 import { LANGS, t, type Lang } from '../i18n'
 import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
@@ -66,6 +66,13 @@ interface Props {
   custom: CustomColors
   onCustom: (key: keyof CustomColors, value: string) => void
   onResetCustom: () => void
+  /** 主题背景图（设置 → 通用 → 主题背景图）：整屏一张 / 左右分开 */
+  themeBg: ThemeBgCfg
+  /** 图片路径 → data URL（缩略图与切换即时预览用，App 统一解析缓存） */
+  bgUrls: Record<string, string>
+  onThemeBgPick: (slot: ThemeBgSlot) => void
+  onThemeBgClear: (slot: ThemeBgSlot) => void
+  onThemeBgMode: (mode: ThemeBgMode) => void
   codeStyle: CodeStyle
   onCodeStyle: (style: CodeStyle) => void
   normalChatWidth: number
@@ -106,6 +113,26 @@ const CUSTOM_FIELDS: { key: keyof CustomColors; label: string }[] = [
   { key: 'fg', label: '正文文字' },
   { key: 'sideBg', label: '左侧面板底色' },
 ]
+
+/** 主题背景图的单个槽位：标签 + 缩略图（整行可点 = 选择/更换，悬停整行浮起）。
+ *  不做独立的「选择图片」按钮：点缩略图就是上传入口，已有图时角标提供更换/移除。 */
+function BgSlot({ label, url, onPick, onClear }: { label: string; url: string; onPick: () => void; onClear: () => void }) {
+  return (
+    <div className={'bg-slot' + (url ? ' has-img' : '')}>
+      <button type="button" className="bg-slot-main" onClick={onPick} title={url ? t('更换图片') : t('选择图片')}>
+        <span className="bg-slot-preview">
+          {url ? <img src={url} alt="" /> : <ImagePlus size={18} />}
+        </span>
+        <span className="bg-slot-text">{label}</span>
+      </button>
+      {url && (
+        <button type="button" className="bg-slot-del" onClick={onClear} title={t('移除')}>
+          <Trash2 size={13} />
+        </button>
+      )}
+    </div>
+  )
+}
 
 /** 设置页左侧导航：账号 / 通用 / 模型 / 技能 / MCP / 使用量 / 关于 */
 type TabId = SettingsTab
@@ -1042,6 +1069,59 @@ export function SettingsView(p: Props) {
               <button type="button" className="ghost cc-reset" onClick={p.onResetCustom}>
                 重置
               </button>
+            </div>
+          )}
+          <h4 className="sub-title">{t('主题背景图')}</h4>
+          <p className="sec-tip">
+            {t('给界面配上自己的壁纸：「整屏一张」整个窗口铺同一幅；「左右分开」左侧栏与右侧内容区各铺一张。图片会复制一份存到应用目录，原文件删除后不受影响。')}
+          </p>
+          <div className="acct-tabs">
+            <button
+              type="button"
+              className={'seg-btn' + (p.themeBg.mode === 'none' ? ' on' : '')}
+              onClick={() => p.onThemeBgMode('none')}
+            >
+              {t('不使用')}
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (p.themeBg.mode === 'full' ? ' on' : '')}
+              onClick={() => p.onThemeBgMode('full')}
+            >
+              {t('整屏一张')}
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (p.themeBg.mode === 'split' ? ' on' : '')}
+              onClick={() => p.onThemeBgMode('split')}
+            >
+              {t('左右分开')}
+            </button>
+          </div>
+          {p.themeBg.mode === 'full' && (
+            <div className="bg-slots">
+              <BgSlot
+                label={t('整屏')}
+                url={p.themeBg.full ? p.bgUrls[p.themeBg.full] : ''}
+                onPick={() => p.onThemeBgPick('full')}
+                onClear={() => p.onThemeBgClear('full')}
+              />
+            </div>
+          )}
+          {p.themeBg.mode === 'split' && (
+            <div className="bg-slots">
+              <BgSlot
+                label={t('左侧栏')}
+                url={p.themeBg.left ? p.bgUrls[p.themeBg.left] : ''}
+                onPick={() => p.onThemeBgPick('left')}
+                onClear={() => p.onThemeBgClear('left')}
+              />
+              <BgSlot
+                label={t('右侧内容区')}
+                url={p.themeBg.right ? p.bgUrls[p.themeBg.right] : ''}
+                onPick={() => p.onThemeBgPick('right')}
+                onClear={() => p.onThemeBgClear('right')}
+              />
             </div>
           )}
         </section>

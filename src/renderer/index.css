@@ -219,23 +219,38 @@ input, textarea { font: inherit; }
   标题栏窗口按钮与输入行右侧图标全部被裁掉（拖窄窗口时必现）。归零后布局恒等于窗口宽，
   超宽内容由 .msgs / 表格自身横向滚动消化 */
 .app { flex: 1; display: flex; min-height: 0; min-width: 0; background: var(--side-bg); }
-/* 右列：标题栏 + 内容区（侧栏独占左侧全高，一直顶到窗口最上面）。
-   右列整体做成悬浮卡片：与窗口边缘留出缝隙露出底色，配圆角更有层次 */
+/* 右列：标题栏 + 内容区。和侧栏一样贴满窗口边缘——不做悬浮卡片（8px 外边距 + 圆角
+   会在窗口顶/右/下留缝隙、透底色，用户明确不要），直接铺满、四角切平。 */
 .rightcol {
   flex: 1; min-width: 0; display: flex; flex-direction: column;
-  margin: 8px 8px 8px 0;
-  background: var(--content);
-  border-radius: 12px;
+  background-color: var(--content);
   overflow: hidden;
 }
-/* 浏览器面板放大时侧栏隐藏、面板要铺满整窗：卡片缝隙与圆角一并还原 */
-.app:has(.browser-panel.max) .rightcol { margin: 0; border-radius: 0; }
+/* 浏览器放大占满时，工具栏不再是一条居中胶囊，直接钉到窗口顶部整行铺满：
+   position:fixed 彻底脱离 titlebar 的 flex/边距约束，任何上层空隙/圆角/边框一并消除。
+   右侧留 128px 给窗口按钮（-/+✕），按钮保持可点。 */
+.app:has(.browser-panel.max) .bp-head {
+  position: fixed;
+  top: 0; left: 0; right: 128px;
+  width: auto; height: 40px;
+  border-radius: 0;
+  border: 0;
+  box-shadow: none;
+  padding: 0 8px;
+  z-index: 20;
+}
+/* 放大态下标题栏内边距归零、槽位保留 flex:1 缓冲，窗口按钮靠 margin-left:auto 钉在最右 */
+.app:has(.browser-panel.max) .titlebar { padding: 0; }
+.app:has(.browser-panel.max) .tb-browser-slot { flex: 1 1 auto; padding: 0; }
+/* 窗口按钮浮在 fixed 工具栏之上，保证 -/+✕ 可点，且恒定靠右 */
+.app:has(.browser-panel.max) .tb-acts { position: relative; z-index: 30; margin-left: auto; }
 
 /* ================= 自绘标题栏（只在右列上方，底色跟右列内容面一致） ================= */
 .titlebar {
+  position: relative;
   height: 40px; min-height: 40px;
   display: flex; align-items: center; gap: 2px;
-  background: var(--content);
+  background: var(--surface);
   padding: 0 4px 0 12px;
   -webkit-app-region: drag; user-select: none;
 }
@@ -253,7 +268,8 @@ input, textarea { font: inherit; }
 }
 .ch-date { flex-shrink: 0; font-size: 11.5px; opacity: 0.75; }
 /* 右段窗口按钮：与左侧内容自然分隔，不额外画竖线 */
-.tb-acts { display: flex; align-items: center; gap: 2px; height: 100%; flex-shrink: 0; }
+/* z-index 确保放大态下始终浮在绝对定位的浏览器工具栏之上，保证 -/+✕ 可点 */
+.tb-acts { display: flex; align-items: center; gap: 2px; height: 100%; flex-shrink: 0; position: relative; z-index: 2; }
 .tb-code-tools {
   display: flex; align-items: center; gap: 8px; min-width: 0; max-width: min(620px, 55vw);
   height: 100%; color: var(--fg2); font-size: 12px; -webkit-app-region: no-drag;
@@ -270,12 +286,16 @@ input, textarea { font: inherit; }
 .tb-close:hover { background: #e0245e; color: #fff; }
 
 /* ================= 标题栏中间槽位：浏览器工具栏挂载点（空白处仍是可拖拽区） ================= */
-.tb-browser-slot { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; height: 100%; }
+.tb-browser-slot {
+  flex: 1; min-width: 0; height: 100%;
+  display: flex; align-items: stretch;   /* 撑满标题栏高度，工具栏不居中浮空 */
+  justify-content: center;
+}
 /* 代码模式标题栏左侧与代码区等宽，沿用编辑器背景，避免 Header 像另一块面板 */
 .rightcol.code-mode-layout .titlebar { position: relative; isolation: isolate; }
 .rightcol.code-mode-layout .titlebar::before {
   content: ''; position: absolute; z-index: 0; inset: 0 auto 0 0;
-  width: var(--code-head-width); background: var(--code-bg);
+  width: var(--code-head-width); background: var(--surface-code);
 }
 .rightcol.code-mode-layout .titlebar > * { position: relative; z-index: 1; }
 .menu-trigger:disabled { cursor: default; opacity: 1; }
@@ -284,6 +304,43 @@ input, textarea { font: inherit; }
 .side {
   width: 260px; min-width: 260px; background: var(--side-bg);
   display: flex; flex-direction: column; padding: 10px 12px 10px;
+}
+/* ================= 主题背景图（设置 → 通用 → 主题背景图） =================
+   App 把选中的图写成内联变量：整屏一张时 --side-bg-image 与 --content-bg-image 同图，
+   左右分开时各铺各的；未启用时变量为 none，界面与原来完全一致。
+   关键：**不能**把图垫在 ::before 底层——标题栏以下每一层（.main/.msgs/.qbar/.cwrap…）
+   都 own 着不透明底色，会把图整块盖住，只剩标题栏那一行看得见图。
+   所以图直接铺在 .rightcol 自身（圆角 + overflow:hidden 天然裁切），
+   再让这些层面在启用背景图时整体转半透明（--surface*），图透出来、文字仍可读。 */
+:root { --side-bg-image: none; --content-bg-image: none; }
+/* 关闭背景图时，三个 surface 变量等于原底色，界面与改动前逐像素一致 */
+:root {
+  --surface: var(--content);
+  --surface-main: var(--bg);
+  --surface-code: var(--code-bg);
+  --surface-gutter: var(--code-gutter);
+}
+/* 只有右侧真的铺了图才转半透明（左右分开时若只配了左侧，右列保持实底色不变灰）。
+   层面色占 55%、留 45% 透明让图明显透出——既「整体都是背景图」，又不至于全透明到看不清文字与层级。 */
+html[data-bg-content='on'] {
+  --surface: color-mix(in srgb, var(--content) 55%, transparent);
+  --surface-main: color-mix(in srgb, var(--bg) 55%, transparent);
+  --surface-code: color-mix(in srgb, var(--code-bg) 70%, transparent);
+  --surface-gutter: color-mix(in srgb, var(--code-gutter) 70%, transparent);
+}
+/* 聊天输入框也要透出背景图：本体从实色转半透明（描边/圆角保留，仍是可点击的输入卡） */
+html[data-bg-content='on'] .cbox {
+  background: color-mix(in srgb, var(--field-bg) 55%, transparent);
+}
+.side {
+  background-image: var(--side-bg-image);
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+}
+/* 右列：底色垫在图下面（--surface-main），图直接铺在 .rightcol 自身，整列从上到下贯通 */
+.rightcol {
+  background-color: var(--content);
+  background-image: var(--content-bg-image);
+  background-size: cover; background-position: top center; background-repeat: no-repeat;
 }
 .side-resizer, .work-resizer {
   flex: 0 0 6px; width: 6px; min-width: 6px; cursor: col-resize;
@@ -399,14 +456,14 @@ input, textarea { font: inherit; }
 /* ================= 主区 ================= */
 /* flex column 子项默认 min-height:auto，内容多时会撑破父容器——弹性子项（.main/.content/.msgs）必须 min-height:0，
    .msgs 的 overflow-y:auto 才能在其内部滚动而不是把整个界面往下顶 */
-.main { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.main { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--surface-main); }
 /* 内容容器：中间工作区 + 最右侧对话；计划任务也只占中间，不再卸载对话 */
 .content { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: row; }
 .chat-pane { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .code-pane {
   position: relative; flex: 1 1 0; width: 0; min-width: 260px; min-height: 0;
   display: flex; flex-direction: column; overflow: hidden;
-  background: var(--code-bg); color: var(--code-fg);
+  background: var(--surface-code); color: var(--code-fg);
 }
 .code-head {
   height: 50px; min-height: 50px; display: flex; align-items: center; gap: 8px;
@@ -442,11 +499,11 @@ input, textarea { font: inherit; }
 :root[data-code-dark='false'] .code-save { background: #f1f2f4; color: #3f4650; box-shadow: inset 0 0 0 1px #d8dade; }
 :root[data-code-dark='false'] .code-save:hover:not(:disabled) { background: #e7e9ec; color: #20242a; }
 :root[data-code-dark='false'] .code-save:disabled { background: #f6f7f8; color: #a0a4ab; box-shadow: inset 0 0 0 1px #e5e7eb; }
-.code-mirror { flex: 1; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--code-bg); color: var(--code-fg); }
-.code-mirror .cm-editor { width: 100%; max-width: 100%; min-width: 0; height: 100%; overflow: hidden; background: var(--code-bg); color: var(--code-fg); }
+.code-mirror { flex: 1; width: 100%; max-width: 100%; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface-code); color: var(--code-fg); }
+.code-mirror .cm-editor { width: 100%; max-width: 100%; min-width: 0; height: 100%; overflow: hidden; background: var(--surface-code); color: var(--code-fg); }
 .code-mirror .cm-scroller { width: 100%; max-width: 100%; box-sizing: border-box; overflow-x: auto; overflow-y: auto; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 13px; line-height: 1.65; }
 .code-mirror .cm-content { min-width: max-content; padding: 16px 0 40px; caret-color: var(--code-keyword); }
-.code-mirror .cm-gutters { color: var(--code-comment); background: var(--code-gutter); border-right-color: var(--code-line); }
+.code-mirror .cm-gutters { color: var(--code-comment); background: var(--surface-gutter); border-right-color: var(--code-line); }
 .code-mirror .cm-activeLine, .code-mirror .cm-activeLineGutter { background: var(--code-active-line); }
 .code-mirror .cm-selectionBackground, .code-mirror .cm-content ::selection { background: var(--code-selection) !important; }
 .code-mirror .cm-cursor { border-left-color: var(--code-keyword); }
@@ -487,17 +544,17 @@ input, textarea { font: inherit; }
 }
 .settings-head h3 { flex: 1; font-size: 15px; }
 /* 浮层中的设置页只占标题栏以下空间，不再相对整个内容区绝对定位 */
-.main.settings { position: relative; inset: auto; flex: 1; background: var(--content); }
+.main.settings { position: relative; inset: auto; flex: 1; background: var(--surface); }
 
 /* 无项目时的引导页 */
-.welcome { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--content); }
+.welcome { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--surface); }
 .welcome-inner { text-align: center; max-width: 420px; padding: 0 24px; }
 .welcome-inner h2 { font-size: 19px; margin-bottom: 12px; }
 .welcome-inner p { color: var(--fg2); font-size: 13px; line-height: 1.9; margin-bottom: 22px; }
 .welcome-acts { display: flex; gap: 10px; justify-content: center; }
 
 /* ================= 计划任务列表页（内容区整页，配色与右侧对话区一致） ================= */
-.spage { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--content); color: var(--fg); }
+.spage { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); color: var(--fg); }
 .spage-head {
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
   height: 50px; padding: 0 14px 0 24px;
@@ -526,7 +583,7 @@ input, textarea { font: inherit; }
 
 
 /* ================= 消息流（扁平，无卡片框） ================= */
-.msgs { flex: 1; overflow-y: auto; padding: 20px 24px 12px; background: var(--content); }
+.msgs { flex: 1; overflow-y: auto; padding: 20px 24px 12px; background: var(--surface); }
 .empty { color: var(--fg2); text-align: center; margin-top: 14vh; line-height: 2; }
 /* 空对话引导：标题用主文字色突出，说明行沿用 .empty 的弱化色 */
 .empty-title { color: var(--fg); font-size: 15px; font-weight: 600; margin-bottom: 2px; }
@@ -629,7 +686,7 @@ input, textarea { font: inherit; }
   flex: none;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
   padding: 6px 24px 8px;
-  background: var(--content);
+  background: var(--surface);
 }
 
 /* Markdown 正文（react-markdown 渲染，配色走主题变量） */
@@ -941,7 +998,7 @@ input, textarea { font: inherit; }
 @keyframes jump-in { from { opacity: 0; transform: translate(50%, 6px); } to { opacity: 1; transform: translate(50%, 0); } }
 
 /* ================= 任务队列条（输入框上方） ================= */
-.qbar { padding: 0 24px 6px; background: var(--content); }
+.qbar { padding: 0 24px 6px; background: var(--surface); }
 .qbar .col { background: var(--field-bg); border: 1px solid var(--field-line); border-radius: 12px; padding: 4px 8px 6px; }
 .qhead {
   display: flex; align-items: center; gap: 7px; width: 100%;
@@ -963,8 +1020,8 @@ input, textarea { font: inherit; }
 
 /* ================= 一体化输入框 ================= */
 /* 输入框区域与聊天区同一背景色；#FFF+描边用在发送按钮上 */
-.cwrap { padding: 6px 24px 20px; background: var(--content); }
-.jumpwrap { background: var(--content); }
+.cwrap { padding: 6px 24px 20px; background: var(--surface); }
+.jumpwrap { background: var(--surface); }
 .cbox {
   display: flex; flex-direction: column;
   background: var(--field-bg);
@@ -1397,6 +1454,35 @@ input, textarea { font: inherit; }
 /* 重置按钮与色块行对齐（抬高到色块底边） */
 .cc-reset { margin-left: auto; align-self: flex-end; padding: 5px 12px; font-size: 12.5px; }
 
+/* 主题背景图（设置 → 通用 → 主题背景图）：槽位 = 缩略图（点击即上传/更换）+ 名称，无胶囊底色 */
+.bg-slots { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; max-width: 380px; }
+.bg-slot { position: relative; display: flex; align-items: center; }
+.bg-slot-main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px;
+  padding: 0; border: 0; background: none; cursor: pointer; text-align: left;
+  color: var(--fg); font: inherit;
+}
+.bg-slot-preview {
+  flex-shrink: 0; width: 108px; height: 58px; border-radius: 8px; overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg3); color: var(--fg2); box-shadow: inset 0 0 0 1px var(--line);
+  transition: box-shadow .15s ease;
+}
+.bg-slot-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bg-slot-text { font-size: 12.5px; color: var(--fg2); transition: color .15s ease; }
+.bg-slot-main:hover .bg-slot-preview { box-shadow: inset 0 0 0 1px var(--accent); }
+.bg-slot-main:hover .bg-slot-text { color: var(--fg); }
+/* 移除按钮压在缩略图右上角，默认隐形，悬停槽位才浮出 */
+.bg-slot-del {
+  position: absolute; left: 96px; top: -4px; z-index: 2;
+  width: 22px; height: 22px; border-radius: 50%; border: 0; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg2); box-shadow: 0 0 0 1px var(--line);
+  color: var(--fg2); cursor: pointer; opacity: 0; transition: opacity .15s ease;
+}
+.bg-slot:hover .bg-slot-del { opacity: 1; }
+.bg-slot-del:hover { color: var(--fg); }
+
 .plist { display: flex; flex-direction: column; gap: 8px; }
 .plist-empty { color: var(--fg2); font-size: 13px; padding: 16px 0; }
 .prow {
@@ -1772,7 +1858,7 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 /* 对话固定在最右；row-reverse 让 DOM 中靠后的浏览器视觉上落到左边 */
 /* 聊天在左、内置浏览器面板在最右：面板渲染在 main 之后（非代码模式浏览器开着时才挂） */
 .chat-row { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: row; }
-.browser-panel { position: relative; width: 40%; min-width: 240px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--content); }
+.browser-panel { position: relative; width: 40%; min-width: 240px; max-width: 62%; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); }
 .browser-panel.max { width: auto; min-width: 0; max-width: none; flex: 1; border-left: none; }
 /* 用户没点开面板：只藏 UI，webview 继续挂着供 AI 操作（不能卸载，卸载即销毁 webContents） */
 .browser-panel.hidden { display: none; }
@@ -1813,13 +1899,16 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .float-close:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
 /* 拖拽护罩：拖动气泡/对话卡/调宽时盖住全窗，指针事件全程留在主文档不被 webview 抢走 */
 .drag-shield { position: fixed; inset: 0; z-index: 100; cursor: grabbing; }
-/* 浏览器工具栏（portal 到标题栏中间）：胶囊造型融入面板配色；内部交互须免拖拽区 */
+/* 浏览器工具栏（portal 到标题栏中间）：不再是「胶囊卡片」，而是直接融入标题栏的一条——
+   无圆角、height:100% 贴满标题栏（消除顶上空隙）、透明底（不再有浅色描边感/border）。
+   内部交互须免拖拽区。 */
 .bp-head {
   display: flex; align-items: center; gap: 5px;
-  width: min(760px, 56%); height: 34px; padding: 0 8px;
-  border-radius: 10px; background: var(--side-solid);
+  height: 100%; min-height: 0; padding: 0 8px;
+  background: transparent;
   -webkit-app-region: no-drag;
 }
+/* 浏览器放大占满时的铺满规则在上方（.titlebar 附近）统一定义（absolute inset，四角切平）。 */
 .bp-head .icon-btn { width: 28px; height: 28px; border-radius: 8px; }
 /* 地址栏是可手输的 input：透明底融入胶囊，回车即导航 */
 .bp-url { flex: 1; min-width: 0; background: none; border: none; outline: none; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; color: var(--side-fg2); white-space: nowrap; }

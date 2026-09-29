@@ -463,6 +463,54 @@ ipcMain.handle('media:pick', async () => {
   return out
 })
 
+// ---------- 主题背景图（设置 → 通用）：挑一张图复制进 themes 目录，回执 data URL 供渲染层持久化 ----------
+// 复制而不是引用原路径：用户随时可能删掉/移动原文件，背景图不能跟着 404。
+ipcMain.handle('theme-bg:pick', async (): Promise<{ path: string; url: string } | null> => {
+  const win = BrowserWindow.getFocusedWindow() ?? mainWin
+  const opts: OpenDialogOptions = {
+    title: '选择主题背景图',
+    properties: ['openFile'],
+    // 扩展名不能带点：传 '.jpg' 会被 Windows 拼成 '..jpg' 通配，文件列表直接空掉，一张都选不了
+    filters: [
+      { name: '图片', extensions: Object.keys(IMG_MIME).map((e) => e.slice(1)) },
+      // 兜底档：万一图片是冷门格式（heic/raw 等），至少能选进来，下面再按扩展名拦并明确报错
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  }
+  const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+  if (r.canceled || !r.filePaths.length) return null
+  const p = r.filePaths[0]
+  const ext = p.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
+  const mime = IMG_MIME[ext]
+  if (!mime || !existsSync(p)) {
+    // 静默 return 会让人以为「点了没反应」，这里给一句人话
+    if (win) {
+      await dialog.showMessageBox(win, {
+        type: 'warning',
+        title: '不是图片',
+        message: '这张文件不是可用的图片。',
+        detail: `支持格式：${Object.keys(IMG_MIME).map((e) => e.slice(1)).join('、')}`,
+        buttons: ['好']
+      })
+    }
+    return null
+  }
+  const dir = join(qingniaoHome(), 'themes')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, `bg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}${ext}`)
+  copyFileSync(p, file)
+  return { path: file, url: `data:${mime};base64,${readFileSync(file).toString('base64')}` }
+})
+// 渲染层按保存的路径重新读图（换机/重启、data URL 丢了都能找回）；白名单与 media:read 同款
+ipcMain.handle('theme-bg:read', (_e, target: string): string => {
+  let p = String(target ?? '').trim()
+  if (!p || !isAbsolute(p)) p = join(qingniaoHome(), 'themes', basename(p))
+  const ext = p.toLowerCase().match(/\.[a-z0-9]+$/)?.[0] ?? ''
+  const mime = IMG_MIME[ext]
+  if (!mime || !existsSync(p)) return ''
+  return `data:${mime};base64,${readFileSync(p).toString('base64')}`
+})
+
 // ---------- 移动端接入（平台中转） ----------
 // 通道在本进程里（见 relay.ts）：开关只写设置 + 起停通道，不需要重启内核。
 // 状态里带二维码点阵：渲染层自己画 SVG——CSP 是 default-src 'self'，加载不了跨源图片。

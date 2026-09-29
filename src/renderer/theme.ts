@@ -26,3 +26,22 @@ export const CUSTOM_THEME: ThemeMeta = {
 }
 /** 主题选择列表：6 个内置 + 自定义 */
 export const getThemeList = (): ThemeMeta[] => [...THEMES, CUSTOM_THEME]
+
+/* ================= 主题背景图（设置 → 通用 → 主题背景图） =================
+ * 两种模式（名字 2026-09-29 定版）：
+ *   full  —— 整屏一张：一张图同时铺在左侧栏与右侧内容区，界面看着是同一幅底图
+ *   split —— 左右分开：左侧栏（侧栏面板）一张、右侧内容区一张，互不相关
+ * 持久化只存「复制进 ~/.qingniaoai/themes/ 的文件路径」，data URL 由主进程按需读出
+ * （壁纸动辄几 MB，base64 塞进 localStorage/uistore 会白白撑爆配额）。 */
+export type ThemeBgMode = 'none' | 'full' | 'split'
+export interface ThemeBgCfg {
+  mode: ThemeBgMode
+  /** 整屏一张：图在 themes 目录里的落盘路径 */
+  full: string | null
+  /** 左右分开：左侧栏的图 */
+  left: string | null
+  /** 左右分开：右侧内容区的图 */
+  right: string | null
+}
+export const DEFAULT_THEME_BG: ThemeBgCfg = { mode: 'none', full: null, left: null, right: null }
+export type ThemeBgSlot = 'full' | 'left' | 'right'
