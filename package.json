@@ -49,7 +49,7 @@
     "其余全部为 devDependencies（含 opencode 的平台包，见下方 files 排除说明）。"
   ],
   "dependencies": {
-    "opencode-ai": "^1.18.31",
+    "opencode-ai": "^1.18.33",
     "qrcode-generator": "^2.0.4"
   },
   "devDependencies": {

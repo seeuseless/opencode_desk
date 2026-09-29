@@ -1,6 +1,6 @@
 # OpenCode 内核「思考档位 / variant」机制
 
-> 内核版本 opencode-ai 1.18.31（node_modules/opencode-ai，打包进 resources/bin）。
+> 内核版本 opencode-ai 1.18.33（node_modules/opencode-ai，打包进 resources/bin）。
 > 结论来自内核二进制字符串分析与官方文档核对，以代码为准，改动后同步。
 
 ## 机制结论
