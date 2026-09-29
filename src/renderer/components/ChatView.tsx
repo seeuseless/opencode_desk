@@ -3273,11 +3273,13 @@ function toolSig(part: Part, projPath?: string): string {
   return (part.tool ?? '').toLowerCase() + '｜' + rawToolTarget(part, projPath)
 }
 
-/** 一条消息的过程行：普通 part 原样出；连续重复的工具行（模型对同一目标反复调同一工具）
- *  归成一组，由组内最后一个 part 代表渲染，StepLine 挂 ×N 角标。
- *  只在**相邻**时归组：中间插了别的操作再读回来通常有信号，保持可见。
+/** 一条消息的过程行：普通 part 原样出；反复调同一工具（轮询）的 tool 行归成一组，
+ *  由组内最后一个 part 代表渲染，StepLine 挂 ×N 角标。
+ *  组间**只被正文/其他工具**隔开才分行（中间插了别的操作再读回来通常有信号，保持可见）；
+ *  两次同工具同目标调用之间的**思考块被吞进组**——轮询时模型「思考→查→思考→查」交替，
+ *  思考块不吞的话组永远成不了，思考行也会跟着轮询一条条刷屏，只剩最后一行带 ×N。
  *  组尾失败的归组不合并：连续失败是模型打转的信号（toolFails 熔断兜底最多 3 次），
- *  逐行标红比藏进 ×N 更有用。 */
+ *  逐行标红比藏进 ×N 更有用（该段的思考块也原样保留，供排障看模型当时在想什么）。 */
 type PartRow =
   | { kind: 'part'; part: Part }
   | { kind: 'group'; parts: Part[]; last: Part }
@@ -3293,13 +3295,34 @@ function partRows(parts: Part[], projectPath?: string): PartRow[] {
       continue
     }
     const sig = toolSig(p, projectPath)
+    // 收一段「同工具同目标」的运行序列：其间允许夹思考块，正文/异工具/异目标终止
+    const span: Part[] = [p]
+    const tools: Part[] = [p]
     let j = i + 1
-    while (j < parts.length && parts[j].type === 'tool' && toolSig(parts[j], projectPath) === sig) j++
-    const run = parts.slice(i, j)
-    const last = run[run.length - 1]
-    const groupable = run.length >= 2 && (last.state?.status ?? 'pending') !== 'error'
-    if (groupable) rows.push({ kind: 'group', parts: run, last })
-    else for (const x of run) rows.push({ kind: 'part', part: x })
+    for (;;) {
+      const q = parts[j]
+      if (!q) break
+      if (q.type === 'reasoning') {
+        span.push(q)
+        j++
+        continue
+      }
+      if (q.type === 'tool' && toolSig(q, projectPath) === sig) {
+        span.push(q)
+        tools.push(q)
+        j++
+        continue
+      }
+      break
+    }
+    const last = tools[tools.length - 1]
+    if (tools.length >= 2 && (last.state?.status ?? 'pending') !== 'error') {
+      // 归组：工具行合成一条（思考块被吞），last 代表渲染
+      rows.push({ kind: 'group', parts: tools, last })
+    } else {
+      // 不归组：整段按原顺序逐行渲染
+      for (const x of span) rows.push({ kind: 'part', part: x })
+    }
     i = j
   }
   return rows
