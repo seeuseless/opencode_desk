@@ -990,6 +990,15 @@ export function ChatView(p: Props) {
         if (part.type === 'tool' && part.state && part.state.status !== 'running' && part.state.status !== 'pending') {
           if (noteToolOutcome(part.sessionID, part)) return
         }
+        // 轮次活性重认领：渲染层的同步 prompt 可能已经异常返回（代理失败 / 更早的自动停熔断清了 busy），
+        // 但内核那轮还活着——只要 running 的工具 part 还在流进来，就证明「还在跑」：
+        // 重新认领 busy，让「处理中」行与停止按钮回来。否则工具行永远转圈、用户却没有停止入口
+        // （2026-09-29 实测：429 限流后 check_video 连着轮询了 5 分钟，busy 被清后停止按钮就没了）。
+        if (part.type === 'tool' && part.state?.status === 'running' && part.sessionID && !busySetRef.current[part.sessionID]) {
+          const s = part.sessionID
+          const foreign = s !== sidRef.current && !busyDir.current[s]
+          markBusy(s, true, busyDir.current[s] ?? (s === sidRef.current ? dirRef.current : undefined), foreign)
+        }
         if (part.sessionID !== sidRef.current) return
         if (part.type === 'tool' && part.state?.status !== 'running') {
           setPreviews((prev) => {
@@ -3441,8 +3450,11 @@ function PartView({ part, projectPath, preview, live, diffs, count, previewParts
     } else if (rawOut) {
       body = <CodeBlock text={rawOut} />
     }
-    // 组内若有其他 part 在并行跑（罕见），整行也保持转圈而非「已完成」
-    const anyRun = (previewParts ?? [part]).some((x) => x.type === 'tool' && x.state?.status === 'running')
+    // 组内若有其他 part 在并行跑（罕见），整行也保持转圈而非「已完成」。
+    // 只在 live（会话真在跑）时兜底：回合被中止/内核重启后，残留的 running part 按中断（error）
+    // 展示，不能再强行画回「进行中」——那会留下一条永远转圈的假活行，而停止按钮（跟 busy 走）
+    // 早没了，用户既看不到结束也停不掉。
+    const anyRun = live && (previewParts ?? [part]).some((x) => x.type === 'tool' && x.state?.status === 'running')
     const stFinal = anyRun ? 'running' : st
     return (
       <StepLine
