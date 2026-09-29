@@ -367,6 +367,9 @@ export function ChatView(p: Props) {
   const termStart = useRef<Record<string, number>>({})
   // 轮询兜底指纹：当前会话已渲染的消息+part 长度，无变化则跳过 setState，避免每轮无谓渲染
   const pollFingerprint = useRef('')
+  /** 用户点停止的时刻（会话 → 时间戳）：轮询兜底重认领只认「停止动作之后」的 running 工具。
+   *  内核重启/中止遗留的 running part 是上一轮的残骸，没有这条基线会把它们误判成活轮 */
+  const userStopMarks = useRef<Map<string, number>>(new Map())
   // 各 busy 会话所属项目路径：多项目并行时停止/重试都要带 directory，否则内核找不到该会话
   const busyDir = useRef<Record<string, string | undefined>>({})
   // 各 busy 会话本轮开始时间：「已用时」按它起算，切走再切回不会从头计
@@ -841,6 +844,8 @@ export function ChatView(p: Props) {
     if (!sid) return
     const dir = busyDir.current[sid]
     userStopped.current.add(sid)
+    // 记录停止时刻：之后到达的 running 工具快照若启动于停止之前，一律视为残骸不再续命
+    userStopMarks.current.set(sid, Date.now())
     markBusy(sid, false)
     delete busyDir.current[sid]
     // 只作废属于本会话的在途记录：别的会话那一条还活着，不能一起清
@@ -990,12 +995,17 @@ export function ChatView(p: Props) {
         if (part.type === 'tool' && part.state && part.state.status !== 'running' && part.state.status !== 'pending') {
           if (noteToolOutcome(part.sessionID, part)) return
         }
-        // 轮次活性重认领：渲染层的同步 prompt 可能已经异常返回（代理失败 / 更早的自动停熔断清了 busy），
+        // 轮次活性重认领：渲染层的同步 prompt 可能已经异常返回（代理故障 / 更早的自动停熔断清了 busy），
         // 但内核那轮还活着——只要 running 的工具 part 还在流进来，就证明「还在跑」：
         // 重新认领 busy，让「处理中」行与停止按钮回来。否则工具行永远转圈、用户却没有停止入口
         // （2026-09-29 实测：429 限流后 check_video 连着轮询了 5 分钟，busy 被清后停止按钮就没了）。
+        // 只认「停止动作之后启动」的 running 工具：中止/内核重启残留的 running part 是上一轮残骸，
+        // 没有这条时间基线会把它们误认成活轮，busy 永远清不掉、停止按钮常驻。
         if (part.type === 'tool' && part.state?.status === 'running' && part.sessionID && !busySetRef.current[part.sessionID]) {
           const s = part.sessionID
+          const mark = userStopMarks.current.get(s)
+          const startedAt = typeof part.state?.time?.start === 'number' ? part.state.time.start : Infinity
+          if (mark != null && (startedAt === Infinity || startedAt <= mark)) return // 停止前的残骸（或无法判定启动时刻），不续命
           const foreign = s !== sidRef.current && !busyDir.current[s]
           markBusy(s, true, busyDir.current[s] ?? (s === sidRef.current ? dirRef.current : undefined), foreign)
         }
@@ -1319,9 +1329,20 @@ export function ChatView(p: Props) {
         if (!alive || sid !== sidRef.current || sid !== p.sessionId) return
         // 指纹：消息数 + 各 part 长度。内容无变化直接跳过，避免无谓渲染
         const fp = list.map((m) => m.info.id + ':' + m.parts.map((x) => x.type + (x.text?.length ?? 0)).join(',')).join('|')
-        if (fp === pollFingerprint.current) return
-        pollFingerprint.current = fp
-        setMsgs((prev) => mergePoll(list, prev, texts.current, shown.current, startTicker))
+        if (fp !== pollFingerprint.current) {
+          pollFingerprint.current = fp
+          setMsgs((prev) => mergePoll(list, prev, texts.current, shown.current, startTicker))
+        }
+        // 收口兜底：轮次以**错误**结束且事件没送达（断流/限流只写进消息 info，不推 session.error）
+        // 时，靠这里把 busy 清掉、错误条补上。没有错误文本的中断（用户手动停/半截截断）不动——
+        // 那是「可重试」状态，留着处理中行与停止按钮交给用户处置，防「处理中」卡死。
+        if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
+          const te = turnErrorOf(list)
+          if (te?.message) {
+            setError(te.message)
+            markBusy(sid, false)
+          }
+        }
       } catch {
         /* 内核瞬时不可达，下一轮再试 */
       }
@@ -1667,6 +1688,7 @@ export function ChatView(p: Props) {
     }
 
     markBusy(sid, true, dir)
+    userStopMarks.current.delete(sid)
     const files = attsOverride ?? []
     inflight.current = { sid, text, atts: files.length ? files : undefined }
     atBottomRef.current = true
