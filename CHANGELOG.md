@@ -3,6 +3,14 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.6.7 — 2026-10-07
+
+修复发版 CI（monorepo 迁移遗留），重发安装包。
+
+### 修复
+
+- **发版 CI 上传**：monorepo 迁移后 `softprops/action-gh-release`（`uses` 步骤）不读 `defaults.run.working-directory`，其 `files` glob 相对仓库根解析，而产物在 `client/dist/` 下，导致 Windows/macOS 安装包匹配不到。已给 `build-win` / `build-mac` 的上传步骤显式补 `working-directory: client`。本版为修复后重新发版。
+
 ## v1.6.6 — 2026-10-07
 
 修复：monorepo 迁移导致的发版 CI 上传失败。
