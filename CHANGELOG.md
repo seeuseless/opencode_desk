@@ -3,6 +3,15 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.6.8 — 2026-10-07
+
+修复发版 CI 不触发的问题（v1.6.7 的 `working-directory` 加错在 `uses` 步骤上）。
+
+### 修复
+
+- **CI 完全不触发**：v1.6.7 把 `uses` 步骤（`softprops/action-gh-release`）上加了 `working-directory`——该键仅 `run` 步骤合法，`uses` 步骤不接受，导致整个 workflow 的 GitHub schema 校验失败、push tag 时连 run 都不创建（Actions 页无记录）。
+- **正确修法**：删掉 `uses` 步骤上的 `working-directory`，把上传 `files` 路径改为 `client/dist/QingNiao-…`（相对仓库根），`build-win` / `build-mac` 两个上传步骤都照此改。
+
 ## v1.6.7 — 2026-10-07
 
 修复发版 CI（monorepo 迁移遗留），重发安装包。

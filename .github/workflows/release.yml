@@ -231,13 +231,11 @@ jobs:
       #   应用内更新按 process.arch 认领（updater.ts pickAsset）。
       - name: 上传安装包到 Release
         uses: softprops/action-gh-release@v2
-        # monorepo: 产物在 client/dist/ 下; uses 步骤不读 defaults.run.working-directory, files glob 相对仓库根解析会找不到。
-        working-directory: client
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            dist/QingNiao-Setup.exe
-            dist/QingNiao-Setup-arm64.exe
+            client/dist/QingNiao-Setup.exe
+            client/dist/QingNiao-Setup-arm64.exe
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
@@ -417,13 +415,11 @@ jobs:
 
       - name: 上传 macOS 安装包到 Release
         uses: softprops/action-gh-release@v2
-        # monorepo: 产物在 client/dist/ 下; uses 步骤不读 defaults.run.working-directory, files glob 相对仓库根解析会找不到。
-        working-directory: client
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
-            dist/QingNiao-Setup-arm64.dmg
-            dist/QingNiao-Setup-x64.dmg
+            client/dist/QingNiao-Setup-arm64.dmg
+            client/dist/QingNiao-Setup-x64.dmg
           fail_on_unmatched_files: true
           draft: false
           prerelease: false
