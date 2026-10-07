@@ -3,6 +3,14 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.6.6 — 2026-10-07
+
+修复：monorepo 迁移导致的发版 CI 上传失败。
+
+### 修复
+
+- **CI 发版上传失败**：迁移到 monorepo 后，`softprops/action-gh-release` 上传步骤没读 `defaults.run.working-directory`，`files` glob 相对仓库根解析，导致 Windows/macOS 的安装包（产物在 `client/dist/`）都匹配不到而失败（mac 报 `Pattern 'dist/QingNiao-Setup-arm64.dmg' does not match any files`）。已给两个 `uses` 上传步骤显式补 `working-directory: client`，Windows 与 macOS 发版恢复正常。
+
 ## v1.6.5 — 2026-10-07
 
 架构版本：仓库重组为 **monorepo**（`client/` 桌面端 + `server/` Go 服务端），服务端由 Laravel 重写为单二进制，独立运行、桌面端健康探测接入。

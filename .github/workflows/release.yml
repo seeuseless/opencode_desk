@@ -231,6 +231,8 @@ jobs:
       #   应用内更新按 process.arch 认领（updater.ts pickAsset）。
       - name: 上传安装包到 Release
         uses: softprops/action-gh-release@v2
+        # monorepo: 产物在 client/dist/ 下; uses 步骤不读 defaults.run.working-directory, files glob 相对仓库根解析会找不到。
+        working-directory: client
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
@@ -415,6 +417,8 @@ jobs:
 
       - name: 上传 macOS 安装包到 Release
         uses: softprops/action-gh-release@v2
+        # monorepo: 产物在 client/dist/ 下; uses 步骤不读 defaults.run.working-directory, files glob 相对仓库根解析会找不到。
+        working-directory: client
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
