@@ -211,6 +211,26 @@ export function saveSettings(s: Settings): void {
 }
 
 /**
+ * 只改「远程服务」总开关并落盘——**不重启内核**。
+ *
+ * 同 setMobileEnabled 的理由：这个开关只决定「账号/平台模型/手机中转」这套要不要出现，
+ * 跟 provider/MCP 那套内核配置无关，走 saveSettings 会让内核白重启一次。
+ *
+ * 桌面端启动时由 server.ensure() 调用：服务端 health 探测通过就自动打开，
+ * 用户不必手动拨开关（本地一体化模式下服务端随桌面端一起，没有「关掉它」的理由）。
+ */
+export function setRemoteEnabled(on: boolean): Settings {
+  const s = loadSettings()
+  if (s.remote === on) return s
+  s.remote = on
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(normalize(s), null, 2))
+
+  return s
+}
+
+
+/**
  * 只改「允许移动端连接」这一个开关并落盘——**不重启内核**。
  * 这个开关跟 provider/MCP 那套内核配置无关，走 saveSettings 会让内核白重启一次，
  * 手机正连着的时候直接断流。

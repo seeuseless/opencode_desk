@@ -8,6 +8,7 @@ import { adapter } from './adapter.ts'
 import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
+import { server } from './server.ts'
 import { AUTH_PROTOCOL, platform } from './platform.ts'
 import { handleGate, modelAuthList, rejectAllPending, replyModelAuth, revokeModelAuth, setModelAuthSink } from './gate.ts'
 import { cancelDownload, checkUpdate, downloadUpdate, installUpdate, openReleasePage, setUpdateSink, updateState } from './updater.ts'
@@ -535,6 +536,8 @@ ipcMain.handle('mobile:setProjects', (_e, list: { id: string; path: string; name
 // 平台地址统一由 config.platformBaseUrl() 解析（环境变量 > 设置 > 默认值），这里不再存第二份。
 // 每次平台状态变化都 apply 一次中转通道：登录了要注册设备、退出了要停通道。
 ipcMain.handle('platform:get', () => platform.status())
+// 服务端活着没活：设置页的「远程服务」开关要根据它决定能不能操作（health 不通时操作了也是空的）
+ipcMain.handle('server:alive', async () => server.probe())
 ipcMain.handle('platform:login', () => platform.openLogin())
 ipcMain.handle('platform:logout', async () => {
   const st = await platform.logout()
@@ -1431,6 +1434,10 @@ app.whenReady().then(async () => {
   }
 
   // 移动端中转通道：登录了就注册设备（二维码随即可用），开关开着才真的开始认领指令。
+  // 服务端（青鸟平台，Go 单二进制）：先探测 health，不通就拉起，通了自动打开「远程服务」开关。
+  // 必须在 relay.apply() 之前：远程开关是 apply 的前提，否则服务端起来了也不会注册设备。
+  await server.ensure()
+
   relay.apply()
 
   // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
@@ -1449,6 +1456,8 @@ app.on('window-all-closed', () => {
   // 不做的话连接会随进程一起断，MCP 侧 fetch 抛错 → 按 fail-open 放行 → 模型照调，白问一场。
   rejectAllPending()
   relay.stop()
+  // 只收自己拉起的那份服务端：用户自己起的（独立部署）不动，否则关掉桌面端会把他人的服务一起干掉。
+  server.stop()
   // shutdown 而非 stop：置 quitting 阻断任何进行中的内核重启轮次，杀进程树（含 MCP/pty 子进程），
   // 防止「应用退了、孤儿内核还在后台跑任务」——见 adapter.shutdown 注释
   adapter.shutdown()
@@ -1458,4 +1467,5 @@ app.on('window-all-closed', () => {
 // before-quit 兜底（更新器安装等 app.quit() 入口）：window-all-closed 理论上必发，这里双保险且幂等
 app.on('before-quit', () => {
   adapter.shutdown()
+  server.stop()
 })

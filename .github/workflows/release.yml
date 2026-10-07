@@ -83,6 +83,10 @@ jobs:
   # ---------------------------------------------------------------------------
   build-win:
     runs-on: windows-latest
+    # 桌面端整体在 client/ 下（monorepo），所有命令都在该目录执行。
+    defaults:
+      run:
+        working-directory: client
     steps:
       - uses: actions/checkout@v4
 
@@ -90,6 +94,7 @@ jobs:
         with:
           node-version: 22
           cache: yarn
+          cache-dependency-path: client/yarn.lock
 
       # ⚠️ 源的问题必须显式处理，否则 CI 会在 install 阶段挂：
       #   仓库里的 .npmrc 把 registry 指到 mirrors.cloud.tencent.com（本地开发用，快），
@@ -257,6 +262,9 @@ jobs:
   build-mac:
     runs-on: macos-latest
     continue-on-error: true
+    defaults:
+      run:
+        working-directory: client
     steps:
       - uses: actions/checkout@v4
 
@@ -264,6 +272,7 @@ jobs:
         with:
           node-version: 22
           cache: yarn
+          cache-dependency-path: client/yarn.lock
 
       - name: 安装依赖（腾讯源改写为官方源）
         shell: bash
