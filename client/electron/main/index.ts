@@ -154,12 +154,19 @@ const CODE_EXTENSIONS = new Set([
 const CODE_FILE_NAMES = new Set(['Dockerfile', 'Gemfile', 'Makefile', 'Procfile'])
 const CODE_IGNORED_DIRS = new Set([
   '.git', '.gradle', '.idea', '.next', '.nuxt', '.pytest_cache', '.venv', '__pycache__',
-  'build', 'coverage', 'dist', 'node_modules', 'out', 'target', 'venv'
+  'build', 'coverage', 'dist', 'node_modules', 'out', 'target', 'venv',
+  // 工具/应用各自的元数据与记忆目录（跟 .git、node_modules 一样对代码模式是噪音，不展示）
+  '.opencode', 'opencode', '.qingai', '.qingniaoai', '.workbuddy', '.codebuddy'
 ])
 const MAX_CODE_BYTES = 2 * 1024 * 1024
 
+/** 项目被本地删除/移走后，所有 workspace:* 操作的统一兜底错误信息（渲染层可据此识别，也匹配 ENOENT） */
+export const CODE_DIR_MISSING = '项目目录已被删除或移走，请从列表移除该项目后重新添加'
+
 function workspaceRoot(projectPath: string): string {
-  const root = realpathSync(resolve(String(projectPath ?? '').trim()))
+  const candidate = resolve(String(projectPath ?? '').trim())
+  if (!existsSync(candidate)) throw new Error(CODE_DIR_MISSING)
+  const root = realpathSync(candidate)
   if (!statSync(root).isDirectory()) throw new Error('项目目录不存在')
   return root
 }

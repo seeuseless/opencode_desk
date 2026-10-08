@@ -3,6 +3,18 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.6.9 — 2026-10-08
+
+代码模式体验收尾：项目目录被本地删除后不再满屏报错，并隐藏工具自身的元数据/记忆目录。
+
+### 修复
+
+- **代码模式：项目目录被删除后报 `Error invoking remote method 'workspace:list': … ENOENT`**：主进程 `workspaceRoot` 对已不存在的项目根尝试 `realpathSync` 直接抛 `ENOENT`，渲染层把整段英文原始错误显示出来。现改为：主进程先 `existsSync` 检测、抛统一可读文案（仍兼容识别 `ENOENT`），渲染层剥离 `Error invoking remote method` 外壳，且当判定为「目录被删除/移走」时在侧栏**静默隐藏、显示空状态**，不再弹那串英文报错；其余子目录错误仍正常展示。
+
+### 变更
+
+- **代码模式文件树隐藏工具元数据目录**：`CODE_IGNORED_DIRS` 追加 `.opencode`、`opencode`、`.qingai`、`.qingniaoai`、`.workbuddy`、`.codebuddy`——像全局记忆等工具自己生成的数据目录，与 `.git`、`node_modules` 同等对待，不再出现在代码模式文件树里（仅影响展示，不影响其它功能）。
+
 ## v1.6.8 — 2026-10-07
 
 修复发版 CI 不触发的问题（v1.6.7 的 `working-directory` 加错在 `uses` 步骤上）。
