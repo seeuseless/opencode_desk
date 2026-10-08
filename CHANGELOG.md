@@ -3,6 +3,16 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.2 — 2026-10-08
+
+补上 v1.7.0 / v1.7.1 未能产出的 Linux 安装包：修正 AppImage 产物名的架构段。
+
+### 修复
+
+- **Linux 安装包构建在最后一步失败（产物其实已生成，只是名字对不上）**：electron-builder 的 `getArtifactArchName`（`builder-util/out/arch.js`）会**按扩展名套用不同的架构命名惯例** —— AppImage / rpm / flatpak 把 x64 映射成 `x86_64`、deb / snap 映射成 `amd64`，而 exe / dmg 保持 `x64`。`artifactName` 里的 `${arch}` 宏走的是这套映射，不是 `process.arch` 的原样输出，所以真实产物是 `QingNiao-Setup-x86_64.AppImage`（arm64 恰好同名，故只有 x64 那份对不上）。此前按 `process.arch` 拼名字，CI 报「未找到 dist/QingNiao-Setup-x64.AppImage」而附件无法上传。
+  - 同步修正三处，避免只改一处留下新问题：CI 的校验与上传清单、主进程更新器的认领正则与兜底文件名（**这处最关键 —— 不改会导致 Linux 用户在应用内检查更新时匹配不到任何附件**）、README 的平台表格与下载提示。
+  - 这是 electron-builder 的有意设计（遵循 Linux 惯例命名），不是缺陷；将来若改出 deb / rpm，`${arch}` 展开的名字又会不同，改名时需一并核对。
+
 ## v1.7.1 — 2026-10-08
 
 补发：把 v1.7.0 之后落在 master 上、但未进入 v1.7.0 tag 的提交并入发布线。安装包内容与 v1.7.0 一致。
