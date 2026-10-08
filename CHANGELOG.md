@@ -3,6 +3,18 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.1 — 2026-10-08
+
+补发：把 v1.7.0 之后落在 master 上、但未进入 v1.7.0 tag 的提交并入发布线。安装包内容与 v1.7.0 一致。
+
+### 变更
+
+- **`.gitignore` 忽略 `client/dist-verify/`**：验证打包配置时的临时产物目录（`electron-builder --dir --config.directories.output=dist-verify`），体积与 `dist` 同量级（约 550MB），不应入库。不影响任何安装包内容。
+
+### 说明
+
+- v1.7.0 的 tag 指向 `63777d3`，而该条 `.gitignore` 提交（`34ad593`）在其之后。本版把 tag 推到最新 master，标记回到一致状态。
+
 ## v1.7.0 — 2026-10-08
 
 Linux 发版支持：新增 AppImage 产物（x64 / arm64 双架构），并修掉两个在 Linux 上会让核心功能直接残废的隐患。

@@ -1,6 +1,6 @@
 {
   "name": "qingniao",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "青鸟 QingNiao — 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）",
   "homepage": "https://github.com/seeuseless/opencode_desk",
   "repository": {
