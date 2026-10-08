@@ -10,7 +10,7 @@
  *   我们自己拷的内核不会换）。
  *
  * 处理规则：
- *   · 只管 darwin / win32（linux 不发版），其他平台直接返回；
+ *   · 管 darwin / win32 / linux（三个发版平台），其他平台直接返回；
  *   · **无条件**按目标架构从对应平台包拷内核（不做"本机架构短路"）：
  *     CI 一条命令连打两个架构，哪个轮先跑没有保证——若本机架构轮短路不拷，
  *     交叉轮把 bin 换掉后，本机轮再打就会把错误架构的内核带进包（2026-09-25
@@ -24,8 +24,9 @@
  *
  * 时机：beforePack 在 extraResources 拷贝之前触发，这里覆盖的文件就是最终进包的文件。
  * 文件名事实（与 check-kernel.mjs / electron/main/index.ts 的 opencodeBin() 一致）：
- * 上游把目标路径写死成 bin/opencode.exe（mac 上也叫这个名）；平台包内部则 Windows
- * 叫 bin/opencode.exe、mac 叫 bin/opencode（见 postinstall.mjs 的 sourceBinary）。
+ * 上游把目标路径写死成 bin/opencode.exe（mac / linux 上也叫这个名）；平台包内部则
+ * Windows 叫 bin/opencode.exe、mac 与 linux 叫 bin/opencode（见 postinstall.mjs 的
+ * sourceBinary）。
  */
 const { copyFileSync, existsSync, chmodSync, unlinkSync } = require('node:fs')
 const { join } = require('node:path')
@@ -42,6 +43,10 @@ const ARCH_NAMES = { 0: 'ia32', 1: 'x64', 2: 'armv7l', 3: 'arm64', 4: 'universal
 const PLATFORMS = {
   darwin: { pkg: 'darwin', inner: 'opencode' },
   win32: { pkg: 'windows', inner: 'opencode.exe' },
+  // Linux（2026-10-08 加）：包内二进制叫 `opencode`（无后缀），与 darwin 同款。
+  // 确认过 unpkg 的包元数据：opencode-linux-x64@1.18.33 只有 bin/opencode 一个文件。
+  // 注意只出 **glibc** 版（包名无 -musl 后缀）；Alpine 用户暂不支持，见 README。
+  linux: { pkg: 'linux', inner: 'opencode' },
 }
 
 module.exports = async function beforePack(context) {

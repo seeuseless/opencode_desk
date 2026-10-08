@@ -25,6 +25,8 @@
 #   · macOS  ：QingNiao-Setup-arm64.dmg + QingNiao-Setup-x64.dmg
 #              （mac.artifactName 带 ${arch}；--arm64 --x64 双架构出包，覆盖 Apple
 #               Silicon 与 Intel）
+#   · Linux  ：QingNiao-Setup-x64.AppImage + QingNiao-Setup-arm64.AppImage
+#              （只出 AppImage、只覆盖 glibc 发行版；Alpine/musl 不支持）
 #   双架构出包靠构建命令传 --x64 --arm64（或 --arm64 --x64）两个 flag；交叉架构的
 #   内核替换由 beforePack 钩子处理（scripts/electron-before-pack.cjs），对侧内核
 #   平台包用 npm pack + tar 备好（平台包有 os/cpu 校验，npm install 会拒装）。
@@ -420,6 +422,143 @@ jobs:
           files: |
             client/dist/QingNiao-Setup-arm64.dmg
             client/dist/QingNiao-Setup-x64.dmg
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 列出产物
+        shell: bash
+        run: ls -l dist
+
+  # ---------------------------------------------------------------------------
+  # Linux：出 AppImage，x64 + arm64 双架构。
+  #
+  # ⚠️ continue-on-error: true 与 mac 同理由：Linux 是第三平台，不该让它把 Release 拦下。
+  #   且 AppImage 构建依赖 runner 上的 appimagetool，失败率比前两条线高。
+  #
+  # 只覆盖 **glibc** 发行版（Debian / Ubuntu / Fedora / Arch…）：内核平台包选不带 -musl
+  # 后缀的那批。Alpine 用户跑不了，README 已注明。
+  # ---------------------------------------------------------------------------
+  build-linux:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: yarn
+          cache-dependency-path: client/yarn.lock
+
+      - name: 安装依赖（腾讯源改写为官方源）
+        shell: bash
+        run: |
+          set -e
+          rm -f .npmrc
+          before=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          sed -i 's#https://mirrors\.cloud\.tencent\.com/npm/#https://registry.npmjs.org/#g' yarn.lock
+          after=$(grep -c 'mirrors.cloud.tencent.com' yarn.lock || true)
+          echo "lockfile 腾讯源数量：改前 $before → 改后 $after（应为 0）"
+          yarn install --frozen-lockfile --network-timeout 600000
+
+      # 同 win / mac：postinstall 不能省，否则打进去的是 479B 占位脚本（用户装完 spawn 失败）。
+      # 文件名在 Linux 上同样是 bin/opencode.exe（上游写死的名字，内容是 ELF），
+      # check-kernel.mjs 按存在性探测，不会认错。
+      - name: 补跑 opencode-ai postinstall
+        shell: bash
+        run: node node_modules/opencode-ai/postinstall.mjs
+
+      # 双架构内核平台包：runner 是 x64，arm64 那份 npm 装不上（os/cpu 校验 EBADPLATFORM），
+      # 走 npm pack 下载 tarball 再解压——与 mac / win job 同款做法。
+      # x64 选 -baseline：发布包要面对所有老机器，baseline 兼容面最大。
+      # 只取 glibc 版（包名不带 -musl）。
+      - name: 准备 x64/arm64 内核平台包（glibc）
+        shell: bash
+        run: |
+          set -e
+          for PKG in opencode-linux-x64-baseline opencode-linux-arm64; do
+            VER=$(node -p "require('./node_modules/opencode-ai/package.json').optionalDependencies['$PKG']")
+            echo "$PKG@$VER"
+            npm pack "$PKG@$VER" --pack-destination .
+            mkdir -p "node_modules/$PKG"
+            tar -xzf "$PKG-$VER.tgz" -C "node_modules/$PKG" --strip-components 1
+            rm "$PKG-$VER.tgz"
+            ls -l "node_modules/$PKG/bin"
+          done
+
+      # --x64 --arm64：一次出双架构 AppImage。交叉架构的内核由 beforePack 钩子
+      # 从上一步备好的平台包换入（PLATFORMS.linux 已配好）。
+      - name: 构建 Linux AppImage（x64 + arm64）
+        run: yarn dist:linux --x64 --arm64 --publish never
+        env:
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
+
+      # ⚠️ 产物校验，不能省。三件事：
+      #   1) 两个架构的 AppImage 都要产出（artifactName 没生效会在上传那步炸）；
+      #   2) 包内内核是真二进制（>100MB，排除未替换的占位脚本）；
+      #   3) 内核架构与包一致 + **有可执行位**——第 3 条在 Linux 上是硬要求：
+      #      ELF 头前 20 字节里 e_ident[EI_CLASS](第 4 字节) 区分 64/32，
+      #      e_machine（第 18-19 字节，小端）0x3e=x64、0xb7=arm64；
+      #      权限位用 test -x 验，electron-builder 拷 extraResources 时若丢掉 x 位，
+      #      主进程 spawn 内核会 EACCES（Windows/mac 上分别由 PE 头与 mac 断言覆盖，
+      #      Linux 这条是唯一能抓住它的断言）。
+      - name: 校验双架构 AppImage 与内核
+        shell: bash
+        run: |
+          set -e
+          for ARCH in x64 arm64; do
+            if [ "$ARCH" = x64 ]; then APPDIR="dist/linux-unpacked"; else APPDIR="dist/linux-arm64-unpacked"; fi
+            if [ ! -d "$APPDIR" ]; then
+              echo "::error::未产出 $APPDIR——检查 electron-builder.yml 的 linux 配置与 --x64 --arm64 参数"
+              ls -l dist
+              exit 1
+            fi
+            BIN="$APPDIR/resources/bin/opencode.exe"
+            if [ ! -f "$BIN" ]; then
+              echo "::error::[$ARCH] 安装包内缺少内核二进制：$BIN"
+              exit 1
+            fi
+            SIZE=$(stat -c%s "$BIN")
+            echo "[$ARCH] 内核：$BIN（$SIZE 字节，预期 >100MB）"
+            if [ "$SIZE" -lt 100000000 ]; then
+              echo "::error::[$ARCH] 只有 $SIZE 字节，是未替换的占位脚本而非真二进制"
+              exit 1
+            fi
+            # file 输出含 ELF 架构：x86-64 / aarch64，必须与包目录一致
+            KIND=$(file -b "$BIN")
+            echo "  类型：$KIND"
+            case "$ARCH" in
+              x64)   case "$KIND" in *x86-64*)  echo "  ✓ 架构匹配" ;; *) echo "::error::[$ARCH] 包里装的不是 x64 内核（$KIND）"; exit 1 ;; esac ;;
+              arm64) case "$KIND" in *aarch64*)  echo "  ✓ 架构匹配" ;; *) echo "::error::[$ARCH] 包里装的不是 arm64 内核（$KIND）——beforePack 钩子未生效或平台包没装"; exit 1 ;; esac ;;
+            esac
+            if [ ! -x "$BIN" ]; then
+              echo "::error::[$ARCH] 内核没有可执行权限（-x 未通过）——Linux 上主进程会 EACCES 起不来"
+              echo "::error::该文件权限：$(ls -l "$BIN")"
+              exit 1
+            fi
+            if [ ! -f "dist/QingNiao-Setup-$ARCH.AppImage" ]; then
+              echo "::error::未找到 dist/QingNiao-Setup-$ARCH.AppImage"
+              echo "::error::主进程 updater.ts 按当前架构期望这个文件名；"
+              echo "::error::若实际产物名不同，请同步改 LINUX_APPIMAGE_NAME 或 linux.artifactName"
+              exit 1
+            fi
+            echo "✓ QingNiao-Setup-$ARCH.AppImage 存在"
+          done
+          echo "✓ 双架构 AppImage 与内核均正常"
+
+      - name: 上传 Linux AppImage 到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            client/dist/QingNiao-Setup-x64.AppImage
+            client/dist/QingNiao-Setup-arm64.AppImage
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

@@ -362,6 +362,32 @@ export function setPanelMcp(v: { path: string; port: number }): void {
 function gateEnv(): Record<string, string> {
   return panelMcp ? { QN_GATE_PORT: String(panelMcp.port) } : {}
 }
+
+/**
+ * 内置 MCP 脚本的 node 解释器 —— **借 Electron 自带的那个，不依赖系统装没装 node**。
+ *
+ * 为什么不能写裸 `'node'`（2026-10-08 加 Linux 支持时改）：
+ *   写 `'node'` 意味着内核去 PATH 里找 node 可执行文件。Windows / mac 上大多数用户碰巧装了
+ *   node（开发者群体），坏了也不容易发现；但 **Linux 用户装 node 的比例低得多**，
+ *   没装就是 6 个内置 MCP（面板浏览器 / 生图生视频 / 识图 / 配音 / 音乐 / 听写）**全部起不来**，
+ *   而且报错是「spawn node ENOENT」，用户完全看不出是自己没装环境。
+ *
+ * 解法：Electron 的可执行文件本身就是 node（Chromium + node 运行时拼在一起），
+ *   配上环境变量 `ELECTRON_RUN_AS_NODE=1` 就以纯 node 模式启动、不开 GUI 窗口。
+ *   `process.execPath` 在打包态指向青鸟本体、dev 态指向 electron —— 两种场景都对，
+ *   且永远与当前运行的 Electron 版本一致，不存在「node 版本太老跑不动脚本」的问题。
+ *
+ * 用法：`command: [...nodeExec(), scriptPath]`，环境变量那半截用 `NODE_ENV()` 合并进各自
+ *   已有的 `environment`（内核的 MCP local 配置里 environment 是唯一能传环境变量的地方）。
+ */
+function nodeExec(): [string] {
+  return [process.execPath]
+}
+
+/** node 解释器必需的伴随环境变量（与 nodeExec 成对使用，别只抄一半） */
+function nodeEnv(): Record<string, string> {
+  return { ELECTRON_RUN_AS_NODE: '1' }
+}
 /** 媒体生成 MCP（生图/生视频工具）脚本路径 */
 let mediaMcp: { path: string } | undefined
 export function setMediaMcp(v: { path: string }): void {
@@ -536,7 +562,8 @@ export function writeOpencodeConfig(s: Settings): void {
     // 靠元素 ref 定位点击/输入，不依赖模型支持图片。playwright 独立浏览器已由它取代。
     mcp.panel = {
       type: 'local',
-      command: ['node', panelMcp.path, String(panelMcp.port)],
+      command: [...nodeExec(), panelMcp.path, String(panelMcp.port)],
+      environment: nodeEnv(),
       enabled: true
     }
   }
@@ -568,8 +595,9 @@ export function writeOpencodeConfig(s: Settings): void {
     if (imageTargets.length || videoTargets.length) {
       mcp['media'] = {
         type: 'local',
-        command: ['node', mediaMcp.path],
+        command: [...nodeExec(), mediaMcp.path],
         environment: {
+          ...nodeEnv(),
           QN_IMAGE_TARGETS: JSON.stringify(imageTargets),
           QN_VIDEO_TARGETS: JSON.stringify(videoTargets),
           QN_MEDIA_DIR: join(storeDir(), 'media')
@@ -585,8 +613,8 @@ export function writeOpencodeConfig(s: Settings): void {
     if (ttsTargets.length) {
       mcp.tts = {
         type: 'local',
-        command: ['node', ttsMcp.path],
-        environment: { QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media'), ...gateEnv() },
+        command: [...nodeExec(), ttsMcp.path],
+        environment: { ...nodeEnv(), QN_TTS_TARGETS: JSON.stringify(ttsTargets), QN_MEDIA_DIR: join(storeDir(), 'media'), ...gateEnv() },
         timeout: 180000,
         enabled: true
       }
@@ -598,8 +626,8 @@ export function writeOpencodeConfig(s: Settings): void {
     if (musicTargets.length) {
       mcp.music = {
         type: 'local',
-        command: ['node', musicMcp.path],
-        environment: { QN_MUSIC_TARGETS: JSON.stringify(musicTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
+        command: [...nodeExec(), musicMcp.path],
+        environment: { ...nodeEnv(), QN_MUSIC_TARGETS: JSON.stringify(musicTargets), QN_MEDIA_DIR: join(storeDir(), 'media') },
         // 一首歌数十秒到几分钟，单次 generate 只提交，但请求体可能含几十兆的参考音频，超时给宽些
         timeout: 300000,
         enabled: true
@@ -612,8 +640,8 @@ export function writeOpencodeConfig(s: Settings): void {
     if (asrTargets.length) {
       mcp.asr = {
         type: 'local',
-        command: ['node', asrMcp.path],
-        environment: { QN_ASR_TARGETS: JSON.stringify(asrTargets), ...gateEnv() },
+        command: [...nodeExec(), asrMcp.path],
+        environment: { ...nodeEnv(), QN_ASR_TARGETS: JSON.stringify(asrTargets), ...gateEnv() },
         // 一小时音频约 2.8 元，长会议转写要几分钟，默认 5s 超时必被掐
         timeout: 600000,
         enabled: true
@@ -626,8 +654,9 @@ export function writeOpencodeConfig(s: Settings): void {
   if (visionMcp && visionTargets.length) {
     mcp.vision = {
       type: 'local',
-      command: ['node', visionMcp.path],
+      command: [...nodeExec(), visionMcp.path],
       environment: {
+        ...nodeEnv(),
         QN_VISION_TARGETS: JSON.stringify(visionTargets),
         QN_MEDIA_DIR: join(storeDir(), 'media'),
         ...gateEnv()

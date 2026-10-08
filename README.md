@@ -34,6 +34,7 @@ yarn build         # 编译 main/preload/renderer
 yarn typecheck     # 类型检查
 yarn dist          # electron-builder 打 Windows 安装包（CI 上加 --x64 --arm64 出双架构）
 yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 出双架构）
+yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm64 出双架构）
 ```
 
 > **服务端独立运行**：平台服务端（Go 单二进制 + SQLite）是独立进程，桌面端不负责拉起——
@@ -55,6 +56,8 @@ yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 �
 > | Windows（ARM64） | `QingNiao-Setup-arm64.exe` |
 > | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg` |
 > | macOS（Intel） | `QingNiao-Setup-x64.dmg` |
+> | Linux（x64，glibc） | `QingNiao-Setup-x64.AppImage` |
+> | Linux（ARM64，glibc） | `QingNiao-Setup-arm64.AppImage` |
 >
 > 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
 > `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名下载不稳。
@@ -62,6 +65,9 @@ yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 �
 >
 > - Windows 未做代码签名，SmartScreen 首次运行可能提示"未知发布者"，选「更多信息 → 仍要运行」。
 > - macOS 未做签名与公证，首次打开需**右键 →「打开」**绕过 Gatekeeper（直接双击会被拦下）。
+> - Linux 交付 AppImage：下载后先 `chmod +x QingNiao-Setup-x64.AppImage` 再运行（部分浏览器下载会丢可执行位）。
+>   **只支持 glibc 发行版**（Debian / Ubuntu / Fedora / Arch 等），Alpine 是 musl libc 跑不了这个包。
+>   应用内更新在 Linux 上是「下载完手动替换旧文件」（AppImage 没有 Windows 那种安装器可挂）。
 
 ## 发版（改 version → 打 tag，其余交给 GitHub）
 
@@ -89,15 +95,15 @@ git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
 
 推完 tag 后 **GitHub Actions 自动**（`.github/workflows/release.yml`）：
 
-1. 在 `windows-latest` 与 `macos-latest` 上**并行**构建，每个平台一次出**双架构**包：
-   Windows x64 + ARM64、macOS Apple Silicon + Intel（共六个附件）
-2. 校验产物（安装包名、包内内核是否为真且与包架构一致、mac 权限位）——
-   交叉架构的包由 beforePack 钩子换入对应架构的 agent 内核，校验读 PE / Mach-O
+1. 在 `windows-latest`、`macos-latest`、`ubuntu-latest` 上**并行**构建，每个平台一次出**双架构**包：
+   Windows x64 + ARM64、macOS Apple Silicon + Intel、Linux x64 + ARM64（共八个附件）
+2. 校验产物（安装包名、包内内核是否为真且与包架构一致、mac 权限位、Linux 内核 ELF 架构与可执行位）——
+   交叉架构的包由 beforePack 钩子换入对应架构的 agent 内核，校验读 PE / Mach-O / ELF
    头断言架构没打岔
 3. 把安装包挂到该 tag 对应的 Release 附件上
 
-Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例如无签名证书、runner 环境波动）
-也不会拦下 Windows 的发版，Release 里仍会正常出现 Windows 的两个安装包。
+三个平台的构建是**并行**的；macOS 与 Linux 那两条线即使失败（例如无签名证书、runner 环境波动、
+AppImage 工具下载失败）也不会拦下 Windows 的发版，Release 里仍会正常出现 Windows 的两个安装包。
 
 用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**；
 应用内更新会按当前机器架构自动认领正确的安装包。
@@ -105,9 +111,9 @@ Windows 与 macOS 的构建是**并行**的；macOS 那条线即使失败（例�
 > ⚠️ **只有 Windows x64 的附件名是固定的**（`QingNiao-Setup.exe`，每次发版覆盖上传同名附件）。
 > 这是应用内"一键下载"能自动找到地址的前提：它走
 > `releases/latest/download/QingNiao-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
-> CI 上 x64 包构建后重命名回这个固定名再上传；其余附件（Windows ARM64、macOS 两种架构）
-> 都带 `-<arch>` 后缀（`QingNiao-Setup-arm64.exe`、`QingNiao-Setup-x64.dmg` 等），
-> 历史版本靠 git tag 与各自的 Release 页面追溯。
+> CI 上 x64 包构建后重命名回这个固定名再上传；其余附件（Windows ARM64、macOS 与 Linux 的各两种架构）
+> 都带 `-<arch>` 后缀（`QingNiao-Setup-arm64.exe`、`QingNiao-Setup-x64.dmg`、
+> `QingNiao-Setup-x64.AppImage` 等），历史版本靠 git tag 与各自的 Release 页面追溯。
 
 发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
 `workflow_dispatch` 填入要补建的 tag 即可。
@@ -183,7 +189,7 @@ client/                      Electron 桌面端（一切都在 client/ 下跑）
     gen-icon.mjs            从 SVG 生成 icon.png / icon.ico / icon.icns
     check-kernel.mjs        打包前校验内核二进制是真货而非占位脚本
     smoke.mjs               内核冒烟测试
-  electron-builder.yml      打包配置（产物名、files 白名单、mac/win 目标）
+  electron-builder.yml      打包配置（产物名、files 白名单、win/mac/linux 目标）
 server/                      平台服务端（Go 单二进制 + SQLite，见服务端一节）
   cmd/server/main.go        入口：HTTP + 自动建表 + 管理员初始化 + 健康采集
   internal/api/             /api/ide/* 契约接口、后端管理接口、静态资源

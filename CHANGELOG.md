@@ -3,6 +3,22 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.0 — 2026-10-08
+
+Linux 发版支持：新增 AppImage 产物（x64 / arm64 双架构），并修掉两个在 Linux 上会让核心功能直接残废的隐患。
+
+### 新增
+
+- **Linux 平台发布**：CI 新增 `build-linux` job（`ubuntu-latest`），与 Windows / macOS **并行**构建，出`QingNiao-Setup-x64.AppImage` 与 `QingNiao-Setup-arm64.AppImage` 两个附件。交付 AppImage 而非 deb / snap：免安装、单文件、任意 glibc 发行版都能跑，且应用内「设置 → 关于」的更新检查会按当前架构自动认领对应附件。该 job 带 `continue-on-error`（同 macOS），构建失败不会拦下Windows 发版。
+  - 仅覆盖 **glibc** 发行版（Debian / Ubuntu / Fedora / Arch 等）；Alpine 系是 musl libc，跑不了本包，暂不支持。
+  - Linux 上更新为「下载后手动替换旧 AppImage」（AppImage 没有 Windows 那种可挂载的安装器）。
+
+### 修复
+
+- **内置 MCP 依赖用户本机装了 node**（Linux 上将导致功能大面积残废）：面板浏览器、生图/生视频、识图、语音合成、音乐生成、语音识别这 6 个内置 MCP 此前以裸`node` 作为解释器启动，即去系统 `PATH` 里找node 可执行文件。Windows / macOS 上多数用户碰巧装了 node 所以一直没暴露，而 Linux 用户安装 node 的比例低得多——未安装时 6 个 MCP **全部无法启动**，且报错只是 `spawn node ENOENT`，用户无从判断是自己缺少运行环境。现改为借用 Electron 自带的 node 运行时（`ELECTRON_RUN_AS_NODE=1` + `process.execPath`）：不再对系统环境有任何要求，且解释器版本始终与当前 Electron 保持一致。
+- **Linux / macOS 退出应用后残留孤儿进程**：退出时原本只有 Windows 分支会终止内核的整棵进程树（`taskkill /T /F`），其余平台只调用了 `kill()`——内核自身被杀，但它拉起的 MCP 子进程与 pty shell 会变成孤儿继续运行到会话结束（占用端口、继续跑任务）。现对 POSIX 平台 spawn 时让内核成为新进程组组长，退出时先向整组发`SIGTERM`（留出关闭 SQLite 连接、为子进程刷盘的时间），800ms 内未退出再发 `SIGKILL`。
+- **应用内更新在Linux 上会用错文件名**：更新器此前把非 Windows 平台的兜底文件名一律取 mac 的 `.dmg` 名，导致 Linux 上会把 `.AppImage` 存成 `.dmg`（扩展名与内容不符，会破坏 AppImage 的可执行位与运行时挂载）。现已按平台分流，并补上 Linux 按 `process.arch` 认领架构的逻辑（此前 Windows / macOS 有、Linux 缺，双架构包会拿到上传顺序里的第一个）。
+
 ## v1.6.9 — 2026-10-08
 
 代码模式体验收尾：项目目录被本地删除后不再满屏报错，并隐藏工具自身的元数据/记忆目录。

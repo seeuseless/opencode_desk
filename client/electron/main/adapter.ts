@@ -135,6 +135,13 @@ class Adapter {
     const child = spawn(this.bin, ['serve', '--port', String(port), '--hostname', HOST], {
       cwd: this.workspace,
       windowsHide: true,
+      // 让内核成为**新进程组的组长**（POSIX 语义），退出时才能整组一起杀。
+      // 内核会拉起 MCP 子进程与 pty shell，它们继承内核的进程组——
+      // 不开这个，stop() 只能杀掉内核本身，那些子进程会变孤儿继续跑到会话结束。
+      // Windows 没有进程组概念（那边靠 taskkill /T 递归），所以只在 POSIX 平台开。
+      // 注意：detached 在 POSIX 上意味着子进程**不随父进程自动死**，这正是我们要的
+      //（父进程自己会显式 kill），但也意味着 stop() 里的 kill 必须写对，否则真会漏。
+      detached: process.platform !== 'win32',
       env: {
         ...process.env,
         XDG_CONFIG_HOME: qingniaoHome(),
@@ -254,14 +261,43 @@ class Adapter {
     const p = this.proc
     this.proc = null
     if (!p) return
-    // Windows 上必须杀整棵树：p.kill() 只终止内核本身，它的 MCP 子进程 / pty shell / 正在执行的
-    // bash 会话全部变成孤儿继续存活（pty shell 在 Windows 默认还是 PowerShell——用户退出后
-    // 「还会弹 PowerShell」的另一来源）。taskkill /T /F 一次带走上上下下。
-    if (process.platform === 'win32' && p.pid) {
-      try {
-        spawnSync('taskkill', ['/pid', String(p.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
-      } catch {
-        /* 失败走下面的兜底 */
+    // 必须杀整棵树：p.kill() 只终止内核本身，它的 MCP 子进程 / pty shell / 正在执行的
+    // bash 会话会全部变成孤儿继续存活（用户退出后还在后台跑任务、占着端口）。
+    //
+    // Windows：taskkill /T /F 按父子关系递归带走上上下下。
+    // macOS / Linux（2026-10-08 加 Linux 支持时补上）：没有 taskkill，改用**进程组**——
+    // start() 里 spawn 开了 detached，内核是组长，kill(-pid) 一发把整组（含所有子孙）带走。
+    // 顺序上先杀组、再兜底 p.kill()：组杀失败（进程已退出等）时靠它保底。
+    const pid = p.pid
+    if (pid) {
+      if (process.platform === 'win32') {
+        try {
+          spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        } catch {
+          /* 失败走下面的兜底 */
+        }
+      } else {
+        // 负 pid = 整个进程组。先 SIGTERM（给内核机会正常收尾），800ms 后仍存活再 SIGKILL。
+        // 不用 kill(-pid) 一把 SIGKILL：那会让内核来不及关 SQLite 连接、也不给 MCP 子进程刷盘。
+        try {
+          process.kill(-pid, 'SIGTERM')
+          const deadline = Date.now() + 800
+          while (Date.now() < deadline) {
+            try {
+              process.kill(-pid, 0) // 0 号信号只做存在性探测
+            } catch {
+              break // 组已经没了 → 干净收工
+            }
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50)
+          }
+          try {
+            process.kill(-pid, 'SIGKILL')
+          } catch {
+            /* 已经退出，忽略 */
+          }
+        } catch {
+          /* 组已不存在或无权限，走下面的兜底 */
+        }
       }
     }
     try {

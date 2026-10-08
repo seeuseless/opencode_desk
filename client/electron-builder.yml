@@ -1,6 +1,7 @@
 # 打包说明
 # - win: NSIS 安装包（主开发平台）
 # - mac: dmg / zip（Mac 支持；个人自用可 unset CSC_IDENTITY_AUTO_DISCOVERY 跳过签名）
+# - linux: AppImage（glibc 发行版；Alpine/musl 不支持）
 # - extraResources 把 OpenCode 内核二进制拷进 resources/bin（主进程打包态从该处读取）
 appId: com.qingniao.desktop
 productName: 青鸟
@@ -176,3 +177,21 @@ mac:
   # 否则 electron-builder 会要求签名（公证另需 Apple 公证服务）。
 dmg:
   sign: false
+# Linux（2026-10-08 加）：只出 AppImage，不出 deb/snap。
+# AppImage 的理由：免安装、单文件、任意 glibc 发行版都能跑（deb 要匹配发行版版本号、
+# snap 要审核，都不划算）。代价是没有自动更新——但 updater.ts 的非 Windows 分支本来
+# 就是「下载完交还用户手动替换」，AppImage 手动替换即可（覆盖旧文件、chmod +x）。
+# ⚠️ 只覆盖 **glibc** 发行版（Debian / Ubuntu / Fedora / Arch…）。Alpine 是 musl libc，
+#   跑不了这个包；要支持得另出一套 -musl 内核的包，产物与 CI 时间都翻倍，暂不做。
+linux:
+  icon: resources/image/icon.png
+  target:
+    - AppImage
+  category: Utility
+  synopsis: 开源工作助手
+  description: 青鸟 QingNiao —— 开源工作助手，Electron 桌面壳 + OpenCode agent 内核。
+  # 带 ${arch}：x64 与 arm64 两份 AppImage 同挂一个 Release，名字必须区分开
+  # （与 updater.ts 的 LINUX_APPIMAGE_NAME 认领规则一一对应，改一处必须同步另一处）。
+  # 不像 Windows 需要重命名回固定名——Linux 走的是 GitHub API assets 按 arch 认领，
+  # 不依赖 releases/latest/download 直链。
+  artifactName: QingNiao-Setup-${arch}.${ext}

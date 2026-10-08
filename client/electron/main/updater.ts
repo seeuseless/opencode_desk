@@ -73,6 +73,8 @@ function readMeta(): UpdateMeta {
  * mac：arm64 / x64 双份 QingNiao-Setup-<arch>.dmg（zip 已停发），按进程架构拼名字：
  * x64 包（含 Rosetta 下运行的场景）认领 x64 附件，arm64 同理。
  *
+ * Linux（2026-10-08加）：x64 / arm64 双份 QingNiao-Setup-<arch>.AppImage，规则与 mac 同款。
+ *
  * 正常路径是 pickAsset 从 Release 的 assets 里按架构挑（见下方 pickAsset），这些
  * 常量只在 Release 元数据异常、拿不到 assets 时才用得上。
  *
@@ -82,6 +84,20 @@ function readMeta(): UpdateMeta {
  */
 const WIN_SETUP_NAME = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
 const MAC_DMG_NAME = `QingNiao-Setup-${process.arch}.dmg`
+/** Linux 产物名。与 electron-builder.yml 的 linux.artifactName 必须一致。 */
+const LINUX_APPIMAGE_NAME = `QingNiao-Setup-${process.arch}.AppImage`
+
+/**
+ * 按平台给「下载文件名」的兜底值。
+ *
+ * 三平台都要给：非 Windows 的两个旧常量合起来当成兜底的话，Linux 上会把 .AppImage
+ * 存成 .dmg 名（扩展名与内容不符，AppImage 的可执行位与 FUSE 挂载都会受影响）。
+ */
+function fallbackFileName(): string {
+  if (process.platform === 'win32') return WIN_SETUP_NAME
+  if (process.platform === 'darwin') return MAC_DMG_NAME
+  return LINUX_APPIMAGE_NAME
+}
 
 /**
  * 版本号归一化：0.0.1 / v0.0.1 / 0.1.0-beta.1 → 可直接比较的数字段 + 预发布标识。
@@ -216,18 +232,21 @@ interface GhRelease {
 function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { url: string; name: string; size: number } {
   const list = Array.isArray(assets) ? assets.filter((a) => a.browser_download_url) : []
   const want = process.platform === 'win32' ? /\.exe$/i : process.platform === 'darwin' ? /\.(dmg|zip)$/i : /\.(appimage|deb)$/i
-  // 双架构包（win x64/arm64、mac arm64/x64）同挂一个 Release，必须按当前进程架构
-  // 认领——通用正则会拿到数组里第一个匹配附件，架构随上传顺序碰运气。Rosetta 下
+  // 双架构包（win x64/arm64、mac arm64/x64、linux x64/arm64）同挂一个 Release，必须按当前
+  // 进程架构认领——通用正则会拿到数组里第一个匹配附件，架构随上传顺序碰运气。Rosetta 下
   // process.arch 是 x64，x64 应用认 x64 包，行为也正确。
   // Windows 的期望名要与 CI 重命名约定一致：x64 附件就叫 QingNiao-Setup.exe（不带后缀）。
   // mac 的认领正则只写 dmg：zip 已停发（electron-builder.yml mac.target 注释），
   // want 兜底里的 zip 是给还挂着 zip 附件的历史 Release 留的。
+  // Linux 的 .AppImage 大小写敏感（electron-builder 用大写 I），正则带 i 兜住手改名的附件。
   let archHit: GhAsset | undefined
   if (process.platform === 'win32') {
     const expected = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
     archHit = list.find((a) => (a.name ?? '').toLowerCase() === expected.toLowerCase())
   } else if (process.platform === 'darwin') {
     archHit = list.find((a) => new RegExp(`-${process.arch}\\.dmg$`, 'i').test(a.name ?? ''))
+  } else {
+    archHit = list.find((a) => new RegExp(`-${process.arch}\\.appimage$`, 'i').test(a.name ?? ''))
   }
   const hit =
     archHit ??
@@ -328,7 +347,7 @@ export async function checkUpdate(): Promise<UpdateState> {
     pageUrl: rel.html_url ?? `https://github.com/${meta.repo}/releases/tag/${rel.tag_name}`,
     publishedAt: rel.published_at ?? '',
     downloadUrl: asset.url,
-    downloadName: asset.name || (process.platform === 'win32' ? WIN_SETUP_NAME : MAC_DMG_NAME),
+    downloadName: asset.name || fallbackFileName(),
     size: asset.size
   }
   // 版本变了：上一版下载好的文件作废（避免把旧包当新包装）
@@ -351,7 +370,7 @@ function updateDir(): string {
 function targetFile(name: string): string {
   // 附件名不可信（来自网络），只取最后一段并剔掉路径分隔符与 ..；真的没有名字就按平台给默认名
   const safe = (name || '').split(/[\\/]/).pop()?.replace(/[\u0000-\u001f]/g, '') ?? ''
-  const fallback = process.platform === 'win32' ? WIN_SETUP_NAME : MAC_DMG_NAME
+  const fallback = fallbackFileName()
   return join(updateDir(), safe && !/^\.+$/.test(safe) ? safe : fallback)
 }
 
