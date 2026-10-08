@@ -399,6 +399,7 @@ html[data-bg-content='on'] .cbox {
 .code-file { gap: 7px; }
 .code-file-ico { flex: none; color: var(--side-fg2); }
 .code-list-empty { margin: 2px 0 2px 22px; padding: 7px 8px; color: var(--side-fg2); font-size: 12px; }
+.code-list-error { margin: 2px 0 2px 22px; padding: 7px 8px; color: var(--danger, #c0392b); font-size: 12px; line-height: 1.5; }
 /* 标题占满剩余宽度后省略；计划会话的日期固定留在行右端（flex:none） */
 .sess-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-date { flex: none; font-size: 11px; opacity: 0.65; }

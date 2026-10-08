@@ -151,6 +151,17 @@ export function Sidebar(p: Props) {
 
   const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
 
+  /** 把主进程抛出的错误剥掉「Error invoking remote method ...」前缀，只留真正含义 */
+  function errText(e: unknown): string {
+    const raw = e instanceof Error ? e.message : String(e)
+    const m = /(?:Error invoking remote method '\w+': (Error: )?)?([\s\S]+)$/.exec(raw.replace(/\r\n/g, '\n'))
+    return (m?.[2] ?? raw).trim().replace(/\n.*$/, '')
+  }
+  /** 项目目录是否已被删除/移走（主进程统一兜底的错误文案） */
+  function isDirMissing(msg: string): boolean {
+    return /被删除或移走/.test(msg) || /ENOENT/.test(msg)
+  }
+
   async function loadDir(proj: Project, dirPath = ''): Promise<void> {
     const key = treeKey(proj.path, dirPath)
     if (treeLoading[key]) return
@@ -160,7 +171,7 @@ export function Sidebar(p: Props) {
       const nodes = await window.qingniao.workspaceList(proj.path, dirPath)
       setTreeMap((m) => ({ ...m, [key]: nodes }))
     } catch (e) {
-      setTreeError((m) => ({ ...m, [key]: e instanceof Error ? e.message : String(e) }))
+      setTreeError((m) => ({ ...m, [key]: errText(e) }))
     } finally {
       setTreeLoading((m) => ({ ...m, [key]: false }))
     }
@@ -267,7 +278,7 @@ export function Sidebar(p: Props) {
       const nodes = await window.qingniao.workspaceList(proj.path, dirPath)
       setTreeMap((m) => ({ ...m, [key]: nodes }))
     } catch (e) {
-      setTreeError((m) => ({ ...m, [key]: e instanceof Error ? e.message : String(e) }))
+      setTreeError((m) => ({ ...m, [key]: errText(e) }))
     } finally {
       setTreeLoading((m) => ({ ...m, [key]: false }))
     }
@@ -382,8 +393,11 @@ export function Sidebar(p: Props) {
                 {isOpen && p.codeMode && !isBuiltinProj(proj) ? (
                   <>
                     {treeLoading[treeKey(proj.path, '')] && <div className="code-list-empty">{t('正在读取目录…')}</div>}
-                    {treeError[treeKey(proj.path, '')] && (
-                      <div className="code-list-error">{treeError[treeKey(proj.path, '')]}</div>
+                    {/* 项目目录被删除/移走时静默隐藏，不打扰用户（显示空状态） */}
+                    {treeError[treeKey(proj.path, '')] && !isDirMissing(treeError[treeKey(proj.path, '')]) && (
+                      <div className="code-list-error" title={treeError[treeKey(proj.path, '')]}>
+                        {treeError[treeKey(proj.path, '')]}
+                      </div>
                     )}
                     {treeMap[treeKey(proj.path, '')]?.length === 0 && <div className="code-list-empty">{t('没有代码文件')}</div>}
                     {renderTree(proj, treeMap[treeKey(proj.path, '')] ?? [], 0)}
