@@ -3,6 +3,14 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.3 — 2026-10-08
+
+Linux 发版新增 deb 安装包（Debian / Ubuntu 等），与既有 AppImage 同挂一个 Release，双架构（x64 / arm64）。
+
+### 新增
+
+- **Linux 增加 deb 包**：`electron-builder.yml` 的 `linux.target` 由 `[AppImage]` 改为 `[AppImage, deb]`；CI 的 `build-linux` job 增加 `fakeroot` / `dpkg` 安装步骤、deb 产物校验与上传。Release 现含四个 Linux 附件：`QingNiao-Setup-x86_64.AppImage`、`-arm64.AppImage`、`QingNiao-Setup-amd64.deb`、`-arm64.deb`。架构段两套命名：AppImage 用 `x86_64`、deb 用 `amd64`（x64 的两种映射），arm64 两者同名。
+
 ## v1.7.2 — 2026-10-08
 
 补上 v1.7.0 / v1.7.1 未能产出的 Linux 安装包：修正 AppImage 产物名的架构段。
