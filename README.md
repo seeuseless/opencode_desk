@@ -34,7 +34,7 @@ yarn build         # 编译 main/preload/renderer
 yarn typecheck     # 类型检查
 yarn dist          # electron-builder 打 Windows 安装包（CI 上加 --x64 --arm64 出双架构）
 yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 出双架构）
-yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm64 出双架构）
+yarn dist:linux    # electron-builder 打 Linux AppImage + deb（CI 上加 --x64 --arm64 出双架构双格式）
 ```
 
 > **服务端独立运行**：平台服务端（Go 单二进制 + SQLite）是独立进程，桌面端不负责拉起——
@@ -56,8 +56,8 @@ yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm
 > | Windows（ARM64） | `QingNiao-Setup-arm64.exe` |
 > | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg` |
 > | macOS（Intel） | `QingNiao-Setup-x64.dmg` |
-> | Linux（x64，glibc） | `QingNiao-Setup-x86_64.AppImage` |
-> | Linux（ARM64，glibc） | `QingNiao-Setup-arm64.AppImage` |
+> | Linux（x64，glibc） | `QingNiao-Setup-x86_64.AppImage` / `QingNiao-Setup-amd64.deb` |
+> | Linux（ARM64，glibc） | `QingNiao-Setup-arm64.AppImage` / `QingNiao-Setup-arm64.deb` |
 >
 > 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
 > `releases/latest/download/<名>` 直链对非 ASCII 字符要 URL 转义，中文名下载不稳。
@@ -65,11 +65,12 @@ yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm
 >
 > - Windows 未做代码签名，SmartScreen 首次运行可能提示"未知发布者"，选「更多信息 → 仍要运行」。
 > - macOS 未做签名与公证，首次打开需**右键 →「打开」**绕过 Gatekeeper（直接双击会被拦下）。
-> - Linux 交付 AppImage：下载后先 `chmod +x QingNiao-Setup-x86_64.AppImage` 再运行（部分浏览器下载会丢可执行位）。
->   **只支持 glibc 发行版**（Debian / Ubuntu / Fedora / Arch 等），Alpine 是 musl libc 跑不了这个包。
->   应用内更新在 Linux 上是「下载完手动替换旧文件」（AppImage 没有 Windows 那种安装器可挂）。
-> - Linux 附件名里的架构段是 `x86_64` 而不是 `x64`：这是 electron-builder 对 AppImage
->   套用的 Linux 惯例命名（deb 上则是 `amd64`），不是笔误。
+> - Linux 交付 **AppImage + deb 双格式**：AppImage 下载后先 `chmod +x QingNiao-Setup-x86_64.AppImage` 再运行（部分浏览器下载会丢可执行位）；
+>   deb 用 `sudo apt install ./QingNiao-Setup-amd64.deb` 安装，自带菜单项。两者都**只支持 glibc 发行版**
+>   （Debian / Ubuntu / Fedora / Arch 等），Alpine 是 musl libc 跑不了这个包。
+>   应用内更新在 Linux 上是「下载完手动替换旧文件」（AppImage 没有 Windows 那种安装器可挂；deb 同理手动重装/替换）。
+> - Linux 附件名里的架构段有两套命名：`x86_64`（AppImage）与 `amd64`（deb），都不是笔误——
+>   这是 electron-builder 对两种格式分别套用的 Linux 惯例命名（x64 的两种映射），arm64 在两种格式下都叫 `arm64`。
 
 ## 发版（改 version → 打 tag，其余交给 GitHub）
 

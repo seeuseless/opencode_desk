@@ -25,10 +25,11 @@
 #   · macOS  ：QingNiao-Setup-arm64.dmg + QingNiao-Setup-x64.dmg
 #              （mac.artifactName 带 ${arch}；--arm64 --x64 双架构出包，覆盖 Apple
 #               Silicon 与 Intel）
-#   · Linux  ：QingNiao-Setup-x86_64.AppImage + QingNiao-Setup-arm64.AppImage
-#              （只出 AppImage、只覆盖 glibc 发行版；Alpine/musl 不支持。
-#               注意架构段是 Linux 惯例名 x86_64 不是 x64 —— electron-builder 对
-#               AppImage 做了架构名映射，详见 build-linux job 校验步骤上的长注释）
+#   · Linux  ：AppImage（QingNiao-Setup-x86_64.AppImage / -arm64.AppImage）
+#             + deb（QingNiao-Setup-amd64.deb / -arm64.deb）
+#             只覆盖 glibc 发行版；Alpine/musl 不支持。
+#             架构段两套命名：AppImage 用 x86_64、deb 用 amd64（x64 的两种映射），
+#             arm64 两格式都叫 arm64；详见 build-linux job 校验步骤上的长注释
 #   双架构出包靠构建命令传 --x64 --arm64（或 --arm64 --x64）两个 flag；交叉架构的
 #   内核替换由 beforePack 钩子处理（scripts/electron-before-pack.cjs），对侧内核
 #   平台包用 npm pack + tar 备好（平台包有 os/cpu 校验，npm install 会拒装）。
@@ -494,9 +495,24 @@ jobs:
             ls -l "node_modules/$PKG/bin"
           done
 
-      # --x64 --arm64：一次出双架构 AppImage。交叉架构的内核由 beforePack 钩子
-      # 从上一步备好的平台包换入（PLATFORMS.linux 已配好）。
-      - name: 构建 Linux AppImage（x64 + arm64）
+      # 构建 deb 需要 dpkg-deb 与 fakeroot（electron-builder 的 deb target 用它们打包）。
+      # ubuntu-latest 自带 dpkg，但 fakeroot 未必；缺了就装（runner 有免密 sudo）。
+      # 这一步在 build 之前，确保缺工具时失败尽早、日志位置清楚。
+      - name: 确保 deb 构建工具存在
+        shell: bash
+        run: |
+          set -e
+          if ! command -v dpkg-deb >/dev/null 2>&1 || ! command -v fakeroot >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y fakeroot dpkg
+          else
+            echo "dpkg-deb / fakeroot 已存在，跳过安装"
+          fi
+
+      # --x64 --arm64：一次出双架构 双格式（AppImage + deb）。交叉架构的内核由 beforePack 钩子
+      # 从上一步备好的平台包换入（PLATFORMS.linux 已配好）。deb 需要 dpkg-deb + fakeroot，
+      # 见下面的「确保 deb 构建工具存在」步骤。
+      - name: 构建 Linux AppImage + deb（x64 + arm64）
         run: yarn dist:linux --x64 --arm64 --publish never
         env:
           ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/eb-cache
@@ -517,7 +533,7 @@ jobs:
       #   按 process.arch（"x64"）拼出来的文件名永远匹配不上实际产物——
       #   第一版 CI 就是这么红的：内核校验全过，却报「未找到 dist/QingNiao-Setup-x64.AppImage」。
       #   主进程 updater.ts 的认领正则同步用了这套名字，改一处必须改另一处。
-      - name: 校验双架构 AppImage 与内核
+      - name: 校验双架构 AppImage + deb 与内核
         shell: bash
         run: |
           set -e
@@ -562,18 +578,33 @@ jobs:
               exit 1
             fi
             echo "✓ QingNiao-Setup-$ART.AppImage 存在"
+            # deb 架构段：x64 → amd64（与 AppImage 的 x86_64 不同的另一套映射），
+            # arm64 两格式都叫 arm64。文件名与上传步骤、linux.artifactName 三处必须一致。
+            DEB_ART="$ARCH"
+            if [ "$ARCH" = x64 ]; then DEB_ART="amd64"; fi
+            if [ ! -f "dist/QingNiao-Setup-$DEB_ART.deb" ]; then
+              echo "::error::未找到 dist/QingNiao-Setup-$DEB_ART.deb"
+              echo "::error::deb 上 x64 映射为 amd64（区别于 AppImage 的 x86_64）；若实际产物名不同，"
+              echo "::error::请同步改 release.yml 的校验、上传步骤与 linux.artifactName"
+              echo "::error::dist 实际内容："
+              ls -l dist
+              exit 1
+            fi
+            echo "✓ QingNiao-Setup-$DEB_ART.deb 存在"
           done
-          echo "✓ 双架构 AppImage 与内核均正常"
+          echo "✓ 双架构 AppImage + deb 与内核均正常"
 
-      - name: 上传 Linux AppImage 到 Release
+      - name: 上传 Linux AppImage + deb 到 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          # 文件名里的架构段是 x86_64 / arm64（AppImage 的 Linux 惯例名，见下面注释），
-          # 不是 x64 / arm64 —— 写错这里会因 fail_on_unmatched_files 把整个 job 拖红。
+          # 文件名里的架构段两套命名：AppImage 用 x86_64 / arm64（见上面注释），
+          # deb 用 amd64（x64 映射）/ arm64 —— 写错这里会因 fail_on_unmatched_files 把整个 job 拖红。
           files: |
             client/dist/QingNiao-Setup-x86_64.AppImage
             client/dist/QingNiao-Setup-arm64.AppImage
+            client/dist/QingNiao-Setup-amd64.deb
+            client/dist/QingNiao-Setup-arm64.deb
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

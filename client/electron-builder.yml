@@ -177,21 +177,28 @@ mac:
   # 否则 electron-builder 会要求签名（公证另需 Apple 公证服务）。
 dmg:
   sign: false
-# Linux（2026-10-08 加）：只出 AppImage，不出 deb/snap。
-# AppImage 的理由：免安装、单文件、任意 glibc 发行版都能跑（deb 要匹配发行版版本号、
-# snap 要审核，都不划算）。代价是没有自动更新——但 updater.ts 的非 Windows 分支本来
-# 就是「下载完交还用户手动替换」，AppImage 手动替换即可（覆盖旧文件、chmod +x）。
+# Linux（2026-10-08 加）：出 AppImage + deb 双格式。
+# - AppImage：免安装、单文件、任意 glibc 发行版都能跑，手动替换即可更新（updater.ts
+#   非 Windows 分支「下载完交还用户手动替换」，AppImage 覆盖旧文件 + chmod +x 即可）。
+# - deb：Debian / Ubuntu / 衍生系用户习惯的包，apt 安装、自带菜单项。架构段 x64 → amd64
+#   （electron-builder 对 deb 的 getArtifactArchName 映射，见 release.yml 注释），
+#   与 AppImage 的 x86_64 不同——上传步骤与 updater.ts 都按各自命名认领，别写岔。
+# 不出 snap：要审核、节奏不可控，性价比低。
 # ⚠️ 只覆盖 **glibc** 发行版（Debian / Ubuntu / Fedora / Arch…）。Alpine 是 musl libc，
 #   跑不了这个包；要支持得另出一套 -musl 内核的包，产物与 CI 时间都翻倍，暂不做。
 linux:
   icon: resources/image/icon.png
   target:
     - AppImage
+    - deb
   category: Utility
   synopsis: 开源工作助手
   description: 青鸟 QingNiao —— 开源工作助手，Electron 桌面壳 + OpenCode agent 内核。
-  # 带 ${arch}：x64 与 arm64 两份 AppImage 同挂一个 Release，名字必须区分开
-  # （与 updater.ts 的 LINUX_APPIMAGE_NAME 认领规则一一对应，改一处必须同步另一处）。
-  # 不像 Windows 需要重命名回固定名——Linux 走的是 GitHub API assets 按 arch 认领，
+  # 带 ${arch}：双格式 × 双架构同挂一个 Release，名字必须区分开。
+  # - AppImage：QingNiao-Setup-x86_64.AppImage / QingNiao-Setup-arm64.AppImage
+  #   （与 updater.ts 的 LINUX_APPIMAGE_NAME 认领规则对应，改一处必须同步另一处）
+  # - deb：QingNiao-Setup-amd64.deb / QingNiao-Setup-arm64.deb
+  #   （deb 上 x64 → amd64，AppImage 上 x64 → x86_64，两套名字别写岔）
+  # 不像 Windows 需要重命名回固定名——Linux 走 GitHub API assets 按 arch 认领，
   # 不依赖 releases/latest/download 直链。
   artifactName: QingNiao-Setup-${arch}.${ext}
