@@ -191,6 +191,11 @@ linux:
   target:
     - AppImage
     - deb
+  # deb 必须能确定 maintainer（FpmTarget 用它写 DEBIAN/control 的 Maintainer 字段）。
+  # 项目 package.json 的 author 只是纯字符串「qingniao」、无邮箱，eb 会报
+  # 「Please specify author 'email' ... Linux .deb package maintainer」而中断——
+  # 显式写 maintainer 即可短路该推导，且与 author 解耦（author 不必因此塞邮箱）。
+  maintainer: QingNiao Dev <seeuseless@users.noreply.github.com>
   category: Utility
   synopsis: 开源工作助手
   description: 青鸟 QingNiao —— 开源工作助手，Electron 桌面壳 + OpenCode agent 内核。
