@@ -22,6 +22,11 @@ Thumbs.db
 /.qn-verify-data
 /.gitcheck.txt
 
+# 打包配置验证产物：electron-builder --dir --config.directories.output=dist-verify
+# 用来只验证配置解析与文件收集、不出安装包（改完 electron-builder.yml 后的自检手段）。
+# 体积与 dist 同量级（~550MB），绝不能入库。
+client/dist-verify/
+
 # ZCode 工具目录
 .zcode/
 
