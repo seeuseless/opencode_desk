@@ -21,9 +21,10 @@ Linux 发版支持：新增 AppImage 产物（x64 / arm64 双架构），并修�
 
 ### 新增
 
-- **Linux 平台发布**：CI 新增 `build-linux` job（`ubuntu-latest`），与 Windows / macOS **并行**构建，出`QingNiao-Setup-x64.AppImage` 与 `QingNiao-Setup-arm64.AppImage` 两个附件。交付 AppImage 而非 deb / snap：免安装、单文件、任意 glibc 发行版都能跑，且应用内「设置 → 关于」的更新检查会按当前架构自动认领对应附件。该 job 带 `continue-on-error`（同 macOS），构建失败不会拦下Windows 发版。
+- **Linux 平台发布**：CI 新增 `build-linux` job（`ubuntu-latest`），与 Windows / macOS **并行**构建，出 `QingNiao-Setup-x86_64.AppImage` 与 `QingNiao-Setup-arm64.AppImage` 两个附件。交付 AppImage 而非 deb / snap：免安装、单文件、任意 glibc 发行版都能跑，且应用内「设置 → 关于」的更新检查会按当前架构自动认领对应附件。该job 带 `continue-on-error`（同 macOS），构建失败不会拦下 Windows 发版。
   - 仅覆盖 **glibc** 发行版（Debian / Ubuntu / Fedora / Arch 等）；Alpine 系是 musl libc，跑不了本包，暂不支持。
   - Linux 上更新为「下载后手动替换旧 AppImage」（AppImage 没有 Windows 那种可挂载的安装器）。
+  - 附件名里的架构段是 `x86_64` 而非 `x64`：这是 electron-builder 对 AppImage 套用的 Linux 惯例命名（deb 上则是 `amd64`），不是笔误。
 
 ### 修复
 

@@ -73,7 +73,8 @@ function readMeta(): UpdateMeta {
  * mac：arm64 / x64 双份 QingNiao-Setup-<arch>.dmg（zip 已停发），按进程架构拼名字：
  * x64 包（含 Rosetta 下运行的场景）认领 x64 附件，arm64 同理。
  *
- * Linux（2026-10-08加）：x64 / arm64 双份 QingNiao-Setup-<arch>.AppImage，规则与 mac 同款。
+ * Linux（2026-10-08加）：x64 / arm64 双份 AppImage，规则与 mac 同款，但**架构段用的是
+ * Linux 惯例名 x86_64 而不是 x64** ——见下方 linuxArtifactArch()。
  *
  * 正常路径是 pickAsset 从 Release 的 assets 里按架构挑（见下方 pickAsset），这些
  * 常量只在 Release 元数据异常、拿不到 assets 时才用得上。
@@ -84,8 +85,25 @@ function readMeta(): UpdateMeta {
  */
 const WIN_SETUP_NAME = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
 const MAC_DMG_NAME = `QingNiao-Setup-${process.arch}.dmg`
-/** Linux 产物名。与 electron-builder.yml 的 linux.artifactName 必须一致。 */
-const LINUX_APPIMAGE_NAME = `QingNiao-Setup-${process.arch}.AppImage`
+
+/**
+ * Linux 产物名里的架构段 —— **不能直接用 process.arch**。
+ *
+ * electron-builder 的 getArtifactArchName（builder-util/out/arch.js）对 AppImage
+ * 做了 Linux 惯例映射：x64 → `x86_64`、ia32 → `i386`；arm64 / armv7l 保持原名。
+ * 所以真实产物是 `QingNiao-Setup-x86_64.AppImage` / `QingNiao-Setup-arm64.AppImage`。
+ *
+ * ⚠️踩过这个坑（2026-10-08 首次跑 build-linux CI）：按 `process.arch`（"x64"）拼名字，
+ *   校验步骤报「未找到 dist/QingNiao-Setup-x64.AppImage」，而产物其实好好地在那儿，
+ *   只是叫 x86_64。同一映射在 deb 上是 x64 → amd64、exe/dmg 上是 x64 → x64。
+ *   release.yml 的校验与上传用的是同一套名字，改这里必须同步改那边。
+ */
+function linuxArtifactArch(): string {
+  return process.arch === 'x64' ? 'x86_64' : process.arch
+}
+
+/** Linux 产物名。与 electron-builder.yml 的 linux.artifactName + 上述架构映射必须一致。 */
+const LINUX_APPIMAGE_NAME = `QingNiao-Setup-${linuxArtifactArch()}.AppImage`
 
 /**
  * 按平台给「下载文件名」的兜底值。
@@ -238,7 +256,9 @@ function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { 
   // Windows 的期望名要与 CI 重命名约定一致：x64 附件就叫 QingNiao-Setup.exe（不带后缀）。
   // mac 的认领正则只写 dmg：zip 已停发（electron-builder.yml mac.target 注释），
   // want 兜底里的 zip 是给还挂着 zip 附件的历史 Release 留的。
-  // Linux 的 .AppImage 大小写敏感（electron-builder 用大写 I），正则带 i 兜住手改名的附件。
+  // Linux 的认领正则：架构段是 Linux 惯例名 x86_64 / arm64（不是 process.arch 的 x64），
+  // 原因见 linuxArtifactArch() 的注释。.AppImage 大小写敏感（electron-builder 用大写 I），
+  // 正则带 i 兜住手改名的附件。
   let archHit: GhAsset | undefined
   if (process.platform === 'win32') {
     const expected = process.arch === 'arm64' ? 'QingNiao-Setup-arm64.exe' : 'QingNiao-Setup.exe'
@@ -246,7 +266,7 @@ function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { 
   } else if (process.platform === 'darwin') {
     archHit = list.find((a) => new RegExp(`-${process.arch}\\.dmg$`, 'i').test(a.name ?? ''))
   } else {
-    archHit = list.find((a) => new RegExp(`-${process.arch}\\.appimage$`, 'i').test(a.name ?? ''))
+    archHit = list.find((a) => new RegExp(`-${linuxArtifactArch()}\\.appimage$`, 'i').test(a.name ?? ''))
   }
   const hit =
     archHit ??

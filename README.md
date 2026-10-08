@@ -56,7 +56,7 @@ yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm
 > | Windows（ARM64） | `QingNiao-Setup-arm64.exe` |
 > | macOS（Apple Silicon） | `QingNiao-Setup-arm64.dmg` |
 > | macOS（Intel） | `QingNiao-Setup-x64.dmg` |
-> | Linux（x64，glibc） | `QingNiao-Setup-x64.AppImage` |
+> | Linux（x64，glibc） | `QingNiao-Setup-x86_64.AppImage` |
 > | Linux（ARM64，glibc） | `QingNiao-Setup-arm64.AppImage` |
 >
 > 文件名用英文 `QingNiao` 而非中文「青鸟」：GitHub 附件名与
@@ -65,9 +65,11 @@ yarn dist:linux    # electron-builder 打 Linux AppImage（CI 上加 --x64 --arm
 >
 > - Windows 未做代码签名，SmartScreen 首次运行可能提示"未知发布者"，选「更多信息 → 仍要运行」。
 > - macOS 未做签名与公证，首次打开需**右键 →「打开」**绕过 Gatekeeper（直接双击会被拦下）。
-> - Linux 交付 AppImage：下载后先 `chmod +x QingNiao-Setup-x64.AppImage` 再运行（部分浏览器下载会丢可执行位）。
+> - Linux 交付 AppImage：下载后先 `chmod +x QingNiao-Setup-x86_64.AppImage` 再运行（部分浏览器下载会丢可执行位）。
 >   **只支持 glibc 发行版**（Debian / Ubuntu / Fedora / Arch 等），Alpine 是 musl libc 跑不了这个包。
 >   应用内更新在 Linux 上是「下载完手动替换旧文件」（AppImage 没有 Windows 那种安装器可挂）。
+> - Linux 附件名里的架构段是 `x86_64` 而不是 `x64`：这是 electron-builder 对 AppImage
+>   套用的 Linux 惯例命名（deb 上则是 `amd64`），不是笔误。
 
 ## 发版（改 version → 打 tag，其余交给 GitHub）
 
@@ -113,7 +115,7 @@ AppImage 工具下载失败）也不会拦下 Windows 的发版，Release 里仍
 > `releases/latest/download/QingNiao-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
 > CI 上 x64 包构建后重命名回这个固定名再上传；其余附件（Windows ARM64、macOS 与 Linux 的各两种架构）
 > 都带 `-<arch>` 后缀（`QingNiao-Setup-arm64.exe`、`QingNiao-Setup-x64.dmg`、
-> `QingNiao-Setup-x64.AppImage` 等），历史版本靠 git tag 与各自的 Release 页面追溯。
+> `QingNiao-Setup-x86_64.AppImage` 等），历史版本靠 git tag 与各自的 Release 页面追溯。
 
 发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
 `workflow_dispatch` 填入要补建的 tag 即可。

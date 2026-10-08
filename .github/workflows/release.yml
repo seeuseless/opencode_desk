@@ -25,8 +25,10 @@
 #   · macOS  ：QingNiao-Setup-arm64.dmg + QingNiao-Setup-x64.dmg
 #              （mac.artifactName 带 ${arch}；--arm64 --x64 双架构出包，覆盖 Apple
 #               Silicon 与 Intel）
-#   · Linux  ：QingNiao-Setup-x64.AppImage + QingNiao-Setup-arm64.AppImage
-#              （只出 AppImage、只覆盖 glibc 发行版；Alpine/musl 不支持）
+#   · Linux  ：QingNiao-Setup-x86_64.AppImage + QingNiao-Setup-arm64.AppImage
+#              （只出 AppImage、只覆盖 glibc 发行版；Alpine/musl 不支持。
+#               注意架构段是 Linux 惯例名 x86_64 不是 x64 —— electron-builder 对
+#               AppImage 做了架构名映射，详见 build-linux job 校验步骤上的长注释）
 #   双架构出包靠构建命令传 --x64 --arm64（或 --arm64 --x64）两个 flag；交叉架构的
 #   内核替换由 beforePack 钩子处理（scripts/electron-before-pack.cjs），对侧内核
 #   平台包用 npm pack + tar 备好（平台包有 os/cpu 校验，npm install 会拒装）。
@@ -503,17 +505,26 @@ jobs:
       #   1) 两个架构的 AppImage 都要产出（artifactName 没生效会在上传那步炸）；
       #   2) 包内内核是真二进制（>100MB，排除未替换的占位脚本）；
       #   3) 内核架构与包一致 + **有可执行位**——第 3 条在 Linux 上是硬要求：
-      #      ELF 头前 20 字节里 e_ident[EI_CLASS](第 4 字节) 区分 64/32，
-      #      e_machine（第 18-19 字节，小端）0x3e=x64、0xb7=arm64；
+      #      ELF 头看不出架构，必须靠 file 的输出断言 x86-64 / aarch64；
       #      权限位用 test -x 验，electron-builder 拷 extraResources 时若丢掉 x 位，
       #      主进程 spawn 内核会 EACCES（Windows/mac 上分别由 PE 头与 mac 断言覆盖，
       #      Linux 这条是唯一能抓住它的断言）。
+      #
+      # ⚠️⚠️ 产物名里的架构段是 **x86_64 / arm64**，不是 x64 / arm64（2026-10-08 CI 实测踩到）：
+      #   electron-builder 的 getArtifactArchName（builder-util/out/arch.js）对 AppImage
+      #   做了 Linux 惯例映射：x64 → x86_64、ia32 → i386；只有 arm64 / armv7l 保持原名。
+      #   （deb 上是 x64 → amd64，exe / dmg 上是 x64 → x64，所以只有 AppImage 这条不一样。）
+      #   按 process.arch（"x64"）拼出来的文件名永远匹配不上实际产物——
+      #   第一版 CI 就是这么红的：内核校验全过，却报「未找到 dist/QingNiao-Setup-x64.AppImage」。
+      #   主进程 updater.ts 的认领正则同步用了这套名字，改一处必须改另一处。
       - name: 校验双架构 AppImage 与内核
         shell: bash
         run: |
           set -e
-          for ARCH in x64 arm64; do
-            if [ "$ARCH" = x64 ]; then APPDIR="dist/linux-unpacked"; else APPDIR="dist/linux-arm64-unpacked"; fi
+          for PAIR in "x64:x86_64" "arm64:arm64"; do
+            ARCH="${PAIR%%:*}"   # Electron 架构（unpacked 目录名用这个）
+            ART="${PAIR##*:}"    # 产物名里的架构段（AppImage 用 Linux 惯例名，见文件头注释）
+            if [ "$ARCH" = x64 ]; then APPDIR="dist/linux-unpacked"; else APPDIR="dist/linux-$ARCH-unpacked"; fi
             if [ ! -d "$APPDIR" ]; then
               echo "::error::未产出 $APPDIR——检查 electron-builder.yml 的 linux 配置与 --x64 --arm64 参数"
               ls -l dist
@@ -542,13 +553,15 @@ jobs:
               echo "::error::该文件权限：$(ls -l "$BIN")"
               exit 1
             fi
-            if [ ! -f "dist/QingNiao-Setup-$ARCH.AppImage" ]; then
-              echo "::error::未找到 dist/QingNiao-Setup-$ARCH.AppImage"
-              echo "::error::主进程 updater.ts 按当前架构期望这个文件名；"
-              echo "::error::若实际产物名不同，请同步改 LINUX_APPIMAGE_NAME 或 linux.artifactName"
+            if [ ! -f "dist/QingNiao-Setup-$ART.AppImage" ]; then
+              echo "::error::未找到 dist/QingNiao-Setup-$ART.AppImage"
+              echo "::error::主进程 updater.ts 按 Linux 惯例架构名认领这个文件名；"
+              echo "::error::若实际产物名不同，请同步改 LINUX_APPIMAGE_NAME、release.yml 的 ART 映射与 linux.artifactName"
+              echo "::error::dist 实际内容："
+              ls -l dist
               exit 1
             fi
-            echo "✓ QingNiao-Setup-$ARCH.AppImage 存在"
+            echo "✓ QingNiao-Setup-$ART.AppImage 存在"
           done
           echo "✓ 双架构 AppImage 与内核均正常"
 
@@ -556,8 +569,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          # 文件名里的架构段是 x86_64 / arm64（AppImage 的 Linux 惯例名，见下面注释），
+          # 不是 x64 / arm64 —— 写错这里会因 fail_on_unmatched_files 把整个 job 拖红。
           files: |
-            client/dist/QingNiao-Setup-x64.AppImage
+            client/dist/QingNiao-Setup-x86_64.AppImage
             client/dist/QingNiao-Setup-arm64.AppImage
           fail_on_unmatched_files: true
           draft: false
