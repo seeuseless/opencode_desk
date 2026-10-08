@@ -196,6 +196,10 @@ linux:
   # 「Please specify author 'email' ... Linux .deb package maintainer」而中断——
   # 显式写 maintainer 即可短路该推导，且与 author 解耦（author 不必因此塞邮箱）。
   maintainer: QingNiao Dev <seeuseless@users.noreply.github.com>
+  # syncDesktopName: 把上面 package.json 的 desktopName 写进 .desktop 的 Name/WM_CLASS，
+  # 让桌面环境能把运行中的窗口正确关联到本应用（否则报 desktopName 缺失的 warning，
+  # 且窗口与启动器图标可能关不上关联）。
+  syncDesktopName: true
   category: Utility
   synopsis: 开源工作助手
   description: 青鸟 QingNiao —— 开源工作助手，Electron 桌面壳 + OpenCode agent 内核。
