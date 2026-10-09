@@ -30,6 +30,11 @@ client/dist-verify/
 # ZCode 工具目录
 .zcode/
 
+# monorepo 根不该有 package-lock.json：桌面端的清单在 client/package-lock.json。
+# 根 package.json 已在 monorepo 迁移那次删除（6478e58），这里挡掉误在根跑
+# `npm install` 生成出来的孤儿锁文件（无对应 package.json，且锁的是迁移前版本）。
+/package-lock.json
+
 # 本地调试脚本与输出（不入库）
 /qn_*
 
