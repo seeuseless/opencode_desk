@@ -33,5 +33,20 @@
   不要再给右列加回外边距或圆角，也不要按浏览器状态写贴顶补丁。
 - **`electron-vite build` 在沙箱下会静默失败**（`safe-delete` shim 拦 `out/` 批量清空，退出码 0 但产物没更新）
   → 一律用 `NODE_OPTIONS= npx electron-vite build` 构建，否则改了 CSS 但界面没变化会怀疑人生。
+- **`rm -rf` / PowerShell `Remove-Item` 删目录会被 safe-delete 拦截**（报 `trash-failed` / `SAFE_DELETE_FAIL_CLOSED`，
+  回收站不可用时 fail closed 不许fallback 删）。删构建产物目录（如 550MB 的 `dist-verify/`）优先选**加 .gitignore** 而不是硬删。
+- **发版三平台与关键约定（2026-10-08加 Linux）**：
+  - CI 三个 job 并行：`build-win` / `build-mac` / `build-linux`，后两个带 `continue-on-error: true`（不影响 Windows 发版线）。
+  - **AppImage 产物名的架构段是 `x86_64` / `arm64`，不是 `x64`** —— electron-builder 的
+    `getArtifactArchName`（builder-util/out/arch.js）按扩展名套不同架构命名惯例：
+    AppImage/rpm/flatpak → x64 变 `x86_64`；deb/snap → `amd64`；exe/dmg → 保持 `x64`。
+    `artifactName` 里的 `${arch}` 宏走这个映射，**不是 `process.arch` 原样输出**。
+    改名要同步三处：electron-builder.yml / release.yml / updater.ts 的 `linuxArtifactArch()`。
+  - **只支持 glibc 发行版**（Alpine 是 musl，跑不了）。要支持得另出 `-musl` 内核包。
+  - **内置MCP 一律用 `process.execPath` + `ELECTRON_RUN_AS_NODE=1`，禁止写裸 `'node'`**：
+    写裸 node 意味着依赖用户本机装 node，Linux 用户没装则 6 个 MCP 全部起不来。
+    见 config.ts 的 `nodeExec()` / `nodeEnv()`，两者必须成对使用。
+  - **POSIX 平台 spawn 内核必须 `detached: true`**（Windows 不加），退出时 `process.kill(-pid, 'SIGTERM')`
+    杀整个进程组，否则 MCP/pty 子进程全变孤儿。Windows 仍走 taskkill /T /F。
 
 
