@@ -21,7 +21,10 @@ import { isBuiltinModel, type DeskStatus, type DeviceCfg } from './types.ts'
 const POLL_MS = 1200
 
 /** 一段时间内没有指令就顺手把攒下的事件推上去 */
-const EVENT_FLUSH_MS = 900
+const EVENT_FLUSH_MS = 400
+
+/** 同一会话两次「内容变了」之间的最小间隔：合并工具每一步的抖动，又不至于让手机明显滞后 */
+const CHANGE_DEBOUNCE_MS = 350
 
 /** 一次最多带回多少条事件（平台上限 200） */
 const EVENT_BATCH = 60
@@ -41,12 +44,22 @@ class Relay {
   private queue: { type: string; payload: Record<string, unknown> }[] = []
   /** 各会话是否在处理中：来自内核事件，手机每次拉任务列表时由它回答 busy */
   private busy: Record<string, boolean> = {}
-  /** 会话内容变更的最近推送时间：同一会话 800ms 内只推一条，别让每个 token 都发一次 */
+  /** 会话内容变更的最近推送时间：同一会话内合并，别让每个 token 都发一次 */
   private changedAt: Record<string, number> = {}
+  /**
+   * partID → part 类型（'text' / 'reasoning' / 'tool'…）。
+   *
+   * 存在的唯一理由：内核的 message.part.delta 里，**思考的增量 field 也是 'text'**，
+   * 光看 field 分不出正文与思维链。权威类型在 part.updated 快照里，这里记一份，
+   * 让转发正文增量时能按 partID 精确判断。只留当前会话量级的条目，定期清。
+   */
+  private partType: Record<string, string> = {}
   /** 有没有手机正连着（平台每轮认领时顺手带回；只认手机自己的活动，不认开关） */
   private mobileOnline = false
   /** 渲染层推过来的项目清单（主进程读不到 localStorage） */
   private projects: { id: string; path: string; name: string }[] = []
+  /** 上一版项目清单的指纹，用来判断「清单变了没有」 */
+  private projectsSig = ''
 
   /**
    * 状态变化回调：主进程用它把新状态推给渲染层。
@@ -100,7 +113,15 @@ class Relay {
 
   /** 桌面端每轮结束推一次项目清单，手机端 projects.list 直接读它 */
   setProjects(list: { id: string; path: string; name: string }[]): void {
-    this.projects = Array.isArray(list) ? list : []
+    const next = Array.isArray(list) ? list : []
+    // 项目增删改也要让手机知道：原先只在手机上手动点刷新才看得到，
+    // 现在清单一变就立刻推一条，手机侧自己去重拉 projects.list。
+    const sig = projectsSig(next)
+    if (sig !== this.projectsSig) {
+      this.projectsSig = sig
+      if (this.running) this.push({ type: 'projects.changed', payload: {} })
+    }
+    this.projects = next
   }
 
   /**
@@ -164,8 +185,14 @@ class Relay {
 
     if (e.type === 'message.part.delta') {
       if (sid) this.markBusy(sid, true)
-      const pr = e.properties as { sessionID?: string; field?: string; delta?: string }
-      // 只转发正文增量：reasoning 与工具入参手机端不展示
+      const pr = e.properties as { sessionID?: string; field?: string; delta?: string; partID?: string }
+      // **不能只看 field**：内核的 reasoning（思考）增量 field 同样是 'text'，
+      // 光看 field 会把整段思维链当成正文推到手机上，答案框里先冒出一大段 thinking。
+      // 权威类型在 message.part.updated 快照的 part.type 里（下面登记），
+      // 这里按 partID 查一次：登记过且不是 text 的增量直接丢。
+      // 快照还没到（查不到）时保守丢弃——宁可少几个字，也不能把思考当正文，
+      // 真丢了正文随后会被 session.changed 的完整历史补回来。
+      if (pr.partID && this.partType[pr.partID] && this.partType[pr.partID] !== 'text') return
       if (pr.field !== 'text' || !pr.delta) return
       this.push({ type: 'message.delta', payload: { sessionID: pr.sessionID, text: pr.delta } })
 
@@ -181,17 +208,42 @@ class Relay {
       return
     }
     if (e.type === 'message.updated' || e.type === 'message.part.updated') {
+      // 登记 part 类型：message.part.delta 靠它分辨「正文」与「思考」
+      this.rememberPartTypes(e.properties)
       // 会话内容变了（电脑上自己发的消息、AI 回复、工具输出）：通知手机拉一次完整历史。
       // 不能只依赖 message.delta —— 那个是「追进度」用的，丢了就永远补不回来。
       if (sid) this.pushChange(sid)
       return
     }
     if (e.type === 'session.updated' || e.type === 'session.created' || e.type === 'session.deleted') {
-      this.push({ type: 'sessions.changed', payload: {} })
+      // 带directory：手机上据此只重拉受影响的那个项目，不必把整个项目清单都重扫一遍。
+      // 内核这几个事件的载荷形状不完全一致（有的塞在 info 里，有的直接平铺），
+      // 两种都试一下，取不到就留空——手机那边会退回到「重拉所有已展开项目」。
+      const info = (e.properties as { info?: { directory?: string } }).info ?? {}
+      const dir = info.directory ?? (e.properties as { directory?: string }).directory ?? ''
+      this.pushUrgent({ type: 'sessions.changed', payload: { sessionID: sid ?? '', directory: dir } })
     }
   }
 
   /* ---------------- 内部 ---------------- */
+
+  /**
+   * 从 message.updated / message.part.updated 的快照里记下每个 part 的类型。
+   *
+   * 两种载荷形状都认：整条消息（parts 数组）与单个 part（part 对象）。
+   * 顺带做容量兜底——这张表只增不减，长会话跑久了会一直涨，超过阈值就整表清掉：
+   * 丢了顶多多转发几段思考（随后被完整历史覆盖），不能让它把内存吃光。
+   */
+  private rememberPartTypes(properties: Record<string, unknown>): void {
+    const take = (pt: unknown) => {
+      const o = pt as { id?: string; type?: string }
+      if (o && typeof o.id === 'string' && typeof o.type === 'string') this.partType[o.id] = o.type
+    }
+    const arr = (properties as { parts?: unknown[] }).parts
+    if (Array.isArray(arr)) for (const pt of arr) take(pt)
+    take((properties as { part?: unknown }).part)
+    if (Object.keys(this.partType).length > 4000) this.partType = {}
+  }
 
   /** 设备身份：没有就注册一台（同一账号同名设备会被平台复用，重装不换码） */
   private async ensureDevice(): Promise<void> {
@@ -239,11 +291,11 @@ class Relay {
    * 「这个会话的内容变了，去拉一次完整历史」——去抖后推送。
    *
    * message.part.updated 会随工具每一步都来一次，原样转发会把队列灌满；
-   * 800ms 合并一次，手机那边也不至于一秒拉几十遍历史。
+   * CHANGE_DEBOUNCE_MS 合并一次，手机那边也不至于一秒拉几十遍历史。
    */
   private pushChange(sid: string): void {
     const now = Date.now()
-    if (now - (this.changedAt[sid] ?? 0) < 800) return
+    if (now - (this.changedAt[sid] ?? 0) < CHANGE_DEBOUNCE_MS) return
     this.changedAt[sid] = now
     this.push({ type: 'session.changed', payload: { sessionID: sid } })
   }
@@ -251,6 +303,18 @@ class Relay {
   private push(e: { type: string; payload: Record<string, unknown> }): void {
     this.queue.push(e)
     if (this.queue.length >= EVENT_BATCH) void this.flush()
+  }
+
+  /**
+   * 立刻把队列推上去，不等 EVENT_FLUSH_MS 那个攒批定时器。
+   *
+   * 给「列表状态变了」这类**离散事件**用：用户刚点发送就该在手机上看到任务冒到最上面，
+   * 多等这几百毫秒是白等。流式增量（message.delta）相反——一个 token 一个 token 地来，
+   * 等攒批反而更省流量，所以仍走 push()。
+   */
+  private pushUrgent(e: { type: string; payload: Record<string, unknown> }): void {
+    this.push(e)
+    void this.flush()
   }
 
   private scheduleFlush(): void {
@@ -378,6 +442,10 @@ class Relay {
           'POST',
           title ? { title } : {}
         )
+        // 会话已经落库，手机的任务列表该立刻能看到它。
+        // 不靠内核回头抛 session.created（那要等到这一轮真正落盘），
+        // 手机自己也会 reload 一次，但别的标签页/别的手机不会——这里主动报一声最稳。
+        this.push({ type: 'sessions.changed', payload: { sessionID: s.id, directory: dir ?? '' } })
 
         return {
           task: { id: s.id, title: s.title || title || '新任务', updated: s.time?.updated ?? Date.now(), busy: false }
@@ -403,7 +471,13 @@ class Relay {
         // 关键：**不能 await**。内核这个接口要等整轮跑完才返回，await 会把认领循环堵死，
         // 手机点「停止」就再也送不进来了。这里放它自己跑，结果全靠事件流回传。
         void this.req<KernelMessage>(`/session/${sid}/message${dirQ(dir)}`, 'POST', body)
-          .then(() => this.markBusy(sid, false))
+          .then(() => {
+            // 消息已落库 → 这个任务的「最近更新」变了，列表要立刻重排。
+            // 内核的 session.updated 事件要等 AI 跑完才来，那样手机上就得等到
+            // AI 出结果才看到自己的任务冒到最上面；这里在受理的瞬间就报一声。
+            this.push({ type: 'sessions.changed', payload: { sessionID: sid, directory: dir ?? '' } })
+            this.markBusy(sid, false)
+          })
           .catch((e) => {
             this.lastError = errText(e)
             this.push({ type: 'session.error', payload: { sessionID: sid, message: errText(e) } })
@@ -467,20 +541,119 @@ class Relay {
 
 interface KernelMessage {
   info: { role: 'user' | 'assistant'; id: string }
-  parts: { type: string; text?: string }[]
+  parts: KernelPart[]
 }
 
-/** 只保留手机要显示的：角色 + 文本正文 */
-function simplify(list: KernelMessage[]): { role: 'user' | 'assistant'; text: string }[] {
-  return list
-    .map((m) => ({
-      role: m.info.role,
-      text: (m.parts || []).filter((x) => x.type === 'text' && x.text).map((x) => x.text).join('')
-    }))
-    .filter((m) => m.text !== '')
+/** 内核 part：这里只声明 simplify 与 delta 分流真正用到的字段 */
+interface KernelPart {
+  id?: string
+  type: string
+  text?: string
+  tool?: string
+  state?: { status?: string; input?: unknown }
+}
+
+/**
+ * 「仅上下文」注入消息的标记前缀（与渲染层 oc.ts 的三个常量一致）。
+ *
+ * 这些消息是 noReply 注入的：**AI 看得到、人不该看**——项目记忆、浏览器当前页面、
+ * 附件工具路由说明。桌面上渲染层有 isCtxOnly() 过滤，手机端拿的是内核原始消息，
+ * 早先没过滤，于是手机聊天里会莫名其妙冒出一大段「项目记忆」原文。
+ *
+ * 在这里（主进程）滤掉而不是让手机端滤：一来少传一大坨文本过网络，
+ * 二来手机端不用再维护一份前缀表，前缀变了只改这一处。
+ */
+const CTX_ONLY_PREFIXES = ['␞␞项目记忆␞␞\n', '␞␞浏览器上下文␞␞\n', '␞␞附件路由␞␞\n']
+
+/**
+ * 手机端要显示的一个 part（与渲染层 oc.ts 的 Part 同形，裁剪到手机用得到的字段）。
+ *
+ * 为什么改成「传结构」而不是像早先那样拍平成一段 text：
+ * 拍平的结果是手机上只有「最终答复」，思考过程、工具调用（点元素、读文件、跑命令）
+ * 全被丢掉——同一段对话，手机和桌面看到的完全是两回事。现在按 part 原样送，
+ * 手机端照着桌面那套渲染，「思考」折叠块和工具步骤行都能出来。
+ */
+interface WirePart {
+  id: string
+  type: string
+  /** 正文 / 思考的文本 */
+  text?: string
+  /** 工具名（type === 'tool'） */
+  tool?: string
+  /** 工具状态：pending / running / completed / error */
+  status?: string
+  /** 工具入参里最能说明「在干什么」的那个字段（路径、命令、URL、选择器…） */
+  detail?: string
+}
+
+/** 工具入参里按优先级取一个「摘要字段」：手机一行就显示它，比传整个 input 省事得多 */
+function toolDetail(tool: string, input: unknown): string {
+  if (!input || typeof input !== 'object') return ''
+  const o = input as Record<string, unknown>
+  const pick = (...keys: string[]): string => {
+    for (const k of keys) {
+      const v = o[k]
+      if (typeof v === 'string' && v.trim()) return v.trim()
+    }
+    return ''
+  }
+  const s =
+    pick('filePath', 'file_path', 'path') ||
+    pick('command', 'cmd') ||
+    pick('url', 'pattern', 'query') ||
+    pick('selector', 'elementId', 'ref') ||
+    pick('description', 'prompt', 'title')
+  return s.length > 160 ? s.slice(0, 160) + '…' : s
+}
+
+/**
+ * 内核消息 → 手机端消息。
+ *
+ * 丢掉两类：
+ *   · step-start / step-finish —— 纯标记，手机自己按状态画步骤行，不需要内核那份
+ *   · 「仅上下文」注入消息（项目记忆等）—— AI 可见、人不该看，见 CTX_ONLY_PREFIXES
+ *
+ * 正文/思考一律 trim 后判空：内核在「只有思考、没有正文」那轮会给出一个只含换行的
+ * text part，不判空就会在手机上多出一个什么都没有的灰气泡。
+ */
+function simplify(list: KernelMessage[]): { role: 'user' | 'assistant'; parts: WirePart[] }[] {
+  const out: { role: 'user' | 'assistant'; parts: WirePart[] }[] = []
+  for (const m of list) {
+    const parts: WirePart[] = []
+    for (const raw of m.parts || []) {
+      if (raw.type === 'text') {
+        const text = String(raw.text ?? '').trim()
+        if (!text) continue
+        if (CTX_ONLY_PREFIXES.some((p) => text.startsWith(p))) continue
+        parts.push({ id: raw.id ?? '', type: 'text', text })
+      } else if (raw.type === 'reasoning') {
+        const text = String(raw.text ?? '').trim()
+        // 空思考（被中断/未产出）不渲染，与桌面端 isCtxOnly 之外的空思考同理
+        if (!text) continue
+        parts.push({ id: raw.id ?? '', type: 'reasoning', text })
+      } else if (raw.type === 'tool') {
+        const st = raw.state as { status?: string; input?: unknown } | undefined
+        parts.push({
+          id: raw.id ?? '',
+          type: 'tool',
+          tool: String(raw.tool ?? ''),
+          status: st?.status ?? 'pending',
+          detail: toolDetail(String(raw.tool ?? ''), st?.input)
+        })
+      }
+      // step-start / step-finish 及其它类型一律不带
+    }
+    if (parts.length) out.push({ role: m.info.role, parts })
+  }
+  return out
 }
 
 const dirQ = (directory?: string) => (directory ? `?directory=${encodeURIComponent(directory)}` : '')
+
+/** 项目清单指纹：只关心「有哪些项目、叫什么」，顺序与附加字段不比 */
+function projectsSig(list: { id: string; path: string; name: string }[]): string {
+  return list.map((p) => `${p.path}\u0000${p.name}`).sort().join('\u0001')
+}
 
 /** 设备名：平台后台列表里靠它区分机器 */
 function deviceName(): string {
