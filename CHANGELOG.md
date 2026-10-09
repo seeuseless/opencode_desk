@@ -3,6 +3,15 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.5 — 2026-10-09
+
+修复「选择模型」面板偶尔闪一下的问题，并把 PortableGit 的系统级凭据助手重新定向，避免 git 反复弹凭据选择器。
+
+### 修复
+
+- **选择模型面板展开时偶尔闪动**：打开面板会异步同步 opencode 限免清单，清单回来后触发全局 settings 重渲染，父组件每轮传新的 `onOpen` 回调引用；旧实现把 `onOpen` 放进 `useEffect` 依赖，effect 重跑时对面板状态做无条件复位（`setExpanded('')` 等），用户刚展开的二级模型列被顶回收起，表现为闪一下。改为用 ref 缓存 `onOpen`、以 `prevOpen` 判断面板是否新展开，只在「收起变展开」那一下才复位并同步限免清单，其余渲染不再触碰面板状态。文件：`client/src/renderer/components/ModelPicker.tsx`。
+- **git 反复弹出 `select a credential helper`**：WorkBuddy 自带 PortableGit 的系统级 `etc/gitconfig` 里 `credential.helper` 被重置回 `helper-selector`（弹窗选择器），且有 `gitconfig.lock` 残留锁文件导致无法直接改回。清掉锁文件后改回 `wincred`。注意该 PortableGit 位于 `WorkBuddy/resources/vendor/PortableGit`（与早前记录的老路径不同）。
+
 ## v1.7.4 — 2026-10-09
 
 接入 OpenCode 官方限免模型（免 API Key），并把手机端的实时同步与消息呈现修到可用。
