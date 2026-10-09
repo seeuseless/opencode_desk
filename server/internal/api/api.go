@@ -100,6 +100,8 @@ func (s *Server) routes() {
 		// 后台管理
 		r.Get("/settings", s.handle(s.publicSettings))
 		r.Post("/auth/login", s.handle(s.adminLogin))
+		// 注册是公开接口：没有账号的人能自助开一个（建出来的都是 member，不是管理员）
+		r.Post("/auth/register", s.handle(s.signUp))
 		r.With(s.auth).Get("/auth/me", s.handle(s.authMe))
 		s.mountAdmin(r)
 	})

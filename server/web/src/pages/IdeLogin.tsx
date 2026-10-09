@@ -19,8 +19,11 @@ interface PairResult { code: string; expires_in: number; app_url: string; user: 
  */
 export default function IdeLogin() {
     const [booting, setBooting] = useState(true)
+    const [mode, setMode] = useState<'login' | 'register'>('login')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
+    const [name, setName] = useState('')
+    const [code, setCode] = useState('')
     const [busy, setBusy] = useState(false)
     const [pair, setPair] = useState<PairResult | null>(null)
     const [left, setLeft] = useState(0)
@@ -62,13 +65,19 @@ export default function IdeLogin() {
 
     const login = async (e: React.FormEvent) => {
         e.preventDefault()
+        const isRegister = mode === 'register'
         setBusy(true)
         try {
-            const r = await api<{ token?: string }>('/auth/login', {
+            // 注册走同一个接口，注册成功服务端直接发 token，于是可以一步跳到授权码那步
+            const r = await api<{ token?: string }>(isRegister ? '/auth/register' : '/auth/login', {
                 method: 'POST',
-                body: JSON.stringify({ email, password }),
+                body: JSON.stringify(isRegister ? { email, password, name, code } : { email, password }),
             })
-            localStorage.setItem(TOKEN_KEY, r.token || '')
+            if (!r.token) {
+                toast.error('服务端未返回令牌，请重试')
+                return
+            }
+            localStorage.setItem(TOKEN_KEY, r.token)
             await doPair()
         } catch (err) {
             toast.error((err as Error).message)
@@ -139,16 +148,38 @@ export default function IdeLogin() {
                         </div>
                     ) : (
                         <form className="space-y-4" onSubmit={login}>
+                            {mode === 'register' && (
+                                <div className="space-y-1">
+                                    <Label>账号名（选填）</Label>
+                                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="不填则取邮箱 @ 前面的部分" />
+                                </div>
+                            )}
                             <div className="space-y-1"><Label>邮箱</Label><Input type="email" autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" /></div>
                             <div className="space-y-1">
                                 <Label>密码</Label>
                                 <div className="relative">
                                     <KeyRound className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                                    <Input className="pl-8" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+                                    <Input className="pl-8" type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={mode === 'register' ? '至少 6 位' : undefined} />
                                 </div>
                             </div>
-                            <Button className="w-full" type="submit" disabled={busy || !email || !password}>{busy ? '登录中...' : '登录并授权'}</Button>
+                            {mode === 'register' && (
+                                <div className="space-y-1">
+                                    <Label>邮箱验证码</Label>
+                                    <Input required inputMode="numeric" value={code} onChange={(e) => setCode(e.target.value)} placeholder="000000" />
+                                    <p className="text-xs text-muted-foreground">
+                                        本地部署不发邮件，验证码固定为 <span className="font-mono font-medium">000000</span>
+                                    </p>
+                                </div>
+                            )}
+                            <Button className="w-full" type="submit" disabled={busy || !email || !password}>{busy ? '处理中...' : mode === 'register' ? '注册并授权' : '登录并授权'}</Button>
                             <p className="text-xs text-muted-foreground">账号与后台一致。青鸟只会拿到一份可随时吊销的长期授权，不会保存你的密码。</p>
+                            <button
+                                type="button"
+                                className="text-xs text-muted-foreground underline"
+                                onClick={() => setMode(mode === 'login' ? 'register' : 'login')}
+                            >
+                                {mode === 'login' ? '没有账号？直接注册' : '已有账号？去登录'}
+                            </button>
                         </form>
                     )}
                 </CardContent>

@@ -3,6 +3,8 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -147,6 +149,100 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) error {
 	})
 	writeJSON(w, 200, map[string]any{"token": plain, "user": userPayload(u)})
 	return nil
+}
+
+// signUpReq 注册请求（名字避开 desk_handler.go 里那个设备注册的 registerReq）。
+type signUpReq struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+	Code     string `json:"code"`
+}
+
+// fixedRegisterCode 固定的邮箱验证码。
+//
+// 为什么写死：本地一体化模式下平台跟着桌面端走，没有可投递的邮箱，
+// 真发验证码只会让人卡在「等一封永远不会来的邮件」上。
+// 界面上直接把提示码写出来，用户照填即可——它拦的是**手滑打错**，
+// 不是安全边界（真要防机器人得接短信/Turnstile，那不在精简范围内）。
+const fixedRegisterCode = "000000"
+
+// signUp 注册一个新账号（公开接口）。名字不叫 register：desk_handler.go 里那个
+// register 是「桌面端注册本机设备」，两个概念撞名容易看错。
+//
+// 建出来的都是 member：管理员只有一个，且只在首次启动时由 ensureAdmin 自动创建，
+// 注册入口绝不能给「自助变管理员」留口子——否则谁都能进后台。
+// 注册成功直接发一个长期 token，省得再跳回登录页输一遍。
+func (s *Server) signUp(w http.ResponseWriter, r *http.Request) error {
+	var req signUpReq
+	if err := decodeJSON(r, &req); err != nil {
+		return err
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	name := strings.TrimSpace(req.Name)
+	pass := req.Password
+
+	// 邮箱只做最基础的形状校验：必须像邮箱、大小写归一后长度合理。
+	// 不验证「这个邮箱存不存在」——那是发验证码邮件的前提，这里没有邮件可发。
+	at := strings.Index(email, "@")
+	if at <= 0 || at == len(email)-1 || !strings.Contains(email[at:], ".") ||
+		strings.ContainsAny(email, " \t\r\n") || len(email) > 120 {
+		return fail(422, "邮箱格式不正确")
+	}
+	if len(pass) < 6 || len(pass) > 72 {
+		return fail(422, "密码长度需在 6~72 位之间")
+	}
+	if strings.TrimSpace(req.Code) != fixedRegisterCode {
+		return fail(422, "验证码不正确")
+	}
+
+	// 没填账号名就用邮箱 @ 前那段，省得注册页多一个必填项
+	if name == "" {
+		name = email[:at]
+	}
+	name = trimLen(name, 60)
+	if name == "" {
+		return fail(422, "请填写账号名")
+	}
+
+	// 邮箱已被占用要说人话：直接透传建表时的 UNIQUE 报错会露出 SQL
+	if _, err := s.db.FindUserByEmail(email); err == nil {
+		return fail(409, "该邮箱已注册，请直接登录")
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+
+	hash, err := store.HashPassword(pass)
+	if err != nil {
+		return err
+	}
+	u := &store.User{
+		Name:     name,
+		Email:    email,
+		Password: hash,
+		Role:     store.RoleMember,
+		Status:   store.StatusActive,
+	}
+	if err := s.db.CreateUser(u); err != nil {
+		// 并发注册时后一个会撞 UNIQUE，同样按「已注册」回
+		if _, lookupErr := s.db.FindUserByEmail(email); lookupErr == nil {
+			return fail(409, "该邮箱已注册，请直接登录")
+		}
+		return err
+	}
+
+	// 注册即登录：省掉「注册完还要再登录一次」这一步
+	plain, _, err := s.db.CreateToken(u.ID, "web", clientIP(r), r.UserAgent(), time.Now().AddDate(1, 0, 0))
+	if err != nil {
+		return err
+	}
+	_ = s.db.AddLoginLog(&store.LoginLog{
+		UserID: u.ID, IP: clientIP(r), Device: "注册", UA: trimLen(r.UserAgent(), 500),
+	})
+
+	log.Printf("[register] 新账号：%s（%s）", u.Email, u.Name)
+	return writeJSON(w, 200, map[string]any{"token": plain, "user": userPayload(u)})
 }
 
 // authMe 后台当前登录者。
