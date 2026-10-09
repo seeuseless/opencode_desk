@@ -33,6 +33,8 @@ type Server struct {
 	gw      *gateway.Gateway
 	up      *upstream.Service
 	version string
+	// events 按设备唤醒手机端的等待者，把「1.2 秒轮一次」变成「有变化立刻到」
+	events *eventNotifier
 }
 
 // New 建服务。
@@ -45,6 +47,7 @@ func New(cfg *config.Config, db *store.DB) *Server {
 		gw:      gateway.New(db, cfg),
 		up:      upstream.New(db, cfg),
 		version: "1.0.0",
+		events:  newEventNotifier(),
 	}
 	s.routes()
 	return s

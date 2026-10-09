@@ -248,6 +248,8 @@ func (s *Server) deskEvents(w http.ResponseWriter, r *http.Request) error {
 	if err := s.db.AddEvents(dev.ID, items); err != nil {
 		return err
 	}
+	// 手机多半正挂着一条等事件的请求：叫醒它，别让它白等到超时
+	s.notifyWake(dev.ID)
 	writeJSON(w, 200, map[string]string{"message": "ok"})
 	return nil
 }

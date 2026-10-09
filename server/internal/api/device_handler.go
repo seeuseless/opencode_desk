@@ -114,7 +114,15 @@ func (s *Server) deviceRPCResult(w http.ResponseWriter, r *http.Request) error {
 	})
 }
 
-// deviceEvents GET /api/ide/device/{token}/events — 增量拉事件。
+// deviceEvents GET /api/ide/device/{token}/events — 增量拉事件（没事件时短长轮询）。
+//
+// 短长轮询的意义：手机上「任务列表/聊天内容要实时跟电脑同步」，靠的是这条通道。
+// 原来是「拉完睡 1.2 秒再拉」，电脑上刚做的改动最多要等一整个周期才到手机上。
+// 现在**没有新事件就把请求挂着**，桌面端一推事件（见 notifyWake）立刻返回；
+// 挂太久（eventWait）才空手返回，兼作心跳与兜底。
+//
+// 已经拉到事件时不等待：直接返回，让客户端马上处理。
+// wait=0 可显式要求不等待（排查问题时用）。
 func (s *Server) deviceEvents(w http.ResponseWriter, r *http.Request) error {
 	dev, err := s.deviceByToken(r)
 	if err != nil {
@@ -123,27 +131,46 @@ func (s *Server) deviceEvents(w http.ResponseWriter, r *http.Request) error {
 	_ = s.db.TouchDeviceMobile(dev.ID)
 	cursor := queryInt(r, "cursor", 0)
 
-	rows, err := s.db.ListEventsAfter(dev.ID, int64(cursor), 300)
-	if err != nil {
-		return err
-	}
-	out := []map[string]any{}
-	newCursor := int64(cursor)
-	for _, e := range rows {
-		out = append(out, map[string]any{
-			"id":      e.ID,
-			"type":    e.Type,
-			"payload": decodePayload(e.Payload),
-		})
-		if e.ID > newCursor {
-			newCursor = e.ID
+	read := func() (int64, []map[string]any) {
+		rows, err := s.db.ListEventsAfter(dev.ID, int64(cursor), 300)
+		if err != nil {
+			return int64(cursor), nil
 		}
+		out := []map[string]any{}
+		newCursor := int64(cursor)
+		for _, e := range rows {
+			out = append(out, map[string]any{
+				"id":      e.ID,
+				"type":    e.Type,
+				"payload": decodePayload(e.Payload),
+			})
+			if e.ID > newCursor {
+				newCursor = e.ID
+			}
+		}
+		return newCursor, out
 	}
+
+	newCursor, out := read()
+
+	// 手上没事件才等：等之前再读一次，避免「读完正好来了事件却白等一轮」的漏事件
+	if len(out) == 0 && queryInt(r, "wait", 1) > 0 {
+		wtr := s.events.forDevice(dev.ID)
+		defer wtr.release()
+		wtr.wait(r.Context().Done())
+		newCursor, out = read()
+	}
+
 	return writeJSON(w, 200, map[string]any{
 		"cursor": newCursor,
 		"online": dev.Online(),
 		"events": out,
 	})
+}
+
+// notifyWake 桌面端推完事件后叫醒在等这台设备的手机。
+func (s *Server) notifyWake(deviceID int64) {
+	s.events.wake(deviceID)
 }
 
 // deviceByToken 按二维码 token 取设备。
