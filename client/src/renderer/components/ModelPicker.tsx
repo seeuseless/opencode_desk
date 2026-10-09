@@ -54,10 +54,17 @@ interface Props {
   onExpandGroup?: (id: string) => void
   /** 正在后台刷新的分组 id：行尾转个圈，列表照旧显示旧值（无感，不清空、不阻塞） */
   refreshingGroup?: string
+  /**
+   * 面板被点开的那一刻触发（只在「从收起变展开」那一下）。
+   *
+   * 给 opencode 限免分组用：它的清单要向内核问，所以推迟到用户真的要用模型时才同步，
+   * 免得每次启动都为一批可能用不上的模型多问一次、多等一会儿。
+   */
+  onOpen?: () => void
 }
 
 /** 二级级联模型菜单：默认只显示一级提供商，点击后展开二级模型列 */
-export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup }: Props) {
+export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup, onOpen }: Props) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
@@ -68,6 +75,8 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
   /** 夹回窗口内的二次修正量：长列表展开后可能顶出屏幕上下沿 */
   const [subShift, setSubShift] = useState(0)
   const [panelShift, setPanelShift] = useState(0)
+  /** 限免清单已同步过就别再问内核了（每次开面板都问一遍太吵） */
+  const onOpenFired = useRef(false)
 
   useEffect(() => {
     if (!open) return
@@ -75,12 +84,16 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
     setSubTop(0)
     setSubShift(0)
     setPanelShift(0)
+    if (!onOpenFired.current) {
+      onOpenFired.current = true
+      onOpen?.()
+    }
     const onDown = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [open])
+  }, [open, onOpen])
 
   const i = value.indexOf('/')
   const curGroup = i > 0 ? groups.find((g) => g.id === value.slice(0, i)) : undefined

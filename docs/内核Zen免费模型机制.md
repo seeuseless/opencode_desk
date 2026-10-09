@@ -100,13 +100,24 @@ POST 同一端点   model=big-pickle（免费）, 无 Authorization
 | `client/electron/main/zen.ts` | 读清单 + 翻译（`parseZenModels` 是纯函数，可单测） |
 | `client/electron/main/config.ts` | `zenProvider()` 虚拟 provider；`usableProviders()` 里排最后 |
 | `client/electron/main/types.ts` | `ZenCfg` 缓存 + `ModelCfg.zenFree` 标记 |
-| `client/electron/main/index.ts` | `zen:refresh` IPC + `syncZenOnBoot()` 启动同步 |
+| `client/electron/main/index.ts` | `zen:refresh` IPC（渲染层点开选择器时调） |
 | `client/src/renderer/oc.ts` | `chatProviders()` 把限免组排最后 |
 
 分组显示名是 **opencode限免**，排在所有提供商**之后**：它是兜底性质的
 （官方限时提供、随时可能下线），不该抢在用户自己配好的模型前面。
 
-清单缓存在 `settings.zen.models`，**只是快照不是事实来源**：官方增删模型时下次启动自然刷新。
+清单缓存在 `settings.zen.models`，**只是快照不是事实来源**：官方增删模型时下次同步自然刷新。
+
+## 同步时机（刻意不在启动时）
+
+点开**模型选择器**那一刻才同步（`ModelPicker` 的 `onOpen` → `zen:refresh`），
+不是启动时同步。理由：清单要向内核问，而绝大多数用户配了自己的 provider，
+那批限免模型根本不会被点开——启动就同步等于每次开机白等一次。
+`onOpenFired` 标记保证反复开关面板只问一次。
+
+**没有免费模型时整个分组不显示**：`zenProvider()` 判空返回 `null`、
+`chatProviders()` 判 `.length`，两处都守着；同步拿到空清单也不落盘，
+所以既不会显示一个空分组，也不会把已有清单清掉。
 
 ## 坑位备忘
 

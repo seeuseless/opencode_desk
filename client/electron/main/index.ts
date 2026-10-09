@@ -578,33 +578,26 @@ ipcMain.handle('platform:refresh', () => platform.refresh())
 
 // ---------- OpenCode Zen 免费模型（免 KEY）----------
 // 清单由内核持有（GET /config/providers），这里只做一次同步并落盘成快照。
-// 同步时机：内核就绪后（此时才问得到）+ 用户手动点「刷新」。
+//
+// 同步时机：**用户点开模型选择器时**（渲染层 ModelPicker 的 onOpen）+ 设置页手动刷新，
+// **刻意不在启动时做**——启动就同步等于每次开机都要为一批用户可能根本不会用的模型
+// 多问一次内核、多等一会儿，而绝大多数用户配置了自己的 provider，那批限免模型根本不会被点开。
+//
+// 渲染层只触发一次（onOpenFired 标记），反复开关面板不再问。
 ipcMain.handle('zen:refresh', async () => {
   const models = await fetchZenModels(adapter.baseUrl)
   // 拿不到（内核没起/超时）时 models 为空数组：**刻意不落盘**，避免把已有清单清空、
-  // 让免费分组整块消失。空数组只在「内核明确返回了空清单」时才会被 setZen 写下去。
+  // 让限免分组整块消失。空数组只在「内核明确返回了空清单」时才会被 setZen 写下去。
+  //
+  // 注意这里返回的清单可能仍是空（内核明确说没有免费模型），那种情况下分组不显示——
+  // 「没有免费的就不显示」由 zenProvider/chatProviders 判空负责，这里只管如实同步。
   if (!models.length) return loadSettings()
   const { settings, changed } = setZen({ models, syncedAt: Date.now() })
   // 清单变了才重启内核：provider 是启动时读的，不重启新模型选不了。
-  // 官方清单基本不动，所以绝大多数情况下不会触发重启。
+  // 官方清单基本不动，所以绝大多数情况下（甚至永远）不会触发重启。
   if (changed) await adapter.restart()
   return settings
 })
-
-/**
- * 启动后静默同步一次 Zen 免费模型清单。
- *
- * 必须在 adapter.start() 之后：清单是向内核问的，内核没起就问不到（返回空，什么都不做）。
- * 同步完若清单变了要重启内核才能用上新模型——但这一轮重启发生在 createWindow() 之前，
- * 用户看不到中间态，所以这里直接 await（不像设置保存那样放后台，避免和后面的流程抢内核）。
- */
-async function syncZenOnBoot(): Promise<void> {
-  const models = await fetchZenModels(adapter.baseUrl)
-  if (!models.length) return
-  // setZen 内部已把新清单写进 opencode.json，这里只管让内核重载
-  const { changed } = setZen({ models, syncedAt: Date.now() })
-  if (changed) await adapter.restart()
-}
 
 // ---------- 账号与用量（设置 → 账号 / 使用量）----------
 // 都是「会员自己看自己的账」：token 从设置里取，未登录一律返回 null，由界面渲染成未登录态。
@@ -1480,10 +1473,6 @@ app.whenReady().then(async () => {
 
   // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
   void platform.refreshOnBoot()
-
-  // Zen 免费模型清单：同样静默，且不需要登录/联网账号。内核此刻已就绪，问得到它自带的清单。
-  // 官方增删模型时才会真的改配置并重启内核，平时几乎无感。
-  void syncZenOnBoot()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

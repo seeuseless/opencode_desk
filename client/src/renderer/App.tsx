@@ -994,6 +994,7 @@ export default function App() {
                 onModelChange={setModel}
                 settings={chatProviders(settings)}
                 settingsReady={settingsReady}
+                onSettings={setSettings}
                 onDraftCreated={onDraftCreated}
                 onRefreshSessions={refreshSessions}
                 onBusy={(sid, running) =>

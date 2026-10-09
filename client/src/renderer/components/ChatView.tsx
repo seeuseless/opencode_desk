@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -30,6 +30,11 @@ interface Props {
   settings: ProviderCfg[]
   /** 设置已加载完成（区分"提供商还没加载"与"真的没有提供商"，防止启动时清掉存档模型） */
   settingsReady: boolean
+  /**
+   * 主进程那边把设置改过了（同步了 opencode 限免清单），回读刷新模型列表。
+   * 与「保存设置」不同：那边已经写过盘、必要时也重启过内核，这里只更新内存态。
+   */
+  onSettings?: (s: SettingsCfg) => void
   /** 草稿首发：内核会话此刻才创建 */
   onDraftCreated: (s: Session) => void
   onRefreshSessions: () => void
@@ -907,6 +912,23 @@ export function ChatView(p: Props) {
       setRefreshingGroup('')
     }
   }
+
+  /**
+   * 用户点开模型选择器时，顺手把 opencode 限免的清单同步一次。
+   *
+   * 推迟到这一刻而不是启动时：清单要向内核问，而绝大多数用户配了自己的 provider，
+   * 那批限免模型根本不会被点开——启动就同步等于每次开机白等一次。
+   * 没同步到（内核没起 / 官方当前没有免费模型）时分组不显示，符合「没有就不显示」。
+   */
+  const syncZen = useCallback(async () => {
+    try {
+      const s = await window.qingniao.zenRefresh()
+      // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
+      p.onSettings?.(s)
+    } catch {
+      /* 内核不可达：限免分组不显示，不打扰用户 */
+    }
+  }, [p.onSettings])
 
   // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
@@ -2212,6 +2234,7 @@ export function ChatView(p: Props) {
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
+              onOpen={() => void syncZen()}
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
