@@ -110,3 +110,157 @@
         translate: none;
     }
 }
+
+/**
+ * 占满「当前实际可见高度」，而不是 100vh。
+ *
+ * 为什么不能用 h-screen（=100vh）：移动浏览器里 100vh 取的是**地址栏收起时**的最大视口高，
+ * 比屏幕上真正看得见的那块高出一截。聊天页是个「顶栏 + 消息流 + 底部输入栏」的定高三段布局，
+ * 容器一旦比可视区高，底部的输入/发送栏就被顶到折叠线以下——用户得滚动页面才找得到它。
+ *
+ * dvh（动态视口高度）会跟着地址栏收放与软键盘弹出实时变化，正好对上「看得见的那块」。
+ * 老浏览器不认 dvh，用 @supports 兜回 100vh：宁可高一点，也别让底部栏整个消失。
+ */
+.qn-viewport {
+    height: 100vh;
+}
+
+@supports (height: 100dvh) {
+    .qn-viewport {
+        height: 100dvh;
+    }
+}
+
+/** 刘海屏/手势条：底部输入栏别贴着home indicator，让出 env(safe-area-inset-bottom) */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+    .qn-safe-bottom {
+        padding-bottom: calc(0.75rem + env(safe-area-inset-bottom));
+    }
+}
+
+/**
+ * 手机端 AI 回复的 Markdown 排版。
+ *
+ * 为什么单独一套而不是复用后台那套：手机是窄屏 + 拇指滚动，行长、留白、代码块
+ * 都要比桌面收得更紧，否则一行代码就把整条气泡撑到屏幕外、右侧还留一大片空白。
+ * 只调「窄屏该收的地方」，配色仍跟随主题变量（亮/暗都自动跟上）。
+ */
+.qn-md > *:first-child {
+    margin-top: 0;
+}
+
+.qn-md > *:last-child {
+    margin-bottom: 0;
+}
+
+.qn-md p {
+    margin: 0.5em 0;
+    line-height: 1.65;
+}
+
+.qn-md h1,
+.qn-md h2,
+.qn-md h3,
+.qn-md h4 {
+    margin: 0.8em 0 0.4em;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.qn-md h1 { font-size: 1.15em; }
+.qn-md h2 { font-size: 1.08em; }
+.qn-md h3 { font-size: 1em; }
+.qn-md h4 { font-size: 0.95em; }
+
+.qn-md ul,
+.qn-md ol {
+    margin: 0.5em 0;
+    padding-left: 1.3em;
+}
+
+.qn-md ul { list-style: disc; }
+.qn-md ol { list-style: decimal; }
+
+.qn-md li {
+    margin: 0.2em 0;
+}
+
+.qn-md li > ul,
+.qn-md li > ol {
+    margin: 0.2em 0;
+}
+
+/* 嵌套列表的点改用短横线：三层以上圆点套圆点在窄屏上已经分不清层级了 */
+.qn-md li > ul {
+    list-style: circle;
+}
+
+.qn-md a {
+    color: var(--primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.qn-md strong {
+    font-weight: 600;
+}
+
+.qn-md blockquote {
+    margin: 0.5em 0;
+    padding-left: 0.75em;
+    border-left: 3px solid var(--border);
+    color: var(--muted-foreground);
+}
+
+.qn-md hr {
+    margin: 0.9em 0;
+    border-color: var(--border);
+}
+
+/* 行内代码：加个浅底，否则和正文分不开 */
+.qn-md :not(pre) > code {
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    background: color-mix(in oklab, var(--foreground) 8%, transparent);
+    font-size: 0.9em;
+}
+
+/* 代码块：手机上让它自己横向滚，而不是把整条气泡撑宽把发送按钮顶出屏幕 */
+.qn-md pre {
+    margin: 0.5em 0;
+    padding: 0.6em 0.7em;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--background);
+    overflow-x: auto;
+    font-size: 0.85em;
+    line-height: 1.5;
+}
+
+.qn-md pre code {
+    background: none;
+    padding: 0;
+}
+
+/* 表格：窄屏最容易横向溢出的一块，单独允许滚动并去掉默认的宽间距 */
+.qn-md table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: 0.9em;
+}
+
+.qn-md th,
+.qn-md td {
+    padding: 0.35em 0.6em;
+    border: 1px solid var(--border);
+    text-align: left;
+    white-space: nowrap;
+}
+
+.qn-md th {
+    background: color-mix(in oklab, var(--foreground) 6%, transparent);
+    font-weight: 600;
+}
