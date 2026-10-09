@@ -33,7 +33,6 @@ interface Stats {
     to: string
     group: 'day' | 'model' | 'member'
     rows: Row[]
-    total: { calls: number; tokens: number; points: number }
 }
 
 const GROUPS: { key: Stats['group']; label: string; head: string }[] = [
@@ -80,6 +79,11 @@ export default function Dashboard() {
     ]
 
     const current = GROUPS.find((g) => g.key === group)!
+
+    // 后端 /admin/usage/stats 只回 {from,to,rows}，合计要自己从 rows 累加
+    const totalCalls = stats?.rows.reduce((n, r) => n + (r.calls || 0), 0) ?? 0
+    const totalTokens = stats?.rows.reduce((n, r) => n + (r.tokens || 0), 0) ?? 0
+    const totalPoints = stats?.rows.reduce((n, r) => n + (r.points || 0), 0) ?? 0
 
     return (
         <div className="space-y-4">
@@ -160,8 +164,8 @@ export default function Dashboard() {
                     </div>
                     {stats && (
                         <div className="text-xs text-muted-foreground">
-                            {stats.from} ~ {stats.to}：共 {fmtNumber(stats.total.calls)} 次调用、
-                            {fmtTokens(stats.total.tokens)} token、消耗积分 {fmtNumber(stats.total.points)}
+                            {stats.from} ~ {stats.to}：共 {fmtNumber(totalCalls)} 次调用、
+                            {fmtTokens(totalTokens)} token、消耗积分 {fmtNumber(totalPoints)}
                         </div>
                     )}
                 </CardHeader>

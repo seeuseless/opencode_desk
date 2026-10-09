@@ -57,8 +57,27 @@ func (d *DB) HealthOverview(from, to time.Time) ([]HealthRow, error) {
 	return out, nil
 }
 
-// HealthSeries 概况时间序列：每个模型每天的稳定率。
-func (d *DB) HealthSeries(from, to time.Time) ([]HealthRow, error) {
+// HealthDayPoint 某模型在某天的探测汇总。
+type HealthDayPoint struct {
+	Day   string  `json:"day"`
+	Total int64   `json:"total"`
+	OK    int64   `json:"ok"`
+	Rate  float64 `json:"rate"`
+}
+
+// HealthModelSeries 概况时间序列里一个模型的完整视图：区间汇总 + 按天明细。
+type HealthModelSeries struct {
+	ModelID   int64            `json:"model_id"`
+	Model     string           `json:"model"`
+	Total     int64            `json:"total"`
+	OK        int64            `json:"ok"`
+	Rate      float64          `json:"rate"`
+	Upstreams []string         `json:"upstreams"`
+	Days      []HealthDayPoint `json:"days"`
+}
+
+// HealthSeries 概况时间序列：每个模型的区间汇总 + 按天稳定率明细。
+func (d *DB) HealthSeries(from, to time.Time) ([]HealthModelSeries, error) {
 	rows, err := d.Query(
 		`SELECT m.id, m.name, c.day, c.total, c.ok
 		 FROM ai_models m
@@ -70,12 +89,8 @@ func (d *DB) HealthSeries(from, to time.Time) ([]HealthRow, error) {
 	}
 	defer rows.Close()
 
-	type key struct {
-		id   int64
-		name string
-	}
-	byModel := map[key]*HealthRow{}
-	order := []key{}
+	byModel := map[int64]*HealthModelSeries{}
+	order := []int64{}
 	for rows.Next() {
 		var id int64
 		var name, day string
@@ -83,24 +98,39 @@ func (d *DB) HealthSeries(from, to time.Time) ([]HealthRow, error) {
 		if err := rows.Scan(&id, &name, &day, &total, &ok); err != nil {
 			return nil, err
 		}
-		k := key{id, name}
-		r, exists := byModel[k]
+		m, exists := byModel[id]
 		if !exists {
-			r = &HealthRow{ModelID: id, Model: name}
-			byModel[k] = r
-			order = append(order, k)
+			m = &HealthModelSeries{ModelID: id, Model: name, Days: []HealthDayPoint{}}
+			byModel[id] = m
+			order = append(order, id)
 		}
-		r.Total += total
-		r.OK += ok
+		m.Total += total
+		m.OK += ok
+		m.Days = append(m.Days, HealthDayPoint{Day: day, Total: total, OK: ok, Rate: rateOf(ok, total)})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	out := []HealthRow{}
-	for _, k := range order {
-		r := byModel[k]
-		r.Rate = rateOf(r.OK, r.Total)
-		out = append(out, *r)
+
+	out := []HealthModelSeries{}
+	for _, id := range order {
+		m := byModel[id]
+		m.Rate = rateOf(m.OK, m.Total)
+		// 补上提供该模型的上游名（后台列表要显示）
+		if avail, err := d.AvailableUpstreamModels(id); err == nil {
+			names := []string{}
+			seen := map[string]bool{}
+			for _, sm := range avail {
+				up, err := d.FindUpstream(sm.UpstreamID)
+				if err != nil || up.Name == "" || seen[up.Name] {
+					continue
+				}
+				seen[up.Name] = true
+				names = append(names, up.Name)
+			}
+			m.Upstreams = names
+		}
+		out = append(out, *m)
 	}
 	return out, nil
 }

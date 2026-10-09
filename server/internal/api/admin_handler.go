@@ -29,6 +29,7 @@ func (s *Server) mountAdmin(r chiRouter) {
 		r.Post("/ai-upstreams/keys/{key}/probe", s.handle(s.probeKey))
 		r.Post("/ai-upstreams/{id}/sync", s.handle(s.syncUpstreamModels))
 		r.Post("/ai-upstreams/{id}/import-models", s.handle(s.importModels))
+		r.Post("/ai-upstreams/{id}/models", s.handle(s.createUpstreamModel))
 		r.Post("/ai-upstreams/{id}/test", s.handle(s.testUpstream))
 		r.Put("/ai-upstreams/models/{model}", s.handle(s.updateUpstreamModel))
 		r.Delete("/ai-upstreams/models/{model}", s.handle(s.deleteUpstreamModel))
@@ -355,6 +356,29 @@ func (s *Server) probeKey(w http.ResponseWriter, r *http.Request) error {
 	}
 	res := s.up.ProbeKey(u, k)
 	writeJSON(w, 200, res)
+	return nil
+}
+
+// createUpstreamModel 给上游手工加一个模型（同名自动匹配模型库）。
+func (s *Server) createUpstreamModel(w http.ResponseWriter, r *http.Request) error {
+	u, err := s.upstreamByID(r)
+	if err != nil {
+		return err
+	}
+	var req struct {
+		Model string `json:"model"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		return err
+	}
+	name := strings.TrimSpace(req.Model)
+	if name == "" {
+		return fail(422, "请填写模型名")
+	}
+	if err := s.db.UpsertUpstreamModel(u.ID, name); err != nil {
+		return err
+	}
+	writeJSON(w, 200, map[string]string{"message": "已保存"})
 	return nil
 }
 

@@ -47,8 +47,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const refreshUser = async () => {
         if (!getToken()) return
-        const me = await api<User>("/auth/me")
-        setUser(me)
+        const me = await api<{ user: User }>("/auth/me")
+        setUser(me.user)
     }
 
     useEffect(() => {

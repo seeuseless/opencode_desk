@@ -17,9 +17,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 
 interface UpKey {
     id: number
-    upstream_id: number
     name: string
-    api_key_masked: string
+    masked: string
     enabled: boolean
     status: string
     latency_ms: number | null
@@ -32,8 +31,6 @@ interface UpModel {
     id: number
     model: string
     model_id: number | null
-    matched_name: string | null
-    manual: boolean
     enabled: boolean
     status: string
     latency_ms: number | null
@@ -52,7 +49,6 @@ interface Upstream {
     models_synced_at: string | null
     keys: UpKey[]
     models: UpModel[]
-    stats: { keys: number; keys_ok: number; models: number; matched: number; unmatched: number; manual: number }
 }
 
 const emptyKey = { name: '', api_key: '', enabled: true }
@@ -79,7 +75,7 @@ export default function UpstreamDetail() {
 
     const load = useCallback(async () => {
         try {
-            setU(await api<Upstream>(`/admin/ai-upstreams/upstreams/${id}`))
+            setU(await api<Upstream>(`/admin/ai-upstreams/${id}`))
         } catch (e) {
             toast.error((e as Error).message)
         }
@@ -95,7 +91,7 @@ export default function UpstreamDetail() {
     const toggleUpstream = async (enabled: boolean) => {
         if (!u) return
         try {
-            await api(`/admin/ai-upstreams/upstreams/${u.id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+            await api(`/admin/ai-upstreams/${u.id}`, { method: 'PUT', body: JSON.stringify({ enabled }) })
             load()
         } catch (e) { toast.error((e as Error).message) }
     }
@@ -103,33 +99,33 @@ export default function UpstreamDetail() {
     /** 自动获取模型：拉上游 /models 覆盖本地清单，并自动与模型库同名匹配 */
     const syncModels = () => u && run('sync', async () => {
         try {
-            const r = await api<{ message: string; stats: { added: number; removed: number; matched: number; unmatched: number } }>(
-                `/admin/ai-upstreams/upstreams/${u.id}/sync`, { method: 'POST' },
+            const r = await api<{ message: string; count: number }>(
+                `/admin/ai-upstreams/${u.id}/sync`, { method: 'POST' },
             )
-            toast.success(r.message, {
-                description: `新增 ${r.stats.added}、移除 ${r.stats.removed}、匹配 ${r.stats.matched}、待匹配 ${r.stats.unmatched}`,
-            })
+            toast.success(r.message, { description: `本次同步 ${r.count} 个模型` })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
 
     const testUpstream = () => u && run('test', async () => {
         try {
-            const r = await api<{ report: { name: string; status: string; error: string | null }[]; models: string[] }>(
-                `/admin/ai-upstreams/upstreams/${u.id}/test`, { method: 'POST' },
+            const r = await api<{ ok: boolean; latency_ms: number; message: string; models?: number }>(
+                `/admin/ai-upstreams/${u.id}/test`, { method: 'POST' },
             )
-            const bad = r.report.filter((k) => k.status === 'error')
-            const ok = r.report.length - bad.length
-            if (!bad.length) toast.success(`${u.name}：${ok}/${r.report.length} 把密钥可用，上游共 ${r.models.length} 个模型`)
-            else toast.warning(`${u.name}：${ok} 把可用、${bad.length} 把失败`, { description: bad[0]?.error || '' })
+            if (r.ok) toast.success(`${u.name}：可用（${r.latency_ms}ms）`, { description: r.models ? `上游共 ${r.models} 个模型` : r.message })
+            else toast.error(`${u.name}：不可用`, { description: r.message })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
 
     const importModels = () => u && run('imp', async () => {
         try {
-            const r = await api<{ added: number; message: string }>(`/admin/ai-upstreams/upstreams/${u.id}/import-models`, { method: 'POST' })
-            toast.success(r.message)
+            const names = u.models.filter((m) => !m.model_id).map((m) => m.model)
+            const r = await api<{ message: string; count: number }>(`/admin/ai-upstreams/${u.id}/import-models`, {
+                method: 'POST',
+                body: JSON.stringify({ models: names, builtin: false, ratio: 1 }),
+            })
+            toast.success(r.message, { description: `已导入 ${r.count} 个` })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
@@ -148,7 +144,7 @@ export default function UpstreamDetail() {
         try {
             const body = JSON.stringify({ ...modelForm, model: name })
             if (modelEditing) await api(`/admin/ai-upstreams/models/${modelEditing.id}`, { method: 'PUT', body })
-            else await api(`/admin/ai-upstreams/upstreams/${u.id}/models`, { method: 'POST', body })
+            else await api(`/admin/ai-upstreams/${u.id}/models`, { method: 'POST', body: JSON.stringify({ model: name }) })
             toast.success('已保存')
             setModelDialog(false)
             load()
@@ -166,7 +162,7 @@ export default function UpstreamDetail() {
         setSaving(true)
         try {
             if (keyEditing) await api(`/admin/ai-upstreams/keys/${keyEditing.id}`, { method: 'PUT', body: JSON.stringify(keyForm) })
-            else await api(`/admin/ai-upstreams/upstreams/${u.id}/keys`, { method: 'POST', body: JSON.stringify(keyForm) })
+            else await api(`/admin/ai-upstreams/${u.id}/keys`, { method: 'POST', body: JSON.stringify(keyForm) })
             toast.success('已保存')
             setKeyDialog(false)
             load()
@@ -174,40 +170,49 @@ export default function UpstreamDetail() {
     }
 
     const removeKey = async (k: UpKey) => {
-        if (!(await confirmDialog(`删除密钥「${k.name || k.api_key_masked}」？`))) return
+        if (!(await confirmDialog(`删除密钥「${k.name || k.masked}」？`))) return
         try { await api(`/admin/ai-upstreams/keys/${k.id}`, { method: 'DELETE' }); load() } catch (e) { toast.error((e as Error).message) }
     }
 
     const testKey = (k: UpKey) => run(`key-${k.id}`, async () => {
         try {
-            const r = await api<{ key: UpKey; ok: boolean; error: string | null }>(`/admin/ai-upstreams/keys/${k.id}/test`, { method: 'POST' })
-            if (r.ok) toast.success(`密钥可用（${r.key.latency_ms}ms）`)
-            else toast.error('密钥不可用', { description: r.error || '' })
+            const r = await api<{ ok: boolean; latency_ms: number; message: string }>(`/admin/ai-upstreams/keys/${k.id}/test`, { method: 'POST' })
+            if (r.ok) toast.success(`密钥可用（${r.latency_ms}ms）`)
+            else toast.error('密钥不可用', { description: r.message })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
 
     const probeKey = (k: UpKey) => run(`probe-${k.id}`, async () => {
         try {
-            const r = await api<{ ok: boolean; error: string | null; model: string; reply: string | null }>(`/admin/ai-upstreams/keys/${k.id}/probe`, { method: 'POST' })
-            if (r.ok) toast.success(`真实调用成功：${r.model}`, { description: r.reply ? `模型回包：${r.reply}` : '' })
-            else toast.error('真实调用失败', { description: r.error || '' })
+            const r = await api<{ ok: boolean; latency_ms: number; message: string }>(`/admin/ai-upstreams/keys/${k.id}/probe`, { method: 'POST' })
+            if (r.ok) toast.success(`真实调用成功`, { description: r.message })
+            else toast.error('真实调用失败', { description: r.message })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
 
     const testModel = (m: UpModel) => run(`m-${m.id}`, async () => {
         try {
-            const r = await api<{ ok: boolean; error: string | null; reply: string | null; via: { upstream: string | null; model: string } }>(
+            const r = await api<{ ok: boolean; latency_ms: number; message: string }>(
                 `/admin/ai-models/models/${m.model_id}/test`, { method: 'POST' },
             )
-            if (r.ok) toast.success(`调用成功：${r.via?.upstream} → ${r.via?.model}`, { description: r.reply ? `模型回包：${r.reply}` : '' })
-            else toast.error('调用失败', { description: r.error || '' })
+            if (r.ok) toast.success(`调用成功（${r.latency_ms}ms）`, { description: r.message })
+            else toast.error('调用失败', { description: r.message })
             load()
         } catch (e) { toast.error((e as Error).message) }
     })
 
     if (!u) return <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" />加载中...</div>
+
+    // Go 的 upstreamPayload 不带 stats，客户端自己聚合
+    const stats = {
+        keys: u.keys.length,
+        keys_ok: u.keys.filter((k) => k.enabled && k.status === 'ok').length,
+        models: u.models.length,
+        matched: u.models.filter((m) => m.model_id).length,
+        unmatched: u.models.filter((m) => !m.model_id).length,
+    }
 
     const models = u.models.filter((m) => {
         if (onlyUnmatched && m.model_id) return false
@@ -231,7 +236,7 @@ export default function UpstreamDetail() {
             </div>
 
             <p className="text-sm text-muted-foreground">
-                密钥 {u.stats.keys_ok}/{u.stats.keys} 可用 · 模型 {u.stats.models} 个（匹配 {u.stats.matched}，未匹配 {u.stats.unmatched}）
+                密钥 {stats.keys_ok}/{stats.keys} 可用 · 模型 {stats.models} 个（匹配 {stats.matched}，未匹配 {stats.unmatched}）
                 {u.models_synced_at ? ` · 同步于 ${fmtTime(u.models_synced_at)}` : ''}
                 {u.remark ? ` · ${u.remark}` : ''}
             </p>
@@ -243,9 +248,9 @@ export default function UpstreamDetail() {
                 <Button variant="outline" size="sm" disabled={busy.test} onClick={testUpstream}>
                     <RefreshCw className={`mr-1 size-4 ${busy.test ? 'animate-spin' : ''}`} />检测全部密钥
                 </Button>
-                {u.stats.unmatched > 0 && (
+                {stats.unmatched > 0 && (
                     <Button variant="outline" size="sm" disabled={busy.imp} onClick={importModels}>
-                        <Plus className="mr-1 size-4" />把未匹配的 {u.stats.unmatched} 个加入「模型」
+                        <Plus className="mr-1 size-4" />把未匹配的 {stats.unmatched} 个加入「模型」
                     </Button>
                 )}
             </div>
@@ -272,7 +277,7 @@ export default function UpstreamDetail() {
                                         {k.name || '—'}
                                         {!k.enabled && <Badge variant="secondary" className="ml-1.5">已停用</Badge>}
                                     </TableCell>
-                                    <TableCell className="font-mono text-xs text-muted-foreground">{k.api_key_masked}</TableCell>
+                                    <TableCell className="font-mono text-xs text-muted-foreground">{k.masked}</TableCell>
                                     <TableCell><AiStatusBadge status={k.enabled ? k.status : 'unknown'} latency={k.latency_ms} /></TableCell>
                                     <TableCell className="text-xs">{k.last_checked_at ? fmtTime(k.last_checked_at) : '—'}</TableCell>
                                     <TableCell className="max-w-[220px] truncate text-xs text-red-500" title={k.last_error || ''}>{k.last_error || ''}</TableCell>
@@ -307,7 +312,7 @@ export default function UpstreamDetail() {
                     <p className="text-xs text-muted-foreground">
                         与「模型」菜单里的模型名同名即自动匹配，那个模型就多了一个供货方。
                         手工新增/改名的模型在「自动获取模型」时不会被删（上游不上报不代表上游没有）。
-                        当前显示 {models.length} 条{u.stats.manual > 0 ? ` · 其中手工 ${u.stats.manual} 条` : ''}。
+                        当前显示 {models.length} 条。
                     </p>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -328,7 +333,6 @@ export default function UpstreamDetail() {
                                 <TableRow key={m.id}>
                                     <TableCell className="font-mono text-sm">
                                         {m.model}
-                                        {m.manual && <Badge variant="outline" className="ml-1.5 font-normal">手工</Badge>}
                                         {!m.enabled && <Badge variant="secondary" className="ml-1.5">已停用</Badge>}
                                     </TableCell>
                                     <TableCell>
@@ -385,7 +389,7 @@ export default function UpstreamDetail() {
                         <div className="space-y-1"><Label>备注名</Label><Input placeholder="如：主力 key / 备用 key" value={keyForm.name} onChange={(e) => setKeyForm((f) => ({ ...f, name: e.target.value }))} /></div>
                         <div className="space-y-1">
                             <Label>API Key</Label>
-                            <Input placeholder={keyEditing ? `留空不修改（当前 ${keyEditing.api_key_masked}）` : 'sk-...'} value={keyForm.api_key} onChange={(e) => setKeyForm((f) => ({ ...f, api_key: e.target.value }))} />
+                            <Input placeholder={keyEditing ? `留空不修改（当前 ${keyEditing.masked}）` : 'sk-...'} value={keyForm.api_key} onChange={(e) => setKeyForm((f) => ({ ...f, api_key: e.target.value }))} />
                             <p className="text-xs text-muted-foreground">加密存储，后台只显示掩码。同一个上游可加多把，网关按状态自动择优、失败自动切换。</p>
                         </div>
                         <div className="flex items-center gap-2"><Switch checked={keyForm.enabled} onCheckedChange={(v) => setKeyForm((f) => ({ ...f, enabled: v }))} /><span className="text-sm">启用（停用的 Key 不参与轮换）</span></div>
