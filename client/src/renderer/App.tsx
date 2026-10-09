@@ -135,6 +135,8 @@ export default function App() {
     remote: false,
     mobile: false,
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
+    // Zen 免费模型缓存：与主进程 DEFAULT_SETTINGS 一致（空清单 = 该分组不显示）
+    zen: { models: [] },
     // access 'default' = 写操作要确认（与主进程 DEFAULT_SETTINGS 一致）
     access: 'default',
     // 「永久允许调用其他模型」清单：默认空，AI 每次要调别的模型都会先问
@@ -1065,6 +1067,7 @@ export default function App() {
             <SettingsView
               settings={settings}
               onSave={saveSettingsAll}
+              onSettings={setSettings}
               saving={saving}
               theme={theme}
               onTheme={setTheme}

@@ -876,6 +876,7 @@ export function ChatView(p: Props) {
           mid: m.id,
           name: m.name,
           free: m.free,
+          zenFree: m.zenFree,
           discount: m.discount,
           ratio: m.ratio,
           effRatio: m.effRatio

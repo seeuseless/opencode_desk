@@ -27,4 +27,8 @@
   [浏览器 WebView 就绪机制](docs/浏览器WebView就绪机制.md)、
   [代码模式与分栏工作台（含项目文件夹排序）](docs/代码模式与分栏工作台.md)、
   [界面多语言 i18n 机制](docs/界面多语言i18n机制.md)、
-  [本机使用量统计](docs/本机使用量统计.md)。
+  [本机使用量统计](docs/本机使用量统计.md)、
+  [内核 Zen 免费模型机制（免 KEY）](docs/内核Zen免费模型机制.md)。
+- **模型 provider 的身份约定**：`config.ts` 里 `PLATFORM_PROVIDER_ID`（平台登录态虚拟）与
+  `ZEN_PROVIDER_ID`（内核自带免费模型虚拟）都**不是** `settings.providers` 里的用户配置，
+  保存设置时不会被写回磁盘。内核保留名 `opencode` 不要用作 provider id（会覆盖内核自带定义）。

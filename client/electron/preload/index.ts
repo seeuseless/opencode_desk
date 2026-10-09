@@ -207,6 +207,9 @@ const api = {
    * 选择器点开「内置模型」时调一次：限免/折扣是平台随时会改的，界面不能拿登录那一刻的旧快照。
    */
   platformRefreshModels: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:refresh'),
+  /** 向内核要一次它自带的 Zen 免费模型清单并落盘（设置 → 模型 页手动刷新用）。
+   *  返回落盘后的完整 Settings，清单有增删时主进程已重启内核。 */
+  zenRefresh: (): Promise<Settings> => ipcRenderer.invoke('zen:refresh'),
   /** 账号信息：登录用户、当前授权、积分余额、本机设备名（设置 → 账号） */
   platformAccount: (): Promise<PlatformAccount | null> => ipcRenderer.invoke('platform:account'),
   /** 用量汇总：总量 / 今日 / 昨日 + 区间内按天与按模型明细。

@@ -18,6 +18,13 @@ export interface ModelGroupModel {
   ratio?: number
   /** 实际扣费倍率：限免为 0，打折已乘折扣 */
   effRatio?: number
+  /**
+   * Zen 免 KEY 免费模型。
+   *
+   * 与 `free` 分开：`free` 是平台计费口径的「限免」（要登录、要算积分），
+   * 这个是「压根不需要 Key、不过平台」。所以标签文案也不同，见 Tag()。
+   */
+  zenFree?: boolean
 }
 
 export interface ModelGroup {
@@ -193,9 +200,13 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
 
 /**
  * 计价标签：限免 / 折扣。
- * 只在平台模型上出现（第三方 provider 的模型压根没有这些字段）。
+ *
+ * `zenFree`（opencode 限免分组）与平台 `free`（限免）都渲染成「限免」——
+ * 用户视角都是"这段时间不花钱"。但字段仍要分开存：前者不经过平台计费、也没有倍率，
+ * 后者要登录且受平台计费口径约束，混成一个字段迟早会在某个分支上判错。
  */
 function Tag({ m }: { m: ModelGroupModel }) {
+  if (m.zenFree) return <span className="mp-tag free">{t('限免')}</span>
   if (isFree(m)) return <span className="mp-tag free">{t('限免')}</span>
   if (m.discount) return <span className="mp-tag off">{t('折扣')}</span>
 

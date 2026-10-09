@@ -142,6 +142,14 @@ export interface ModelCfg {
    * 同名第三方模型（builtin=false），它们不该混进「内置」里让人以为都是平台官方的。
    */
   builtin?: boolean
+  /**
+   * OpenCode Zen 的免 KEY 免费模型（不需要 API Key 就能用，见 docs/内核Zen免费模型机制.md）。
+   *
+   * **与上面的 `free` 是两回事，别混用**：`free` 说的是「平台计费口径下不扣积分」，
+   * 界面渲染成绿色「限免」+ 0x 倍率；`zenFree` 说的是「压根不需要 Key、不走平台计费」。
+   * 免费模型随时可能被官方下线，标签是「免费」而不是「限免」，免得用户以为有保障。
+   */
+  zenFree?: boolean
 }
 
 /**
@@ -235,6 +243,19 @@ export interface PlatformCfg {
  */
 export type AccessLevel = 'default' | 'full'
 
+/**
+ * OpenCode Zen 免费模型的本地缓存。
+ *
+ * 只存一份快照：清单由内核持有（`GET /config/providers`），启动时同步一次落盘，
+ * 之后离线也能显示。**不要把它当事实来源**——官方随时会增删模型，下次启动自然刷新。
+ */
+export interface ZenCfg {
+  /** 同步到的免费模型清单 */
+  models: ModelCfg[]
+  /** 上次同步时间戳 */
+  syncedAt?: number
+}
+
 export interface Settings {
   providers: ProviderCfg[]
   mcps: McpCfg[]
@@ -250,6 +271,13 @@ export interface Settings {
   mobile: boolean
   /** 平台登录态（第三方 provider 与它并存，不互相影响） */
   platform: PlatformCfg
+  /**
+   * OpenCode Zen 免费模型缓存（免 KEY，详见 docs/内核Zen免费模型机制.md）。
+   *
+   * 与 platform 分开存：它是内核自带的、不需要登录也不需要联网，
+   * 混进 platform 会让「未登录用户也有模型可选」这件事在数据层就表达不出来。
+   */
+  zen: ZenCfg
   /**
    * 访问权限档位，**全局一份、对所有文件夹生效**（默认 'default'：写操作要确认）。
    *
@@ -276,6 +304,7 @@ export const DEFAULT_SETTINGS: Settings = {
   remote: false,
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
+  zen: { models: [] },
   access: 'default',
   modelAuth: []
 }

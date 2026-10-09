@@ -60,6 +60,11 @@ const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
 interface Props {
   settings: SettingsCfg
   onSave: (s: SettingsCfg) => Promise<void>
+  /**
+   * 外部已把设置落盘（如主进程同步了 Zen 免费模型清单），只回读刷新界面。
+   * 与 onSave 的区别是**不重复写盘、不重复重启内核**——那两件事调用方已经做过了。
+   */
+  onSettings: (s: SettingsCfg) => void
   saving: boolean
   theme: string
   onTheme: (id: string) => void
@@ -333,6 +338,21 @@ const PROVIDER_PRESETS: {
 
 export function SettingsView(p: Props) {
   const providers = p.settings.providers
+  /** 官方免费模型（Zen）快照：只读，本页只提供「刷新」 */
+  const zenModels = p.settings.zen?.models ?? []
+  const [zenBusy, setZenBusy] = useState(false)
+  async function refreshZen(): Promise<void> {
+    setZenBusy(true)
+    try {
+      // 主进程返回的是落盘后的完整 Settings：它已经写过盘、并在清单有增删时重启过内核。
+      // 这里**只更新界面 state**，不能再走 onSave —— 那会重复写盘 + 多重启一次内核。
+      p.onSettings(await window.qingniao.zenRefresh())
+    } catch {
+      /* 内核没起/取不到：清单保持原样，不清空（见 main/zen.ts fetchZenModels 注释） */
+    } finally {
+      setZenBusy(false)
+    }
+  }
   /**
    * 访问权限档位：**完全控制是总权限闸**——主进程收到「能不能调用别的模型」的询问时直接放行，
    * 不再弹授权卡（见 electron/main/gate.ts requestModelAuth）。所以这一档下本页的授权清单
@@ -1130,6 +1150,38 @@ export function SettingsView(p: Props) {
 
         {tab === 'providers' && (
         <>
+        {/*
+          官方免费模型（Zen）：只读卡片。
+          它不是用户自建的 provider——清单由内核持有、免 KEY、不需要登录，所以没有开关/编辑/删除，
+          只有「刷新」。摆在这里主要是让用户知道这批模型从哪来、什么时候同步的、可能会下线。
+        */}
+        {zenModels.length > 0 && (
+          <section>
+            <h3>
+              {t('opencode限免')}
+              <span className="spacer" />
+              <button className="ghost" onClick={refreshZen} disabled={zenBusy}>
+                <RefreshCw size={14} className={zenBusy ? 'spin' : ''} /> {t('刷新')}
+              </button>
+            </h3>
+            <p className="sec-tip">
+              {t('OpenCode 官方提供的一批免密钥模型，不要填任何 API Key 即可使用。')}
+              <br />
+              {t('这些模型是限时免费的，官方可能随时下线；清单由内核自带，启动时自动同步一次。')}
+            </p>
+            <div className="plist">
+              <div className="prow">
+                <div className="prow-main">
+                  <div className="prow-name">
+                    {t('opencode限免')}
+                    <span className="chip">{t('{n} 个模型', { n: zenModels.length })}</span>
+                  </div>
+                  <div className="prow-url">opencode.ai/zen</div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
         <section>
           <h3>
             {t('模型提供商')}

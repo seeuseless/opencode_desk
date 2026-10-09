@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { AccessLevel, DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
+import type { AccessLevel, DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode, ZenCfg } from './types.ts'
 import { DEFAULT_PLATFORM_URL, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
@@ -56,7 +56,9 @@ function normalizeModel(m: unknown): ModelCfg | null {
     ...(ratio === undefined ? {} : { ratio }),
     ...(effRatio === undefined ? {} : { effRatio }),
     // 平台后台那一列「内置」：对话区「内置模型」分组按它过滤，只留平台官方提供的
-    ...(typeof r.builtin === 'boolean' ? { builtin: r.builtin } : {})
+    ...(typeof r.builtin === 'boolean' ? { builtin: r.builtin } : {}),
+    // Zen 免费模型标记（只影响展示，缺失按 false）
+    ...(typeof r.zenFree === 'boolean' ? { zenFree: r.zenFree } : {})
   }
 }
 
@@ -110,6 +112,12 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     syncedAt: Number(rawPlatform.syncedAt) > 0 ? Number(rawPlatform.syncedAt) : undefined,
     device
   }
+  // Zen 免费模型缓存：同样只当快照，缺字段落空清单（不显示该分组，但不影响其他模型）
+  const rawZen = (raw?.zen ?? {}) as Partial<ZenCfg>
+  const zen: ZenCfg = {
+    models: Array.isArray(rawZen.models) ? rawZen.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : [],
+    syncedAt: Number(rawZen.syncedAt) > 0 ? Number(rawZen.syncedAt) : undefined
+  }
   return {
     providers,
     mcps,
@@ -118,6 +126,7 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     remote: raw?.remote === true,
     mobile: raw?.mobile === true,
     platform,
+    zen,
     // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
     access: normalizeAccess(raw?.access),
     // 「永久允许调用」清单：只收非空字符串（手改存档塞进数字/对象时一并滤掉，否则授权判定会静默失配）
@@ -270,6 +279,19 @@ export const PLATFORM_PROVIDER_ID = 'qingniao'
 export const PLATFORM_PROVIDER_NAME = '青鸟平台'
 
 /**
+ * OpenCode Zen（内核自带的免费模型池）的固定 ID 与名称。
+ *
+ * **不要用 'opencode' 当 id**：那是内核内置 provider 的保留名，在 opencode.json 里
+ * 同名会整个覆盖掉内核自带的定义（连带那 11 个免费模型及其能力元数据一起被替换掉）。
+ * 用独立 id + 空 env 插值走我们自己的条目，实测内核照样正常调用。
+ * 见 docs/内核Zen免费模型机制.md。
+ */
+export const ZEN_PROVIDER_ID = 'qnx-free'
+export const ZEN_PROVIDER_NAME = 'opencode限免'
+/** Zen 的 OpenAI 兼容网关。免费模型必须经内核调用，桌面端直连会被 403 挡掉 */
+const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
+
+/**
  * 生效的平台地址 —— 全应用只此一处：
  * 环境变量 QINGNIAO_PLATFORM_URL > 设置里的 platform.baseUrl > 内置默认值。
  * 上线换域名时改设置（或打包时给环境变量）即可，登录入口与网关 baseURL 自动跟着变。
@@ -310,6 +332,29 @@ export function platformProvider(s: Settings): ProviderCfg | null {
   }
 }
 
+/**
+ * Zen 免费模型 → 一个虚拟 provider（免 KEY，走内核）。
+ *
+ * 与 platformProvider 不同的是：**它不依赖登录、不依赖 remote 开关**，只要同步到过清单就显示，
+ * 因此排在平台之前——新装未登录的用户第一眼看到的就是「开箱能用」的一组。
+ *
+ * 返回 null（分组不出现）的两种情况：还没同步过清单、清单已空。
+ * apiKey 刻意留空：opencode.json 里写成 `{env:QN_KEY_QNX_FREE}`，而 spawn 时并不注入这个变量，
+ * 内核由此落到匿名通道（实测可用）。**别改成注入真实 key**——那会让它变成付费路径。
+ */
+export function zenProvider(s: Settings): ProviderCfg | null {
+  const models = s.zen?.models ?? []
+  if (!models.length) return null
+  return {
+    id: ZEN_PROVIDER_ID,
+    name: ZEN_PROVIDER_NAME,
+    baseURL: ZEN_BASE_URL,
+    apiKey: '',
+    enabled: true,
+    models
+  }
+}
+
 /** 只改平台登录态并落盘（是否重启内核交给调用方决定） */
 export function setPlatform(patch: Partial<PlatformCfg>): Settings {
   const next = normalize({ ...loadSettings(), platform: { ...loadSettings().platform, ...patch } })
@@ -322,6 +367,22 @@ export function setPlatform(patch: Partial<PlatformCfg>): Settings {
 /** 退出登录：清 token、用户信息、模型清单与设备身份（设备是绑在账号上的） */
 export function clearPlatform(): Settings {
   return setPlatform({ token: '', user: null, models: [], syncedAt: undefined, device: null })
+}
+
+/**
+ * 只改 Zen 免费模型清单并落盘（是否重启内核交给调用方决定）。
+ *
+ * 清单变了要重启内核（provider 是启动时读的），但**只有真的变了才重启**——
+ * 官方清单基本不动，模型增删要落进 opencode.json 与默认档，用户不该被无谓地打断。
+ */
+export function setZen(patch: Partial<ZenCfg>): { settings: Settings; changed: boolean } {
+  const cur = loadSettings()
+  const next = normalize({ ...cur, zen: { ...cur.zen, ...patch } })
+  const changed = JSON.stringify(next.zen.models) !== JSON.stringify(cur.zen.models)
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(next, null, 2))
+  if (changed) writeOpencodeConfig(next)
+  return { settings: next, changed }
 }
 
 export function providerEnv(s: Settings): Record<string, string> {
@@ -337,13 +398,17 @@ export function providerEnv(s: Settings): Record<string, string> {
 /**
  * 真正会写入 opencode.json 的 provider（writeOpencodeConfig 与 defaultModel 的唯一判定源）。
  * 平台 provider 固定排在最前：平台登录后它就是默认首选，第三方配置照旧并排列在后面。
+ *
+ * Zen 免费模型排在**最后**：它是兜底性质的（官方限时提供、可能随时下线），
+ * 不该抢在用户自己配好的提供商前面当默认档。
  */
 export function usableProviders(s: Settings): ProviderCfg[] {
   const manual = s.providers.filter(
-    (p) => p.enabled && p.id.trim() && p.id !== PLATFORM_PROVIDER_ID && p.baseURL.trim() && p.models.length > 0
+    (p) => p.enabled && p.id.trim() && p.id !== PLATFORM_PROVIDER_ID && p.id !== ZEN_PROVIDER_ID && p.baseURL.trim() && p.models.length > 0
   )
   const platform = platformProvider(s)
-  return platform ? [platform, ...manual] : manual
+  const zen = zenProvider(s)
+  return [...(platform ? [platform] : []), ...manual, ...(zen ? [zen] : [])]
 }
 
 /** 面板浏览器 MCP 的启动信息（主进程启动时注入：脚本路径 + 控制端点端口），writeOpencodeConfig 用 */

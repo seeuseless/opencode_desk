@@ -5,7 +5,8 @@ import { createServer } from 'node:http'
 import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, writeOpencodeConfig, type Settings } from './config.ts'
+import { fetchZenModels } from './zen.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
 import { server } from './server.ts'
@@ -574,6 +575,36 @@ ipcMain.handle('platform:sync', async () => {
 // 按需静默刷新：只在计价变化时用（选择器点开「内置模型」就调一次）。
 // 与上面那条的区别是「模型增删才重启内核」，界面列表原地替换，不闪不空。
 ipcMain.handle('platform:refresh', () => platform.refresh())
+
+// ---------- OpenCode Zen 免费模型（免 KEY）----------
+// 清单由内核持有（GET /config/providers），这里只做一次同步并落盘成快照。
+// 同步时机：内核就绪后（此时才问得到）+ 用户手动点「刷新」。
+ipcMain.handle('zen:refresh', async () => {
+  const models = await fetchZenModels(adapter.baseUrl)
+  // 拿不到（内核没起/超时）时 models 为空数组：**刻意不落盘**，避免把已有清单清空、
+  // 让免费分组整块消失。空数组只在「内核明确返回了空清单」时才会被 setZen 写下去。
+  if (!models.length) return loadSettings()
+  const { settings, changed } = setZen({ models, syncedAt: Date.now() })
+  // 清单变了才重启内核：provider 是启动时读的，不重启新模型选不了。
+  // 官方清单基本不动，所以绝大多数情况下不会触发重启。
+  if (changed) await adapter.restart()
+  return settings
+})
+
+/**
+ * 启动后静默同步一次 Zen 免费模型清单。
+ *
+ * 必须在 adapter.start() 之后：清单是向内核问的，内核没起就问不到（返回空，什么都不做）。
+ * 同步完若清单变了要重启内核才能用上新模型——但这一轮重启发生在 createWindow() 之前，
+ * 用户看不到中间态，所以这里直接 await（不像设置保存那样放后台，避免和后面的流程抢内核）。
+ */
+async function syncZenOnBoot(): Promise<void> {
+  const models = await fetchZenModels(adapter.baseUrl)
+  if (!models.length) return
+  // setZen 内部已把新清单写进 opencode.json，这里只管让内核重载
+  const { changed } = setZen({ models, syncedAt: Date.now() })
+  if (changed) await adapter.restart()
+}
 
 // ---------- 账号与用量（设置 → 账号 / 使用量）----------
 // 都是「会员自己看自己的账」：token 从设置里取，未登录一律返回 null，由界面渲染成未登录态。
@@ -1449,6 +1480,10 @@ app.whenReady().then(async () => {
 
   // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
   void platform.refreshOnBoot()
+
+  // Zen 免费模型清单：同样静默，且不需要登录/联网账号。内核此刻已就绪，问得到它自带的清单。
+  // 官方增删模型时才会真的改配置并重启内核，平时几乎无感。
+  void syncZenOnBoot()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

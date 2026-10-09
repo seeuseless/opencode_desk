@@ -10,20 +10,38 @@ export type SettingsCfg = Settings
 
 /** 平台 provider 在内核里的 ID，与 electron/main/config.ts 的 PLATFORM_PROVIDER_ID 保持一致 */
 export const PLATFORM_PROVIDER_ID = 'qingniao'
+/** Zen 免费 provider 的 ID，与 electron/main/config.ts 的 ZEN_PROVIDER_ID 保持一致 */
+export const ZEN_PROVIDER_ID = 'qnx-free'
 
 /**
- * 对话区的模型清单：平台「内置模型」永远排最前（二级列的就是后台启用的内置模型，跟随后台排序），
- * 用户自建的提供商接在后面。
+ * 对话区的模型清单：平台「内置模型」排最前，用户自建的提供商居中，
+ * Zen「opencode限免」排**最后**——它是兜底性质的（官方限时提供、可能随时下线），
+ * 不该抢在用户自己配好的提供商前面。
  *
- * 两个过滤条件缺一不可：
+ * 平台那组的两个过滤条件缺一不可：
  *   remote —— 全局关了远程服务时，平台这套（登录/内置模型）整个不该出现；
  *   builtin —— 后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
  *              它们不属于「内置」，混进来会让人以为模型比实际多。
  *
+ * Zen 那组只看有没有清单（s.zen.models），不依赖登录态与 remote 开关——
+ * 它压根不走平台，也不发任何平台请求。
+ *
  * 设置页绝不能吃这份列表——它保存时会把 providers 整体写回磁盘，
- * 而平台那条是登录态虚拟出来的，混进去会被落成一份假配置。
+ * 而前面两组都是虚拟出来的（登录态 / 内核清单），混进去会被落成一份假配置。
  */
 export function chatProviders(s: SettingsCfg): ProviderCfg[] {
+  const zen = (s.zen?.models ?? []).length
+    ? [
+        {
+          id: ZEN_PROVIDER_ID,
+          name: 'opencode限免',
+          baseURL: 'https://opencode.ai/zen/v1',
+          apiKey: '',
+          enabled: true,
+          models: s.zen.models
+        }
+      ]
+    : []
   const builtin = s.platform.models.filter(isBuiltinModel)
   const platform =
     s.remote && s.platform.token && builtin.length
@@ -39,7 +57,7 @@ export function chatProviders(s: SettingsCfg): ProviderCfg[] {
         ]
       : []
 
-  return [...platform, ...s.providers]
+  return [...platform, ...s.providers, ...zen]
 }
 
 /** 「生图/生视频」意图的轻量识别（纯文字、没有附图时的生成请求）。命中只用于提示，不影响发送。 */
