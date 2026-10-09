@@ -75,25 +75,36 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
   /** 夹回窗口内的二次修正量：长列表展开后可能顶出屏幕上下沿 */
   const [subShift, setSubShift] = useState(0)
   const [panelShift, setPanelShift] = useState(0)
-  /** 限免清单已同步过就别再问内核了（每次开面板都问一遍太吵） */
-  const onOpenFired = useRef(false)
+  /**
+   * 面板展开的「瞬时动作」快照：只在面板从收起变展开的那一下做（点开面板 / 收起再点开），
+   * 用 ref 存、与渲染解耦，避免父组件因 settings 刷新产生的新回调引用把面板状态反复复位。
+   *
+   * 背景（2026-10-09）：打开面板会同步 opencode 限免清单（onOpen），清单异步回来后
+   * p.onSettings 触顶重渲染，父组件每轮都传新的 `onOpen` 引用；若把它放进 deps，
+   * useEffect 会跟着重跑，里面的 setExpanded('')/setSubTop(0) 等无条件复位把用户已展开的
+   * 二级列顶回收起 → 面板「闪一下」。所以这里只在 open 由 false→true 的瞬间做，其余渲染一律不碰。
+   */
+  const prevOpen = useRef(false)
+  const lastOnOpen = useRef(onOpen)
+  lastOnOpen.current = onOpen // 每次渲染都更新，回调里取的就是最新版
 
   useEffect(() => {
+    const justOpened = open && !prevOpen.current
+    prevOpen.current = open
     if (!open) return
-    setExpanded('')
-    setSubTop(0)
-    setSubShift(0)
-    setPanelShift(0)
-    if (!onOpenFired.current) {
-      onOpenFired.current = true
-      onOpen?.()
+    if (justOpened) {
+      setExpanded('')
+      setSubTop(0)
+      setSubShift(0)
+      setPanelShift(0)
+      lastOnOpen.current?.()
     }
     const onDown = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [open, onOpen])
+  }, [open])
 
   const i = value.indexOf('/')
   const curGroup = i > 0 ? groups.find((g) => g.id === value.slice(0, i)) : undefined
