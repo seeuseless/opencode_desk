@@ -3,6 +3,19 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.6 — 2026-10-09
+
+修正应用内「检查更新」元数据的陈旧版本号，并沉淀一条发版流程防呆。
+
+### 修复
+
+- **update.json 版本号长期停留在旧值**：应用内检查更新读的 `client/resources/update.json`（主进程 `updater.ts` 消费）版本号停在 **1.6.4**——此前 v1.7.4 / v1.7.5 发版只改了 `CHANGELOG.md` 与 `package.json`、未重新跑构建，`gen-update-meta.mjs`（只在 `dist` 构建链里执行）没被触发，元数据就一直没跟上。已在本次构建时重新生成并对齐 1.7.6。
+  - **根因与防呆**：`update.json` 的 version 由构建脚本从 `package.json` 读取生成，**只在跑 `dist`/构建链时刷新**。只改 CHANGELOG + package.json + 打 tag 的"轻量发版"会让它停在旧值。此后每次发版（无论是否重新构建产物）都应手动跑一次 `node scripts/gen-update-meta.mjs`，或接受"应用内更新以 `app.getVersion()`（安装包自身版本）为权威、该字段仅作参考"的现状。
+
+### 说明
+
+- 本版本不含代码变更，仅同步元数据；上一版 v1.7.5 的模型选择器闪烁修复（`ModelPicker.tsx`）继续有效，本地已重新构建出含该修复的安装包（`client/dist/QingNiao-Setup-x64.exe`）。
+
 ## v1.7.5 — 2026-10-09
 
 修复「选择模型」面板偶尔闪一下的问题，并把 PortableGit 的系统级凭据助手重新定向，避免 git 反复弹凭据选择器。
