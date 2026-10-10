@@ -18,7 +18,7 @@ import { CODE_STYLES, type CodeStyle } from './codeStyle'
 type View = 'chat' | 'settings' | 'schedules'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
+export type SettingsTab = 'general' | 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
 export type ProjectSortMode = 'activity' | 'fixed'
 
 /**
@@ -126,6 +126,10 @@ export default function App() {
   const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
   /** 浏览器面板开合/放大（ChatView 上报），驱动标题栏浏览器按钮的行为与图标 */
   const [browserUi, setBrowserUi] = useState({ open: false, max: false })
+  /** 自增计数：标题栏「代码审查」按钮开/关右侧审查面板 */
+  const [reviewSignal, setReviewSignal] = useState(0)
+  /** 代码审查面板开合（ChatView 上报），驱动标题栏按钮高亮 */
+  const [reviewUi, setReviewUi] = useState({ open: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
   const [busyIds, setBusyIds] = useState<Record<string, boolean>>({})
@@ -145,7 +149,7 @@ export default function App() {
   const [settingsReady, setSettingsReady] = useState(false)
   const [model, setModel] = useState<string>(() => load('qingniao.model', ''))
   /** 设置页标签：放在 App 里，左栏账号入口才能一键跳到「账号」 */
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>('theme')
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   /** 外部请求的定位（带自增 tick，重复点同一个入口也能重新跳） */
   const [settingsReq, setSettingsReq] = useState<SettingsReq | null>(null)
   /** 平台登录态：左下角账号入口与账号页共用一份，登录/退出后由主进程推更新 */
@@ -923,7 +927,7 @@ export default function App() {
           onAddProject={addProject}
           onPickSession={pickSessionFor}
           onDeleteSession={deleteSessionOf}
-          onOpenSettings={() => openSettingsAt('theme')}
+          onOpenSettings={() => openSettingsAt('general')}
           onOpenFolder={openFolder}
           projectSortMode={projectSortMode}
           onReorderProjects={reorderProjects}
@@ -952,6 +956,8 @@ export default function App() {
           browserOpen={browserUi.open}
           browserMax={browserUi.max}
           showBrowser={!codeMode}
+          onToggleReview={() => setReviewSignal((v) => v + 1)}
+          reviewOpen={reviewUi.open}
           codeInfo={codeWorkspaceVisible ? codeInfo : null}
           codeControls={codeWorkspaceVisible ? codeControls : null}
           onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
@@ -1008,12 +1014,16 @@ export default function App() {
                 focusSignal={focusTick}
                 browserToggleSignal={browserSignal}
                 browserMaxSignal={browserMaxSignal}
+                reviewToggleSignal={reviewSignal}
+                onReviewUi={setReviewUi}
                 codeMode={codeMode}
                 showUserAnchors={userAnchors}
                 onBrowserUi={setBrowserUi}
                 onHead={setHead}
                 onOpenSettings={() => openSettingsAt('providers')}
                 onPickDir={addProject}
+                access={access}
+                onAccess={setAccess}
                 onSwitchProject={(id) => {
                   if (id === activeId) return
                   setActiveId(id)
@@ -1088,7 +1098,6 @@ export default function App() {
               onProjectSortMode={changeProjectSortMode}
               userAnchors={userAnchors}
               onUserAnchors={setUserAnchors}
-              onAccess={setAccess}
               lang={lang}
               onLang={changeLang}
                projectPath={activeProject?.path ?? null}

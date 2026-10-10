@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Settings, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
@@ -12,7 +12,6 @@ import type { CustomColors } from '../themeColors'
 import type { GenKind, GenRole, McpCfg, Modality, ModelCfg, PlatformStatus, ProviderCfg, SettingsCfg, SkillItem, SkillScope, ThinkingMode } from '../oc'
 import { MODEL_DEFAULTS, MODEL_ROLE_LABEL, genRoleOf } from '../oc'
 import type { ProjectSortMode, SettingsTab } from '../App'
-import type { AccessLevel } from './Sidebar'
 import { CODE_STYLES, CODE_STYLE_PREVIEWS, type CodeStyle } from '../codeStyle'
 
 /**
@@ -87,8 +86,6 @@ interface Props {
   /** 对话左侧「-」用户消息导航锚点条显隐（默认不显示，通用页可开） */
   userAnchors: boolean
   onUserAnchors: (v: boolean) => void
-  /** 拨全局访问权限档位（'default'/'full'）；切「完全控制」的二次确认由 App 负责 */
-  onAccess: (level: AccessLevel) => void
   /** 界面语言（App 持有，切换后整棵树重渲染） */
   lang: Lang
   onLang: (l: Lang) => void
@@ -139,12 +136,13 @@ function BgSlot({ label, url, onPick, onClear }: { label: string; url: string; o
   )
 }
 
-/** 设置页左侧导航：账号 / 通用 / 模型 / 技能 / MCP / 使用量 / 关于 */
+/** 设置页左侧导航：账号 / 通用 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
   { id: 'account', label: '账号', icon: CircleUser },
-  { id: 'theme', label: '通用', icon: Palette },
+  { id: 'general', label: '通用', icon: Settings },
+  { id: 'theme', label: '主题', icon: Palette },
   { id: 'providers', label: '模型', icon: Cpu },
   { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Globe },
@@ -438,20 +436,20 @@ export function SettingsView(p: Props) {
   /** 待删除的模型（自绘确认框，不用原生 confirm） */
   const [modelDel, setModelDel] = useState<string | null>(null)
 
-  // 关掉远程服务时正停在「账号 / 使用量」上：那两页已经不可见了，退回主题页免得白屏
+  // 关掉远程服务时正停在「账号 / 使用量」上：那两页已经不可见了，退回通用页免得白屏
   useEffect(() => {
-    if (!remote && REMOTE_TABS.includes(tab)) setTab('theme')
+    if (!remote && REMOTE_TABS.includes(tab)) setTab('general')
   }, [remote, tab, setTab])
 
   /**
    * 外部请求的定位：只在 tick 变化时跑一次（不进依赖，否则用户手动切页会被立刻拉回来）。
    *
-   * 关掉远程服务时「账号 / 使用量」两页不存在，回落主题页，别停在一页空白上；
+   * 关掉远程服务时「账号 / 使用量」两页不存在，回落通用页，别停在一页空白上；
    * 切页后置顶滚动，否则从模型页跳到技能页会停在半截位置。
    */
   useEffect(() => {
     if (!p.req) return
-    const t = !remote && REMOTE_TABS.includes(p.req.tab) ? 'theme' : p.req.tab
+    const t = !remote && REMOTE_TABS.includes(p.req.tab) ? 'general' : p.req.tab
     setTab(t)
     setConfirmDel(null)
     closeProviderModal()
@@ -930,8 +928,7 @@ export function SettingsView(p: Props) {
           ))}
         </nav>
         <div className="setbody" ref={body}>
-        {tab === 'theme' && (
-        <>
+        {tab === 'general' && (
         <section>
           <h3>
             <Layers size={15} /> {t('通用')}
@@ -974,26 +971,6 @@ export function SettingsView(p: Props) {
           <div className="switch-row">
             <Switch checked={p.userAnchors} onChange={p.onUserAnchors} />
             <span>{p.userAnchors ? t('已启用') : t('未启用')}</span>
-          </div>
-          <h4 className="sub-title">{t('访问权限')}</h4>
-          <p className="sec-tip">
-            {t('AI 在本机动文件的权限档位，全局生效。默认：改动文件、执行命令前先弹窗问你；完全控制：不再询问，直接读写文件、跑命令。')}
-          </p>
-          <div className="acct-tabs">
-            <button
-              type="button"
-              className={'seg-btn' + (!fullAccess ? ' on' : '')}
-              onClick={() => p.onAccess('default')}
-            >
-              {t('默认权限')}
-            </button>
-            <button
-              type="button"
-              className={'seg-btn' + (fullAccess ? ' on' : '')}
-              onClick={() => p.onAccess('full')}
-            >
-              {t('完全控制')}
-            </button>
           </div>
           <h4 className="sub-title">{t('项目文件夹排序')}</h4>
           <p className="sec-tip">{t('默认按最近任务先后排列，也可以固定顺序后手动调整。')}</p>
@@ -1042,8 +1019,13 @@ export function SettingsView(p: Props) {
             })}
           </div>
         </section>
+        )}
+
+        {tab === 'theme' && (
         <section>
-          <h4 className="sub-title">{t('主题')}</h4>
+          <h3>
+            <Palette size={15} /> {t('主题')}
+          </h3>
           <p className="sec-tip">
             {t('内置配色即时切换，实时应用到整个界面；选择「自定义」可用四种基础色自由搭配。')}
           </p>
@@ -1145,7 +1127,6 @@ export function SettingsView(p: Props) {
             </div>
           )}
         </section>
-        </>
         )}
 
         {tab === 'providers' && (

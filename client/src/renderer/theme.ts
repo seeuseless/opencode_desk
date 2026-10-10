@@ -19,15 +19,17 @@ export const THEMES: ThemeMeta[] = [
   { id: 'china', name: '中国红', dark: false, swatches: ['#c9101e', '#d7232c', '#fff6f5'] },
   { id: 'schonbrunn', name: '申布伦黄', dark: false, swatches: ['#e0c05f', '#c9922a', '#fdf9ee'] },
   { id: 'hermes', name: '爱马仕橙', dark: false, swatches: ['#f37021', '#e8611a', '#fff8f1'] },
+  { id: 'lapis', name: '青金石', dark: false, swatches: ['#4a2f9c', '#6c3fd8', '#f5f2fc'] },
+  { id: 'malachite', name: '孔雀绿', dark: false, swatches: ['#0d8a64', '#0fa37a', '#f1fbf6'] },
 ]
 export const CUSTOM_ID = 'custom'
 export const CUSTOM_THEME: ThemeMeta = {
   id: CUSTOM_ID, name: '自定义', dark: false, swatches: ['#3b6ef5', '#f5f5f5', '#ececec'],
 }
-/** 主题选择列表：6 个内置 + 自定义 */
+/** 主题选择列表：12 个内置 + 自定义 */
 export const getThemeList = (): ThemeMeta[] => [...THEMES, CUSTOM_THEME]
 
-/* ================= 主题背景图（设置 → 通用 → 主题背景图） =================
+/* ================= 主题背景图（设置 → 主题 → 主题背景图） =================
  * 两种模式（名字 2026-09-29 定版）：
  *   full  —— 整屏一张：一张图同时铺在左侧栏与右侧内容区，界面看着是同一幅底图
  *   split —— 左右分开：左侧栏（侧栏面板）一张、右侧内容区一张，互不相关

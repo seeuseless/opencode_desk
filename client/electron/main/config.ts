@@ -479,6 +479,11 @@ let asrMcp: { path: string } | undefined
 export function setAsrMcp(v: { path: string }): void {
   asrMcp = v
 }
+/** 办公文件 MCP（office_* 读写 pdf/docx/pptx/xlsx）脚本路径 */
+let officeMcp: { path: string } | undefined
+export function setOfficeMcp(v: { path: string }): void {
+  officeMcp = v
+}
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
@@ -628,6 +633,15 @@ export function writeOpencodeConfig(s: Settings): void {
     mcp.panel = {
       type: 'local',
       command: [...nodeExec(), panelMcp.path, String(panelMcp.port)],
+      environment: nodeEnv(),
+      enabled: true
+    }
+  }
+  // 办公文件 MCP：读写 pdf/docx/pptx/xlsx 的独立 node 进程（不调模型，只需 node 环境）
+  if (officeMcp) {
+    mcp.office = {
+      type: 'local',
+      command: [...nodeExec(), officeMcp.path],
       environment: nodeEnv(),
       enabled: true
     }

@@ -48,10 +48,17 @@ interface Props {
   onPickDir: () => void
   /** 切换当前激活项目（点击左侧项目下拉中的某项） */
   onSwitchProject: (id: string) => void
+  /** 全局访问权限档位（聊天「选择文件夹」下方选择，全局生效） */
+  access: 'default' | 'full'
+  onAccess: (level: 'default' | 'full') => void
   /** 标题栏「内置浏览器」按钮的触发计数（App 转发，每点一次 +1） */
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
   browserMaxSignal: number
+  /** 自增计数：标题栏「代码审查」按钮的触发计数（App 转发，每点一次 +1） */
+  reviewToggleSignal?: number
+  /** 上报代码审查面板开合（标题栏按钮据此决定高亮） */
+  onReviewUi?: (s: { open: boolean }) => void
   /** 纯写代码模式：关闭并隐藏内置浏览器、权限与思考入口 */
   codeMode: boolean
   /** 是否显示左侧「-」用户消息导航锚点条（设置 → 通用里开，默认关；上下文压缩由内核自动做） */
@@ -392,6 +399,8 @@ export function ChatView(p: Props) {
   /** 面板是否可见：只有用户点标题栏按钮/点对话里的链接/进浏览模式才会置 true */
   const [panelOpen, setPanelOpen] = useState(false)
   const [browserMax, setBrowserMax] = useState(false)
+  /** 右侧「代码审查」面板是否可见：列出本会话被 AI 改到的文件（+N/-M），点开可看差量/全文 */
+  const [reviewOpen, setReviewOpen] = useState(false)
   /**
    * 窗口整体宽度是否够宽（≥1308）。窄于此值时输入行的模型名只显示 / 后的短名：
    * 全名（provider/model 长串）会把输入行右侧的思考、发送挤到窗口边缘外，
@@ -467,7 +476,7 @@ export function ChatView(p: Props) {
       for (const m of msgs) {
         if (m.info.role !== 'assistant') continue
         const text = m.parts.filter((x) => x.type === 'text').map((x) => x.text).join('')
-        const ms = (text.match(/https?:\/\/[^\s)<>"'）】」。，；]+/g) ?? []).filter((u) => !mediaExtRe.test(u.split(/[?#]/)[0]))
+        const ms = (text.match(/https?:\/\/[^\s"'<>\`()（），。；：、【】《》「」『』！？　一-龥]+/g) ?? []).filter((u) => !mediaExtRe.test(u.split(/[?#]/)[0]))
         if (ms.length) url = ms[ms.length - 1]
       }
     }
@@ -475,12 +484,18 @@ export function ChatView(p: Props) {
   }, [msgs])
 
   // 主进程「AI 要用面板浏览器」事件（panel_* 工具发现 webview 还没挂载时触发）：
-  // 只挂 webview，**不打开面板**——用户没点过就不该看见它。
+  // 挂载 webview 并自动弹出面板——AI 首次打开网址就该让用户看到；代码模式下面板位置与布局冲突，仍只挂载不弹。
   useEffect(() => {
     return window.qingniao.onEvent((raw) => {
-      if ((raw as { type?: string }).type === 'qingniao.browser.wake') setPanelBorn(true)
+      if ((raw as { type?: string }).type !== 'qingniao.browser.wake') return
+      setPanelBorn(true)
+      // AI 首次打开网址自动弹面板；与右栏代码审查面板互斥，打开浏览器的同时收掉审查
+      if (!p.codeMode) {
+        setReviewOpen(false)
+        setPanelOpen(true)
+      }
     })
-  }, [])
+  }, [p.codeMode])
 
   // 对话里点击需浏览器打开的链接（Markdown 组件派发）：打开面板并导航到该地址
   useEffect(() => {
@@ -506,6 +521,34 @@ export function ChatView(p: Props) {
   useEffect(() => {
     save('qingniao.bookmarks', marks)
   }, [marks])
+
+  /** 审查面板数据：聚合本会话被改到的文件（同一文件跨轮合并 +N/-M，patch 取最近一轮）。
+ *  与聊天工具行的徽标同源：优先工具 part 自带的 metadata（metaDiffs，写/编辑时内核随工具给出，
+ *  最可靠），再并入按轮拉取的整轮 diffs 作兜底。 */
+  const reviewFiles = useMemo(() => {
+    const map = new Map<string, FileDiff>()
+    const add = (d: FileDiff) => {
+      const prev = map.get(normPath(d.file))
+      if (prev) {
+        prev.additions += d.additions
+        prev.deletions += d.deletions
+        if (d.patch) prev.patch = d.patch
+        if (d.status) prev.status = d.status
+      } else {
+        map.set(normPath(d.file), { ...d })
+      }
+    }
+    for (const m of msgs) {
+      for (const pt of m.parts) {
+        if (pt.type !== 'tool' || !isFileTool(pt.tool ?? '')) continue
+        for (const d of metaDiffs(pt)) add(d)
+      }
+    }
+    for (const uid of new Set(turnOwners(msgs).values())) {
+      for (const d of diffs[uid] ?? []) add(d)
+    }
+    return [...map.values()].sort((a, b) => a.file.localeCompare(b.file))
+  }, [diffs, msgs])
 
   /**
    * 「AI 调用其他模型」授权闸门的两条推送（主进程 gate.ts → IPC）：
@@ -557,9 +600,20 @@ export function ChatView(p: Props) {
       closeBrowserPanel()
       return
     }
+    setReviewOpen(false)
     setPanelBorn(true)
     setPanelOpen(true)
     setBrowserMax(false)
+  }
+
+  /** 标题栏「代码审查」按钮：开/关右侧审查面板；与浏览器面板互斥（都挤在右栏） */
+  function toggleReviewFromHeader() {
+    if (browserMax) return
+    setReviewOpen((v) => {
+      const next = !v
+      if (next) closeBrowserPanel()
+      return next
+    })
   }
 
   /** 放大/还原：进入放大时自动展开右下角的浮动聊天卡 */
@@ -1249,11 +1303,28 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserMaxSignal])
 
+  // 标题栏「代码审查」按钮：每 +1 开/关一次右侧审查面板
+  useEffect(() => {
+    if ((p.reviewToggleSignal ?? 0) > 0) toggleReviewFromHeader()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.reviewToggleSignal])
+
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
     p.onBrowserUi({ open: panelOpen, max: browserMax })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelOpen, browserMax])
+
+  // 向 App 上报代码审查面板开合（标题栏按钮据此显示高亮）
+  useEffect(() => {
+    p.onReviewUi?.({ open: reviewOpen })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewOpen])
+
+  // 切会话时收起审查面板回到新会话的初始状态
+  useEffect(() => {
+    setReviewOpen(false)
+  }, [p.sessionId])
 
   // 查标题栏槽位：DOM 提交后一定已存在（Titlebar 先于内容渲染）
   useEffect(() => {
@@ -2213,9 +2284,10 @@ export function ChatView(p: Props) {
                 value={p.project?.id}
                 onChange={p.onSwitchProject}
                 onPickDir={p.onPickDir}
+                access={p.access}
+                onAccess={p.onAccess}
               />
             )}
-            {/* 访问权限档位已移到 设置 → 通用（全局配置） */}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
                 <Terminal size={13} />
@@ -2252,6 +2324,8 @@ export function ChatView(p: Props) {
         </div>
       </div>
     </main>
+    {/* 右侧代码审查面板：列出本会话被 AI 改到的文件（+N/-M），点开可看差量或全文；与浏览器面板互斥 */}
+    {reviewOpen && <ReviewPanel projectPath={p.project?.path} files={reviewFiles} onClose={() => setReviewOpen(false)} />}
     {/* webview 挂上就不再卸载（AI 要一直能操作它），显不显示只看 visible */}
     {(panelOpen || panelBorn) && (
       <BrowserPanel
@@ -2281,6 +2355,124 @@ export function ChatView(p: Props) {
       </button>
     )}
     </div>
+  )
+}
+/** 右侧「代码审查」面板：列出本会话被 AI 改到的文件（+N/-M），点开可看该文件的差量或全文。
+ *  数据来自 ChatView 已按轮拉好的 diff 聚合；全文经主进程 workspaceRead 直接读磁盘。 */
+function ReviewPanel({ projectPath, files, onClose }: {
+  projectPath?: string
+  files: FileDiff[]
+  onClose: () => void
+}) {
+  const [sel, setSel] = useState<FileDiff | null>(null)
+  const [mode, setMode] = useState<'diff' | 'full'>('diff')
+  const [full, setFull] = useState('')
+  const [fullErr, setFullErr] = useState('')
+  const [loading, setLoading] = useState(false)
+  /** 右缘拖出的面板宽度（px）；null = 默认 40%（与浏览面板同判据） */
+  const [width, setWidth] = useState<number | null>(null)
+  const [dragShield, setDragShield] = useState(false)
+  const panelRef = useRef<HTMLElement | null>(null)
+
+  /** 拖右缘调宽：指针 capture 全程留在主文档，对话列保底 320px（与浏览面板同判据） */
+  function startResize(e: ReactPointerEvent) {
+    e.preventDefault()
+    setDragShield(true)
+    const panel = panelRef.current
+    const row = panel?.parentElement
+    if (!panel || !row) return
+    const x0 = e.clientX
+    const w0 = panel.offsetWidth
+    const move = (ev: PointerEvent) =>
+      setWidth(Math.min(Math.max(240, w0 + (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      setDragShield(false)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+
+  // 切文件/模式/项目时载入全文（仅「全文」模式需要）；file 可能是绝对路径，读盘必须用相对项目路径
+  useEffect(() => {
+    if (!sel || mode !== 'full' || !projectPath) return
+    setLoading(true)
+    setFullErr('')
+    setFull('')
+    window.qingniao
+      .workspaceRead(projectPath, relPath(sel.file, projectPath))
+      .then((r) => setFull(r.content))
+      .catch(() => setFullErr(t('读取失败（文件可能已删除或并非文本）')))
+      .finally(() => setLoading(false))
+  }, [sel, mode, projectPath])
+
+  return (
+    <aside
+      ref={panelRef}
+      className="review-panel"
+      style={width != null ? { width, maxWidth: 'none' } : undefined}
+    >
+      {dragShield && <div className="drag-shield" />}
+      <div className="rp-resizer" title={t('拖拽调整面板宽度')} onPointerDown={startResize} />
+      <div className="rp-head">
+        <span className="rp-title">
+          {t('代码审查')}
+          {files.length > 0 && <em className="rp-count" title={t('本会话改动的文件数')}>{files.length}</em>}
+        </span>
+        <button className="icon-btn" title={t('关闭')} onClick={onClose}><X size={14} /></button>
+      </div>
+      <div className="rp-list">
+        {files.length === 0 ? (
+          <div className="rp-empty">{t('本会话还没有文件改动')}</div>
+        ) : (
+          files.map((fd) => {
+            // 显示与读取都用**相对当前项目**的路径（diff 里可能是绝对路径，拼绝对值会读不到也对不上更不美观）
+            const rel = projectPath ? relPath(fd.file, projectPath) : fd.file
+            const open = !!sel && normPath(relPath(sel.file, projectPath ?? '')) === normPath(rel)
+            return (
+              <div key={normPath(rel)} className={'rp-file' + (open ? ' open' : '')}>
+                <button
+                  className="rp-file-row"
+                  title={rel}
+                  onClick={() => setSel(open ? null : fd)}
+                >
+                  <span className="rp-file-name">{rel}</span>
+                  <span className="rp-file-stat" title={t('新增 {a} 行 · 删除 {b} 行', { a: fd.additions, b: fd.deletions })}>
+                    {fd.status === 'added' && <span className="rp-status rp-add">{t('新增')}</span>}
+                    {fd.status === 'deleted' && <span className="rp-status rp-del">{t('删除')}</span>}
+                    {fd.additions > 0 && <span className="d-add">+{fd.additions}</span>}
+                    {fd.deletions > 0 && <span className="d-del">-{fd.deletions}</span>}
+                  </span>
+                </button>
+                {open && (
+                  <div className="rp-body">
+                    <div className="rp-tabs">
+                      <button className={mode === 'diff' ? 'on' : ''} onClick={() => setMode('diff')}>{t('差量')}</button>
+                      <button className={mode === 'full' ? 'on' : ''} onClick={() => setMode('full')}>{t('全文')}</button>
+                    </div>
+                    <div className="rp-code">
+                      {mode === 'diff' ? (
+                        fd.patch
+                          ? <CodeBlock text={fd.patch} diff file={rel} />
+                          : <div className="rp-empty">{t('该文件没有可展示的差量，点「全文」查看')}</div>
+                      ) : loading ? (
+                        <div className="rp-empty">{t('读取中…')}</div>
+                      ) : fullErr ? (
+                        <div className="rp-empty">{fullErr}</div>
+                      ) : (
+                        <CodeBlock text={full} file={rel} />
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })
+        )}
+      </div>
+    </aside>
   )
 }
 /** 左侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，右缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */

@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, writeOpencodeConfig, type Settings } from './config.ts'
+import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, writeOpencodeConfig, type Settings } from './config.ts'
 import { fetchZenModels } from './zen.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
@@ -886,6 +886,11 @@ function asrMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'asr-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'asr-mcp.mjs')
 }
 
+/** 办公文件 MCP（office_* 读写 pdf/docx/pptx/xlsx）脚本位置（随安装包分发） */
+function officeMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'office-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'office-mcp.mjs')
+}
+
 ipcMain.handle('settings:get', () => loadSettings())
 
 /** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
@@ -1418,6 +1423,7 @@ app.whenReady().then(async () => {
   setTtsMcp({ path: ttsMcpPath() })
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })
+  setOfficeMcp({ path: officeMcpPath() })
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace

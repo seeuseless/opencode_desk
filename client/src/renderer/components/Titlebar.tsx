@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Maximize2, Minimize2, Minus, PanelRight, PanelRightClose, RefreshCw, Save, X } from 'lucide-react'
+import { FileDiff, Maximize2, Minimize2, Minus, PanelRight, PanelRightClose, RefreshCw, Save, X } from 'lucide-react'
 import { t } from '../i18n'
 import type { CodeControls } from './CodeWorkspace'
 
@@ -20,6 +20,8 @@ export function Titlebar({
   title,
   onToggleBrowser,
   onBrowserMax,
+  onToggleReview,
+  reviewOpen,
   browserOpen,
   browserMax,
   showBrowser,
@@ -29,6 +31,8 @@ export function Titlebar({
   title?: TitleInfo | null
   onToggleBrowser: () => void
   onBrowserMax: () => void
+  onToggleReview: () => void
+  reviewOpen: boolean
   browserOpen: boolean
   browserMax: boolean
   showBrowser: boolean
@@ -78,6 +82,16 @@ export function Titlebar({
       <span className="tb-browser-slot" />
       {/* 右段窗口按钮 */}
       <div className="tb-acts">
+        {/* 代码审查：列出本会话被 AI 改到的文件（+N/-M），点开看差量/全文；全屏浏览时收起 */}
+        {!browserMax && (
+          <button
+            className={'icon-btn tb-btn' + (reviewOpen ? ' active' : '')}
+            title={reviewOpen ? t('关闭代码审查') : t('代码审查')}
+            onClick={onToggleReview}
+          >
+            <FileDiff size={15} />
+          </button>
+        )}
         {/*
           全屏浏览时这一颗藏起来：面板已占满，关它等于退出全屏，交给右边那颗最大化/还原按钮。
           「AI 对话」开关也一并挪走了——它在地址栏右侧（那颗电源图标），

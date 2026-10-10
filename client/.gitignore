@@ -22,6 +22,9 @@ dist
 # computer-use-mcp 自包含副本（scripts/prepare-cu-mcp.mjs 生成，dist 前自动重建，不入库）
 /resources/mcp/cu-mcp/
 
+# 办公 MCP 的依赖本体（resources/mcp/package.json 钉版本；dev 需先 npm install --prefix resources/mcp）
+/resources/mcp/node_modules/
+
 # yarn 本地缓存
 /.yarn-cache/
 
