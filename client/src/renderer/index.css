@@ -382,9 +382,18 @@ html[data-bg-content='on'] .cbox {
 }
 .workspace-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .workspace-actions .icon-btn { width: 28px; height: 28px; }
-/* 头部「更新」入口：只在发现有新版/下载中/已就绪时出现，主色提醒（hot=有待办的新版） */
-.workspace-actions .upd-btn { color: var(--accent); }
-.workspace-actions .upd-btn:hover { color: var(--on-accent); background: var(--accent); }
+
+/* 工作区下的「更新」条（新版本/下载中/已就绪三态）：绿色醒目，整条可点进设置-关于更新。
+   统一浅绿底 + 绿字（--on-ok 未定义，不实底多色，低调但一眼可辨） */
+.upd-banner {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  width: 100%; height: 30px; margin: 6px 0; padding: 0 8px;
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+  color: var(--ok); font-size: 12.5px; font-weight: 600; cursor: pointer;
+}
+.upd-banner:hover { background: color-mix(in srgb, var(--ok) 30%, transparent); }
+.upd-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .projlist { flex: 1; overflow-y: auto; }
 
@@ -2174,6 +2183,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .lp-sub-item.on { color: var(--side-logo); }
 .lp-sub-item:disabled { opacity: 0.4; cursor: default; background: none; }
 .lp-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 左下角已登录项最右的积分：小号副色，金币图标在前 */
+.lp-points { flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--side-fg2); }
+.lp-points svg { color: var(--ok); }
 /* 主题三色预览：侧栏色 / 内容面色 / 主色，与设置页 theme-card 同一取色顺序 */
 .lp-swatch { display: inline-flex; border-radius: 4px; overflow: hidden; flex-shrink: 0; border: 1px solid var(--side-line); }
 .lp-swatch i { width: 7px; height: 13px; }

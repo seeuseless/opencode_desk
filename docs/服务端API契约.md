@@ -368,6 +368,7 @@ Query：`page`、`per_page`（默认 20，最大 100）
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/auth/send-code` | 发邮箱验证码（`purpose`: `register`/`login`；60 秒节流；邮件未配置回 422） |
+| GET | `/api/upgrade` | 桌面端检查新版本走这里：服务端在出口代拉 GitHub 最新发布（structure 与 GitHub release 对齐），规避国内 api.github.com 不通 |
 | POST | `/api/auth/login` | 登录，发 1 年 token。`password`（管理员兜底）或 `code`（邮箱验证码，主方式）二选一 |
 | POST | `/api/auth/register` | 注册：邮箱 + 验证码，不设密码，成功即发 token（自动登录）。`users` 空表 = 初始化窗口：免验证码、可带 `password` 设管理员兜底密码、首个账号自动 admin |
 | GET | `/api/auth/me` | 当前登录者 |

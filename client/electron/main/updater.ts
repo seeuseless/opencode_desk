@@ -5,7 +5,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSyn
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
-import { qingniaoHome } from './config.ts'
+import { qingniaoHome, platformBaseUrl } from './config.ts'
 import type { UpdateProgress, UpdateState } from './types.ts'
 
 /**
@@ -285,7 +285,9 @@ function pickAsset(assets: GhAsset[] | undefined, tag: string, repo: string): { 
 /**
  * 查最新版。
  *
- * 三条路径，按可靠性降级：
+ * 优先走**平台服务端的 /api/upgrade**（`platformBaseUrl` + 该路径）：国内 api.github.com 常被墙，
+ * 而自己部署的平台（Cloudflare/自定义域名）国内可直连，由服务端在出口代拉 GitHub 的发布信息。
+ * 平台没配置或拉不到时，回落三条 api.github.com 路径（按可靠性降级）：
  *  1. `GET /repos/{repo}/releases/latest` —— 拿到版本、说明、附件。**这是正常路径**；
  *  2. 失败（国内常被墙/限流）时回落到 `GET /releases`（同样在 API 域名下，多半一起不通）；
  *  3. 再不行就回 error，界面提示"检查失败，可点这里去发布页自己看"——**不编造版本号**。
@@ -303,36 +305,42 @@ export async function checkUpdate(): Promise<UpdateState> {
   const base = `https://api.github.com/repos/${meta.repo}`
   let rel: GhRelease | null = null
   let err = ''
-  try {
-    const r = await fetch(`${base}/releases/latest`, { headers: apiHeaders(), signal: timeout(8000) })
-    if (r.ok) {
-      rel = (await r.json()) as GhRelease
-    } else if (r.status === 404) {
-      // 404 有两种含义，界面上必须说清是哪一种，否则用户完全不知道下一步该干什么：
-      //  · 仓库**不是公开的**，或仓库名写错了 —— 匿名请求（应用没有、也不该有 GitHub 凭据）
-      //    看任何非公开仓库都会 404，跟"有没有发过 Release"无关；
-      //  · 仓库公开但一个 Release 都没建过（只打了 tag 不算，得在 GitHub 上建 Release）。
-      err = '读不到发布信息：仓库未公开（或地址不对），也可能还没建过任何 Release。'
-    } else if (r.status === 403 || r.status === 429) {
-      // 未登录的 GitHub API 限额很低（按出口 IP 算），共享网络下很容易撞上
-      err = `GitHub 接口限流（HTTP ${r.status}），稍后再试即可`
-    } else {
-      err = `GitHub 返回 HTTP ${r.status}`
-    }
-  } catch (e) {
-    err = e instanceof Error ? e.message : String(e)
-  }
-  // 没拿到（网络/限流/无正式发布）再试列表接口：列表里挑第一个非草稿、非预发布的
-  if (!rel && !err) {
+  // 1. 平台优先：国内打不到 api.github.com 时的主路径
+  rel = await fetchPlatformRelease()
+  if (!rel) {
     try {
-      const r = await fetch(`${base}/releases?per_page=10`, { headers: apiHeaders(), signal: timeout(8000) })
+      const r = await fetch(`${base}/releases/latest`, { headers: apiHeaders(), signal: timeout(8000) })
       if (r.ok) {
-        const arr = (await r.json()) as GhRelease[]
-        rel = arr.find((x) => !x.draft && !x.prerelease) ?? null
+        rel = (await r.json()) as GhRelease
+      } else if (r.status === 404) {
+        // 404 有两种含义，界面上必须说清是哪一种，否则用户完全不知道下一步该干什么：
+        //  · 仓库**不是公开的**，或仓库名写错了 —— 匿名请求（应用没有、也不该有 GitHub 凭据）
+        //    看任何非公开仓库都会 404，跟"有没有发过 Release"无关；
+        //  · 仓库公开但一个 Release 都没建过（只打了 tag 不算，得在 GitHub 上建 Release）。
+        err = '读不到发布信息：仓库未公开（或地址不对），也可能还没建过任何 Release。'
+      } else if (r.status === 403 || r.status === 429) {
+        // 未登录的 GitHub API 限额很低（按出口 IP 算），共享网络下很容易撞上
+        err = `GitHub 接口限流（HTTP ${r.status}），稍后再试即可`
+      } else {
+        err = `GitHub 返回 HTTP ${r.status}`
       }
-    } catch {
-      /* 保持 err 里的原始失败原因 */
+    } catch (e) {
+      err = e instanceof Error ? e.message : String(e)
     }
+    // 没拿到（网络/限流/无正式发布）再试列表接口：列表里挑第一个非草稿、非预发布的
+    if (!rel && !err) {
+      try {
+        const r = await fetch(`${base}/releases?per_page=10`, { headers: apiHeaders(), signal: timeout(8000) })
+        if (r.ok) {
+          const arr = (await r.json()) as GhRelease[]
+          rel = arr.find((x) => !x.draft && !x.prerelease) ?? null
+        }
+      } catch {
+        /* 保持 err 里的原始失败原因 */
+      }
+    }
+  } else {
+    err = ''
   }
 
   st.checking = false
@@ -383,6 +391,34 @@ export async function checkUpdate(): Promise<UpdateState> {
 }
 
 // ---------- 下载 ----------
+
+/**
+ * 从平台服务端拉最新发布信息（GET {platformBaseUrl}/api/upgrade）。
+ * 返回 null 表示平台没配置或拉取失败——调用方据此回落 api.github.com。
+ */
+async function fetchPlatformRelease(): Promise<GhRelease | null> {
+  const base = platformBaseUrl()
+  if (!base) return null
+  try {
+    const r = await fetch(`${base}/api/upgrade`, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(6000)
+    })
+    if (!r.ok) return null
+    const data = (await r.json()) as {
+      ok?: boolean
+      tag_name?: string
+      body?: string
+      html_url?: string
+      published_at?: string
+      assets?: { name?: string; browser_download_url?: string; size?: number }[]
+    }
+    if (!data?.ok || !data.tag_name) return null
+    return { ...data, draft: false, prerelease: false } as GhRelease
+  } catch {
+    return null
+  }
+}
 
 /** 下载目录：~/.qingniaoai/updates/（跟应用其它数据放一起，卸载/清数据时一并清掉） */
 function updateDir(): string {

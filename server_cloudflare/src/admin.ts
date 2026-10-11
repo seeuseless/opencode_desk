@@ -82,6 +82,39 @@ admin.post('/auth/login', async (c) => {
   return c.json({ token: plain, user: userPayload(u) })
 })
 
+/** GET /api/upgrade — 桌面端检查新版本时优先走这里：国内 api.github.com 常被墙，服务端在 CF 出口可达 GitHub，
+ *  代拉最新正式发布的概要（结构与 GitHub release 对齐，客户端复用它的版本比较与附件挑选逻辑）。 */
+admin.get('/upgrade', async (c) => {
+  try {
+    const r = await fetch('https://api.github.com/repos/seeuseless/opencode_desk/releases/latest', {
+      headers: { 'User-Agent': 'qingniao-server', Accept: 'application/vnd.github+json' },
+      signal: AbortSignal.timeout(8000)
+    })
+    if (!r.ok) return c.json({ ok: false, message: `GitHub ${r.status}` }, 502)
+    const g = (await r.json()) as {
+      tag_name?: string
+      body?: string
+      html_url?: string
+      published_at?: string
+      assets?: { name?: string; browser_download_url?: string; size?: number }[]
+    }
+    return c.json({
+      ok: true,
+      tag_name: g.tag_name ?? '',
+      body: g.body ?? '',
+      html_url: g.html_url ?? '',
+      published_at: g.published_at ?? '',
+      assets: (g.assets ?? []).map((a) => ({
+        name: a.name ?? '',
+        browser_download_url: a.browser_download_url ?? '',
+        size: Number(a.size) || 0
+      }))
+    })
+  } catch (e) {
+    return c.json({ ok: false, message: e instanceof Error ? e.message : String(e) }, 502)
+  }
+})
+
 /** POST /api/auth/send-code — 发邮箱验证码（公开接口）。purpose：register=注册 / login=验证码登录。 */
 admin.post('/auth/send-code', async (c) => {
   const req = await body<{ email?: string; purpose?: string }>(c)

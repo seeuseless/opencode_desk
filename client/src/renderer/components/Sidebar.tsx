@@ -7,6 +7,7 @@ import {
   ChevronRight,
   CircleUser,
   Code2,
+  Coins,
   FileCode2,
   FilePlus2,
   Folder,
@@ -32,10 +33,11 @@ import { Switch } from './Switch'
 import { LANGS, t } from '../i18n'
 import type { Lang } from '../i18n'
 import { THEMES } from '../theme'
+import { fmtNumber } from '../format'
 import logoUrl from '../assets/logo.png'
 import { isScheduleSession, fmtYmd } from '../oc'
 import type { ProjectSortMode } from '../App'
-import type { DeskStatus, PlatformStatus, Session } from '../oc'
+import type { DeskStatus, PlatformAccount, PlatformStatus, Session } from '../oc'
 import type { UpdateState } from '../../../electron/main/types'
 
 /** 项目的访问权限档位（定义在主进程 types.ts，这里 re-export 给渲染层各处引用） */
@@ -176,6 +178,8 @@ export function Sidebar(p: Props) {
   /** 左下角 LOGO 快捷面板开合；logoMenu 是当前展开二级的项，切换语言/主题/缩放后面板保持打开 */
   const [logoOpen, setLogoOpen] = useState(false)
   const [logoMenu, setLogoMenu] = useState<'lang' | 'theme' | 'zoom' | null>(null)
+  /** 左下角 LOGO 面板里已登录账号的积分快照（打开面板时拉一次） */
+  const [acct, setAcct] = useState<PlatformAccount | null>(null)
   const logoRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!logoOpen) return
@@ -185,6 +189,21 @@ export function Sidebar(p: Props) {
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
   }, [logoOpen])
+
+  // 打开面板时拉一次积分快照：左下角已登录项最右边要显示积分（管理员显示「不限」）
+  useEffect(() => {
+    if (!logoOpen || !p.platform?.loggedIn) return
+    let on = true
+    void window.qingniao
+      .platformAccount()
+      .then((a) => {
+        if (on) setAcct(a)
+      })
+      .catch(() => {})
+    return () => {
+      on = false
+    }
+  }, [logoOpen, p.platform?.loggedIn])
   const projectSort = useDragSort((from, to) => p.onReorderProjects(from, to))
 
   const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
@@ -376,15 +395,11 @@ export function Sidebar(p: Props) {
   return (
     <>
       <aside className="side" style={{ width: p.width, minWidth: p.width }}>
-        {/* 顶部工作区栏：名称固定，右侧动作依次是「更新」（仅发现有新版时出现）、打开文件夹、添加任务。 */}
+        {/* 顶部工作区栏：名称固定，右侧动作依次是「打开文件夹」「添加任务」。
+            新版本/下载中/已就绪时下方出现一条绿色「更新」条（整条可点，进设置-关于更新）。 */}
         <div className="side-workspace-head">
           <span>{t('工作区')}</span>
           <div className="workspace-actions">
-            {updBtn && (
-              <button className={'icon-btn upd-btn' + (updBtn.hot ? ' hot' : '')} title={updBtn.title} onClick={p.onOpenUpdate}>
-                {updBtn.icon}
-              </button>
-            )}
             <button className="icon-btn" title={t('打开文件夹')} onClick={p.onAddProject}>
               <FolderOpen size={15} />
             </button>
@@ -393,6 +408,12 @@ export function Sidebar(p: Props) {
             </button>
           </div>
         </div>
+        {updBtn && (
+          <button className={'upd-banner' + (updBtn.hot ? ' hot' : '')} title={updBtn.title} onClick={p.onOpenUpdate}>
+            {updBtn.icon}
+            <span>{updBtn.title}</span>
+          </button>
+        )}
         <div className="projlist">
           {p.projects.length === 0 && (
             <div className="proj-empty">
@@ -652,7 +673,7 @@ export function Sidebar(p: Props) {
                     <div className="lp-sep" />
                     {p.platform?.loggedIn ? (
                       <div
-                        className="lp-item"
+                        className="lp-item lp-acct"
                         onMouseEnter={() => setLogoMenu(null)}
                         title={t('点击查看账号、积分与用量')}
                         onClick={() => {
@@ -660,8 +681,17 @@ export function Sidebar(p: Props) {
                           p.onOpenAccount()
                         }}
                       >
-                        <CircleUser size={15} />
-                        <span className="lp-label">{p.platform.user?.name || t('已登录')}</span>
+                        <CircleUser size={15} className="shrink-0" />
+                        {/* 已登录：显示邮箱（主），最右边是积分（管理员不限） */}
+                        <span className="lp-grow min-w-0 truncate" title={p.platform.user?.email ?? ''}>
+                          {p.platform.user?.email || p.platform.user?.name || t('已登录')}
+                        </span>
+                        {acct ? (
+                          <span className="lp-points shrink-0">
+                            <Coins size={12} />
+                            {acct.exempt ? t('不限') : fmtNumber(acct.points)}
+                          </span>
+                        ) : null}
                       </div>
                     ) : (
                       <div
