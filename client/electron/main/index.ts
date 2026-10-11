@@ -578,6 +578,16 @@ ipcMain.handle('mobile:setProjects', (_e, list: { id: string; path: string; name
 // 平台地址统一由 config.platformBaseUrl() 解析（环境变量 > 设置 > 默认值），这里不再存第二份。
 // 每次平台状态变化都 apply 一次中转通道：登录了要注册设备、退出了要停通道。
 ipcMain.handle('platform:get', () => platform.status())
+// 实时探测:左下角入口/设置页打开时调——平台通不通以这一刻为准(网络/服务可能刚变化),
+// 广播 platform:changed 让登录入口、账号页的积分等立即按最新可达性刷新
+ipcMain.handle('platform:probe', async () => {
+  const alive = await server.probe()
+  const st = platform.status()
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('platform:changed', st)
+  }
+  return alive
+})
 // 服务端活着没活：设置页的「远程服务」开关要根据它决定能不能操作（health 不通时操作了也是空的）
 ipcMain.handle('server:alive', async () => server.probe())
 ipcMain.handle('platform:login', () => platform.openLogin())
@@ -587,11 +597,17 @@ ipcMain.handle('platform:logout', async () => {
 
   return st
 })
-ipcMain.handle('platform:setBaseUrl', (_e, url: string) => {
+ipcMain.handle('platform:setBaseUrl', async (_e, url: string) => {
   const st = platform.setBaseUrl(String(url ?? ''))
-  relay.apply()
+  // 新地址立即重接：探测、拨远程开关、刷新中转通道，**不用重启应用**；
+  // 完成后广播一次状态——左下角登录入口、账号页、关于页的「远程 URL」立即反映新平台。
+  await server.reattach()
+  const fresh = platform.status()
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed()) w.webContents.send('platform:changed', fresh)
+  }
 
-  return st
+  return fresh
 })
 // 拿授权码换 token（手动粘贴那条路；协议回调走 platform.handleCallback）
 ipcMain.handle('platform:code', async (_e, code: string) => {

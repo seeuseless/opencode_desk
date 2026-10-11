@@ -446,6 +446,15 @@ export function SettingsView(p: Props) {
     if (!remote && REMOTE_TABS.includes(tab)) setTab('general')
   }, [remote, tab, setTab])
 
+  // 打开设置、或切到依赖平台的页（账号/关于）时实时探一次平台可达性：
+  // 通不通以这一刻为准，广播后登录入口、账号页的积分立即按最新状态刷新（不用重启）
+  useEffect(() => {
+    void window.qingniao.platformProbe().catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (tab === 'account' || tab === 'about') void window.qingniao.platformProbe().catch(() => {})
+  }, [tab])
+
   /**
    * 外部请求的定位：只在 tick 变化时跑一次（不进依赖，否则用户手动切页会被立刻拉回来）。
    *
@@ -1354,7 +1363,7 @@ export function SettingsView(p: Props) {
 
         {tab === 'usage' && <UsagePanel />}
 
-        {tab === 'about' && <UpdatePanel />}
+        {tab === 'about' && <UpdatePanel baseUrl={p.platform?.baseUrl ?? ''} onSetBaseUrl={p.onSetBaseUrl} />}
 
         {tab === 'account' && (
           <AccountPanel

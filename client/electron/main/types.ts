@@ -296,9 +296,10 @@ export interface Settings {
   modelAuth: string[]
 }
 
-// 默认平台地址与服务端 DefaultPort（server/internal/config/config.go）对齐：35000 起的高位段，
-// 避开 80/3000/8080 这类常用端口；server 被占会顺延，客户端启动时按 server.ts 的发现逻辑跟随
-export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:35000'
+// 默认平台地址**留空**：仓库里不写死任何云端域名（workers.dev 子域含 Cloudflare 账号的注册信息，
+// 公开仓库会泄露手机号等）。本地部署不用填——空地址时启动自动扫本机 35000 段的服务；
+// 云端部署在「设置 → 关于 → 远程 URL」里填 Workers 地址，或打包时给环境变量 QINGNIAO_PLATFORM_URL。
+export const DEFAULT_PLATFORM_URL = ''
 
 export const DEFAULT_SETTINGS: Settings = {
   providers: [],

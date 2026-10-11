@@ -1002,6 +1002,13 @@ export default function App() {
           platformBusy={platformBusy}
           onLogin={() => void platformAction(() => window.qingniao.platformLogin())}
           onOpenAccount={() => openSettingsAt('account')}
+          lang={lang}
+          onLang={changeLang}
+          theme={theme}
+          onTheme={setTheme}
+          zoom={zoom}
+          onZoom={changeZoom}
+          onOpenUsage={() => openSettingsAt('usage')}
           /** 远程服务总开关（全局配置）：关掉后登录入口与手机图标一并消失 */
           remote={settings.remote}
           onOpenSchedules={() => setView('schedules')}

@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowUpCircle,
+  BarChart3,
+  Check,
   ChevronDown,
   ChevronRight,
   CircleUser,
@@ -10,21 +12,27 @@ import {
   Folder,
   FolderPlus,
   FolderOpen,
+  Languages,
   LoaderCircle,
   ListTodo,
   LogIn,
   MessageSquarePlus,
+  Palette,
   RefreshCw,
   Rocket,
   Settings,
   Smartphone,
   Timer,
-  Trash2
+  Trash2,
+  ZoomIn
 } from 'lucide-react'
 import { Modal } from './Modal'
 import { useDragSort } from './useDragSort'
 import { Switch } from './Switch'
-import { t } from '../i18n'
+import { LANGS, t } from '../i18n'
+import type { Lang } from '../i18n'
+import { THEMES } from '../theme'
+import logoUrl from '../assets/logo.png'
 import { isScheduleSession, fmtYmd } from '../oc'
 import type { ProjectSortMode } from '../App'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
@@ -118,6 +126,17 @@ interface Props {
   onLogin: () => void
   /** 已登录时点它 → 进设置页的「账号」（账号信息 / 积分 / 流水 / 退出） */
   onOpenAccount: () => void
+  /** 当前界面语言（LOGO 快捷面板里切换，与设置-通用同源） */
+  lang: Lang
+  onLang: (l: Lang) => void
+  /** 当前主题 id：快捷面板只列内置主题快速切换，自定义配色仍去设置页 */
+  theme: string
+  onTheme: (id: string) => void
+  /** 界面缩放系数与调整入口（与设置-通用共用 changeZoom 的钳制） */
+  zoom: number
+  onZoom: (v: number) => void
+  /** 打开设置页的「使用量」 */
+  onOpenUsage: () => void
   /**
    * 全局是否启用「远程服务」。
    * 关掉时底下两个入口（登录/账号、手机）整块不渲染——它们全依赖平台接口，
@@ -154,6 +173,18 @@ export function Sidebar(p: Props) {
   /** 「新建文件夹」命名输入弹窗（目标是所在目录） */
   const [newDirAsk, setNewDirAsk] = useState<{ proj: Project; parent: string } | null>(null)
   const [delNodeBusy, setDelNodeBusy] = useState(false)
+  /** 左下角 LOGO 快捷面板开合；logoMenu 是当前展开二级的项，切换语言/主题/缩放后面板保持打开 */
+  const [logoOpen, setLogoOpen] = useState(false)
+  const [logoMenu, setLogoMenu] = useState<'lang' | 'theme' | 'zoom' | null>(null)
+  const logoRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!logoOpen) return
+    const onDown = (e: PointerEvent) => {
+      if (logoRef.current && !logoRef.current.contains(e.target as Node)) setLogoOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [logoOpen])
   const projectSort = useDragSort((from, to) => p.onReorderProjects(from, to))
 
   const treeKey = (projectPath: string, dirPath: string): string => `${projectPath}\0${dirPath}`
@@ -500,30 +531,160 @@ export function Sidebar(p: Props) {
           })}
         </div>
 
-        {/* 底栏：账号入口与功能图标同一行靠右。远程服务关掉时账号入口与手机图标都不渲染。 */}
+        {/* 底栏：左下角 LOGO 常驻（点开快捷面板），功能图标同一行靠右。
+            登录/账号收进 LOGO 面板，远程服务关掉时面板里不显示（接口不通，登录没意义）。 */}
         <div className="side-foot">
-          {p.remote && (p.platform?.loggedIn ? (
+          <div className="logo-wrap" ref={logoRef}>
             <button
               type="button"
-              className="foot-user on"
-              title={`${p.platform.user?.name ?? t('已登录')}${p.platform.user?.email ? ' · ' + p.platform.user.email : ''}\n${t('点击查看账号、积分与用量')}`}
-              onClick={p.onOpenAccount}
+              className={'foot-btn foot-logo' + (logoOpen ? ' on' : '')}
+              title={t('快捷设置')}
+              onClick={() => {
+                setLogoOpen((v) => !v)
+                setLogoMenu(null)
+                // 点开面板顺路实时探一次平台可达性:通了左下角登录入口/账号数据立即按最新状态刷新
+                void window.qingniao.platformProbe().catch(() => {})
+              }}
             >
-              <CircleUser size={15} />
-              <span className="fu-name">{p.platform.user?.name || t('已登录')}</span>
+              <img src={logoUrl} alt="QingNiao" draggable={false} />
             </button>
-          ) : (
-            <button
-              type="button"
-              className="foot-user login"
-              title={p.platform?.error ? t('上次登录没成功：') + p.platform.error : t('登录平台账号后即可使用内置模型')}
-              disabled={p.platformBusy}
-              onClick={p.onLogin}
-            >
-              {p.platformBusy ? <LoaderCircle size={15} className="spin" /> : <LogIn size={15} />}
-              <span className="fu-name">{t('登录')}</span>
-            </button>
-          ))}
+            {logoOpen && (
+              <div className="logo-pop">
+                <div className="logo-pop-inner">
+                {/* 二级挂在一级行右侧，hover 切换；点选语言/主题/缩放只生效不关面板，点面板外才收起 */}
+                <div
+                  className={'lp-item' + (logoMenu === 'lang' ? ' open' : '')}
+                  onMouseEnter={() => setLogoMenu('lang')}
+                  onClick={() => setLogoMenu('lang')}
+                >
+                  <Languages size={15} />
+                  <span className="lp-label">{t('界面语言')}</span>
+                  <span className="lp-val">{LANGS.find((l) => l.id === p.lang)?.label}</span>
+                  <ChevronRight size={13} className="lp-arrow" />
+                  {logoMenu === 'lang' && (
+                    <div className="lp-sub">
+                      <div className="lp-sub-inner">
+                        {LANGS.map((l) => (
+                          <button
+                            key={l.id}
+                            type="button"
+                            className={'lp-sub-item' + (p.lang === l.id ? ' on' : '')}
+                            onClick={() => p.onLang(l.id)}
+                          >
+                            <span className="lp-grow">{l.label}</span>
+                            {p.lang === l.id && <Check size={13} strokeWidth={2.5} />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className={'lp-item' + (logoMenu === 'theme' ? ' open' : '')}
+                  onMouseEnter={() => setLogoMenu('theme')}
+                  onClick={() => setLogoMenu('theme')}
+                >
+                  <Palette size={15} />
+                  <span className="lp-label">{t('界面主题')}</span>
+                  <span className="lp-val">{t(THEMES.find((x) => x.id === p.theme)?.name ?? '自定义')}</span>
+                  <ChevronRight size={13} className="lp-arrow" />
+                  {logoMenu === 'theme' && (
+                    <div className="lp-sub">
+                      <div className="lp-sub-inner lp-themes">
+                        {THEMES.map((th) => (
+                          <button
+                            key={th.id}
+                            type="button"
+                            className={'lp-sub-item' + (p.theme === th.id ? ' on' : '')}
+                            onClick={() => p.onTheme(th.id)}
+                          >
+                            <span className="lp-swatch">
+                              <i style={{ background: th.swatches[0] }} />
+                              <i style={{ background: th.swatches[2] }} />
+                              <i style={{ background: th.swatches[1] }} />
+                            </span>
+                            <span className="lp-grow">{t(th.name)}</span>
+                            {p.theme === th.id && <Check size={13} strokeWidth={2.5} />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className={'lp-item' + (logoMenu === 'zoom' ? ' open' : '')}
+                  onMouseEnter={() => setLogoMenu('zoom')}
+                  onClick={() => setLogoMenu('zoom')}
+                >
+                  <ZoomIn size={15} />
+                  <span className="lp-label">{t('界面缩放')}</span>
+                  <span className="lp-val">{Math.round(p.zoom * 100)}%</span>
+                  <ChevronRight size={13} className="lp-arrow" />
+                  {logoMenu === 'zoom' && (
+                    <div className="lp-sub">
+                      <div className="lp-sub-inner">
+                        <button type="button" className="lp-sub-item" disabled={p.zoom >= 2} onClick={() => p.onZoom(p.zoom + 0.1)}>
+                          {t('放大')}
+                        </button>
+                        <button type="button" className="lp-sub-item" disabled={p.zoom <= 0.7} onClick={() => p.onZoom(p.zoom - 0.1)}>
+                          {t('缩小')}
+                        </button>
+                        <button type="button" className="lp-sub-item" disabled={p.zoom === 1} onClick={() => p.onZoom(1)}>
+                          {t('恢复默认')}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="lp-item"
+                  onMouseEnter={() => setLogoMenu(null)}
+                  onClick={() => {
+                    setLogoOpen(false)
+                    p.onOpenUsage()
+                  }}
+                >
+                  <BarChart3 size={15} />
+                  <span className="lp-label">{t('使用量')}</span>
+                </div>
+                {p.remote && (
+                  <>
+                    <div className="lp-sep" />
+                    {p.platform?.loggedIn ? (
+                      <div
+                        className="lp-item"
+                        onMouseEnter={() => setLogoMenu(null)}
+                        title={t('点击查看账号、积分与用量')}
+                        onClick={() => {
+                          setLogoOpen(false)
+                          p.onOpenAccount()
+                        }}
+                      >
+                        <CircleUser size={15} />
+                        <span className="lp-label">{p.platform.user?.name || t('已登录')}</span>
+                      </div>
+                    ) : (
+                      <div
+                        className={'lp-item lp-login' + (p.platformBusy ? ' busy' : '')}
+                        onMouseEnter={() => setLogoMenu(null)}
+                        title={p.platform?.error ? t('上次登录没成功：') + p.platform.error : t('登录平台账号后即可使用内置模型')}
+                        onClick={() => {
+                          if (!p.platformBusy) {
+                            setLogoOpen(false)
+                            p.onLogin()
+                          }
+                        }}
+                      >
+                        {p.platformBusy ? <LoaderCircle size={15} className="spin" /> : <LogIn size={15} />}
+                        <span className="lp-label">{t('登录')}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+                </div>
+              </div>
+            )}
+          </div>
           <div
             className={'foot-btn' + (p.codeMode ? ' on' : '')}
             title={p.codeMode ? t('关闭代码模式') : t('开启代码模式')}

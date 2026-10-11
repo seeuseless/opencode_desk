@@ -68,6 +68,10 @@ export function AccountPanel(p: Props) {
     void load()
   }, [load])
 
+  // 平台状态广播（左下角/设置页的实时探测、保存远程地址都会推）后重拉:
+  // 平台「从不通变通」的瞬间，账号与积分不用切页就自动出现
+  useEffect(() => window.qingniao.onPlatformChanged(() => { void load() }), [load])
+
   /** 切标签：页码一并归零，免得从第 5 页的流水跳到只有 1 页的消耗明细时是空的 */
   function switchTab(next: 'logs' | 'records'): void {
     if (next === tab) return

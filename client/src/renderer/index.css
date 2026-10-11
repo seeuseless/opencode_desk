@@ -467,6 +467,9 @@ html[data-bg-content='on'] .cbox {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 8px; cursor: pointer;
   color: var(--side-fg2); flex-shrink: 0;
+  /* 全局 button reset 只重置了字体:Chromium 按钮默认的边框/底色在这里清掉,
+     否则 LOGO 这种图片按钮会一直带着一圈系统边框 */
+  border: none; background: transparent;
 }
 .foot-btn:hover { background: var(--side-hover); color: var(--side-fg); }
 .foot-btn.on { background: var(--side-hover); color: var(--side-fg); }
@@ -2128,21 +2131,52 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 
 
 
-/* ================= 左栏底栏：账号入口 ================= */
-/* 底栏是 flex-end（图标靠右），账号按钮用 margin-right:auto 顶到最左，
-   这样「登录/账号」在左、设置与手机在右，中间自然留白 */
-.foot-user {
-  display: inline-flex; align-items: center; gap: 6px; margin-right: auto;
-  max-width: 118px; padding: 5px 9px; border-radius: 8px;
-  background: none; border: none; color: var(--side-fg2); font-size: 12.5px;
+/* ================= 左栏底栏：LOGO 快捷面板 ================= */
+/* LOGO 常驻最左，点开向上弹面板（语言/主题/缩放/使用量/登录）；点面板外收起，
+   切换语言/主题/缩放只生效不关面板（快速对比着换） */
+.logo-wrap { position: relative; margin-right: auto; }
+/* LOGO 是裸图：不套底色不描边（hover/展开也不出框），点击态只靠光标表达 */
+.foot-logo:hover, .foot-logo.on { background: none; }
+/* LOGO 是纯图像入口：点击后浏览器默认的 focus 描边在它身上像一圈边框，去掉 */
+.foot-logo:focus, .foot-logo:focus-visible { outline: none; }
+.foot-logo img { width: 20px; height: 20px; border-radius: 5px; display: block; }
+.logo-pop { position: absolute; left: 0; bottom: calc(100% + 8px); width: 226px; z-index: 90; }
+.logo-pop-inner { padding: 5px; border-radius: 12px; background: var(--side-bg); border: 1px solid var(--side-line); box-shadow: 0 14px 34px var(--shadow); }
+.lp-item {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px; border-radius: 8px;
+  font-size: 12.5px; color: var(--side-fg); cursor: pointer;
 }
-.foot-user:hover { background: var(--side-hover); color: var(--side-fg); }
-.foot-user:disabled { opacity: 0.6; }
-.foot-user .fu-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.foot-user.on { color: var(--side-fg); }
-/* 未登录时是「行动号召」，用主色点一下，别淹没在灰底里 */
-.foot-user.login { color: var(--side-logo); font-weight: 600; }
-:root[data-theme='light'] .foot-user:hover { background: rgba(0, 0, 0, 0.045); }
+.lp-item:hover, .lp-item.open { background: var(--side-hover); }
+.lp-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-val { font-size: 11px; color: var(--side-fg2); flex-shrink: 0; }
+.lp-arrow { color: var(--side-fg2); flex-shrink: 0; }
+/* 未登录的「登录」是行动号召，用主色点一下（同旧 foot-user.login） */
+.lp-item.lp-login { color: var(--side-logo); font-weight: 600; }
+.lp-sep { height: 1px; margin: 4px 8px; background: var(--side-line); }
+/* 二级贴一级行右侧展开：6px 间隙做进容器 padding（鼠标穿过不丢 hover），列表本体套 inner；
+   底边对齐一级行、整体向上长，避免最底下一行（缩放）的子菜单伸出屏幕底 */
+.lp-sub { position: absolute; left: 100%; bottom: -5px; padding-left: 6px; }
+.lp-sub-inner {
+  min-width: 138px; padding: 5px; border-radius: 10px;
+  background: var(--side-bg); border: 1px solid var(--side-line);
+  box-shadow: 0 14px 34px var(--shadow);
+}
+/* 14 套主题竖排太长，限高滚动 */
+.lp-themes { max-height: 336px; overflow-y: auto; }
+.lp-sub-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 9px; border-radius: 7px; border: none; background: none;
+  font-size: 12.5px; color: var(--side-fg); cursor: pointer; text-align: left;
+}
+.lp-sub-item:hover { background: var(--side-hover); }
+.lp-sub-item.on { color: var(--side-logo); }
+.lp-sub-item:disabled { opacity: 0.4; cursor: default; background: none; }
+.lp-grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 主题三色预览：侧栏色 / 内容面色 / 主色，与设置页 theme-card 同一取色顺序 */
+.lp-swatch { display: inline-flex; border-radius: 4px; overflow: hidden; flex-shrink: 0; border: 1px solid var(--side-line); }
+.lp-swatch i { width: 7px; height: 13px; }
 
 /* ================= 设置 · 使用量 ================= */
 .usage-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 4px 0 16px; }
@@ -2290,6 +2324,28 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 }
 .ud-ver { display: flex; flex-direction: column; gap: 3px; }
 .ud-lab { font-size: 11.5px; color: var(--fg2); }
+/* 远程 URL 配置块：输入框撑满剩余宽度，保存按钮贴右 */
+.ud-remote { display: flex; align-items: flex-end; gap: 12px; width: 100%; }
+.ud-remote-lab { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+/* URL 输入框：等宽字体 + 左侧地球图标；控件观感与 .mbody input 同款（bg3 底、10px 圆角、
+   聚焦 2px 主色环），地址这类机器文本用等宽字形才不像手打文字 */
+.ud-remote-field { position: relative; display: block; }
+.ud-remote-field svg {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+  color: var(--fg2); pointer-events: none;
+}
+.ud-remote-field input {
+  width: 100%; box-sizing: border-box;
+  background: var(--bg3); color: var(--fg); border: none; outline: none;
+  border-radius: 10px; padding: 9px 11px 9px 31px;
+  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
+  font-size: 12.5px; letter-spacing: 0.2px;
+  transition: box-shadow 0.15s ease;
+}
+.ud-remote-field input::placeholder { color: var(--fg2); opacity: 0.55; }
+.ud-remote-field input:focus { box-shadow: 0 0 0 2px var(--accent); }
+.ud-remote-field input:disabled { opacity: 0.55; }
+.ud-remote .primary { flex-shrink: 0; padding: 9px 16px; font-size: 12.5px; border-radius: 10px; }
 .ud-num {
   font-size: 19px; font-weight: 600; line-height: 1.1;
   font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;

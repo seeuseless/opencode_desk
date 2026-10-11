@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, FileText, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
+import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, FileText, Globe, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { t } from '../i18n'
 import { LICENSE_SECTIONS, LICENSE_TITLE } from '../lib/license'
@@ -21,13 +21,16 @@ const IS_WIN = /Windows/.test(navigator.userAgent)
  * 下载完切走再回来就会对不上（比如显示"可以安装"但主进程那边其实已作废）。
  * 所以这里只有一份 state，初始 getUpdateState() 拉一次，之后由 onUpdateChanged 覆盖。
  */
-export function UpdatePanel() {
+export function UpdatePanel({ baseUrl, onSetBaseUrl }: { baseUrl: string; onSetBaseUrl: (url: string) => void }) {
   const [st, setSt] = useState<UpdateState | null>(null)
   const [busy, setBusy] = useState(false)
   /** 本地提示（下载失败、取消、安装包已被删这类一次性结果），成功/失败都在这条显示 */
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
   /** 条款弹窗开着没（条款正文不常看，占位在页面上会挤走真正要操作的更新按钮） */
   const [showLicense, setShowLicense] = useState(false)
+  /** 远程 URL 编辑态：与 props 同步（外部变更回填），保存走 onSetBaseUrl（地址变了会清登录态） */
+  const [url, setUrl] = useState(baseUrl)
+  useEffect(() => setUrl(baseUrl), [baseUrl])
 
   const apply = useCallback((s: UpdateState) => {
     setSt(s)
@@ -86,6 +89,40 @@ export function UpdatePanel() {
       <p className="sec-tip">
         {t('青鸟 QingNiao —— 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）。')}
       </p>
+
+      {/* 远程 URL：平台数据源（账号/积分/内置模型）的地址，默认官方云服务。
+          改地址 = 换平台，主进程会清掉旧平台的登录态（见 platform.setBaseUrl），需重新登录。 */}
+        <div className="ud-card">
+          <div className="ud-remote">
+            <label className="ud-remote-lab">
+              <span className="ud-lab">{t('远程 URL')}</span>
+              <span className="ud-remote-field">
+                <Globe size={13} />
+                <input
+                  value={url}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="https://qingniao-server.<子域>.workers.dev"
+                  onChange={(e) => setUrl(e.target.value)}
+                />
+              </span>
+            </label>
+            <button
+              className="primary sm"
+              disabled={busy || !url.trim() || url.trim() === baseUrl}
+              onClick={() =>
+                void run(() => Promise.resolve(onSetBaseUrl(url.trim())), () =>
+                  setMsg({ kind: 'ok', text: t('远程地址已保存。若更换了平台，需重新登录平台账号。') })
+                )
+              }
+            >
+              {t('保存')}
+            </button>
+          </div>
+          <span className="ud-hint">
+            {t('平台数据源（账号 / 积分 / 内置模型）的地址。默认官方云服务；自建或本机部署改这里，如 http://127.0.0.1:35000。')}
+          </span>
+        </div>
 
       {/* 版本卡片：常态只有"当前版本 + 检查更新"。
           没有新版本时不摆"最新版本：已是最新"这类空栏——用户点检查更新本来就是为了有新版可用，

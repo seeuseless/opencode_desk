@@ -202,6 +202,8 @@ const api = {
   },
   /** 平台（青鸟服务端）状态：地址、登录用户、可用模型数（左下角登录入口用） */
   platformStatus: (): Promise<PlatformStatus> => ipcRenderer.invoke('platform:get'),
+  /** 实时探测平台可达性（health 请求）并广播状态刷新：左下角入口/设置页打开时调 */
+  platformProbe: (): Promise<boolean> => ipcRenderer.invoke('platform:probe'),
   /** 服务端活着没活（探 /api/health）。设置页的远程服务开关要根据它决定能不能操作 */
   serverAlive: (): Promise<boolean> => ipcRenderer.invoke('server:alive'),
   /** 打开平台的青鸟登录页（系统浏览器），登录成功后靠 qingniao:// 回调本机 */
