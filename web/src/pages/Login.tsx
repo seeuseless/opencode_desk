@@ -18,9 +18,9 @@ interface LoginResult {
 /**
  * 平台登录页：登录 / 注册两个页签。
  *
- * 登录有两种方式：邮箱验证码（邮件配置后的主方式，member 没有密码只能用它）
- * 和账号密码（管理员兜底——邮件还没配时进后台配 SMTP 的唯一途径）。
- * 默认方式跟着服务端「邮件是否已配置」走，配置好后登录就全部用验证码。
+ * 登录方式跟随服务端「邮件是否已配置」：
+ * - 邮件已配置 → 只给邮箱验证码登录（不提供密码入口）；
+ * - 邮件未配置 → 默认账号密码（管理员进后台配 SMTP 的唯一途径），可切验证码。
  *
  * 注册 = 邮箱 + 验证码，不设密码；建出来的都是 member（第一个注册的自动 admin），
  * member 进不了后台，注册成功提示去桌面端登录。
@@ -39,10 +39,13 @@ export default function Login() {
   // 「邮件已配置 → 默认验证码登录」只在设置首次到达时应用一次，不覆盖用户手动切换
   const wayApplied = useRef(false)
 
+  // 邮件已配置 → 恒定验证码登录（不提供密码入口）；未配置 → 默认密码，可手动切验证码（一次性应用）
   useEffect(() => {
-    if (!wayApplied.current && typeof settings.mail_configured === 'boolean') {
+    if (settings.mail_configured === true) {
+      setWay('code')
+    } else if (typeof settings.mail_configured === 'boolean' && !wayApplied.current) {
       wayApplied.current = true
-      setWay(settings.mail_configured ? 'code' : 'password')
+      setWay('password')
     }
   }, [settings.mail_configured])
 
@@ -173,7 +176,7 @@ export default function Login() {
                 />
               </div>
             )}
-            {!isRegister && (
+            {!isRegister && settings.mail_configured !== true && (
               <button
                 type="button"
                 className="text-muted-foreground flex items-center justify-center gap-1 text-xs underline"
