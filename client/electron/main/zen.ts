@@ -20,6 +20,8 @@ const ZEN_KERNEL_PROVIDER_ID = 'opencode'
 interface KernelModel {
   id?: string
   name?: string
+  /** SDK 类型标记：@ai-sdk/openai-compatible = OpenAI /chat/completions 兼容；其余（@ai-sdk/openai 走原生 /responses 等）桌面端不支持 */
+  api?: { url?: string; npm?: string }
   cost?: { input?: number; output?: number; cache?: { read?: number; write?: number } }
   limit?: { context?: number; output?: number }
   capabilities?: {
@@ -29,6 +31,9 @@ interface KernelModel {
     input?: { text?: boolean; image?: boolean; audio?: boolean; video?: boolean; pdf?: boolean }
   }
 }
+
+/** 只收 OpenAI /chat/completions 兼容的那一类：其余 SDK 通道（原生 /responses 等）桌面端不认 */
+const OPENAI_COMPAT_NPM = '@ai-sdk/openai-compatible'
 
 /**
  * 内核 capabilities → 我们的输入模态白名单（INPUT_OPTIONS）。
@@ -74,6 +79,10 @@ export function parseZenModels(payload: unknown): ModelCfg[] {
   const out: ModelCfg[] = []
   for (const raw of Object.values(models)) {
     if (!raw?.id || !isFree(raw)) continue
+    // 只要 OpenAI /chat/completions 兼容的（2026-10-11 实测：11 个免费模型里 10 个是
+    // openai-compatible、muse-spark-1.3-contributor-free 是 @ai-sdk/openai 原生通道，调用报错）；
+    // api 字段缺失的同样滤掉——不知道走什么通道的不收，宁可少显示
+    if (raw.api?.npm !== OPENAI_COMPAT_NPM) continue
     const input = toModalities(raw)
     // 无文本输入的模型（纯图像/音频类）不能当对话模型，滤掉
     if (!input.length) continue

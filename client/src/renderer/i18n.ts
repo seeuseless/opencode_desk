@@ -267,10 +267,6 @@ const TW_COMPONENTS: Record<string, string> = {
   折扣: '折扣',
   opencode限免: 'opencode 限免',
   刷新: '重新整理',
-  'OpenCode 官方提供的一批免密钥模型，不要填任何 API Key 即可使用。':
-    'OpenCode 官方提供的一批免密鑰模型，不要填任何 API Key 即可使用。',
-  '这些模型是限时免费的，官方可能随时下线；清单由内核自带，启动时自动同步一次。':
-    '這些模型是限時免費的，官方可能隨時下線；清單由內核自帶，啟動時自動同步一次。',
   选择项目: '選擇專案',
   切换项目文件夹: '切換專案資料夾',
   搜索文件夹: '搜尋資料夾',
@@ -986,10 +982,6 @@ const EN_COMPONENTS: Record<string, string> = {
   限免: 'Free',
   折扣: 'Sale',
   opencode限免: 'OpenCode Free Tier',
-  'OpenCode 官方提供的一批免密钥模型，不要填任何 API Key 即可使用。':
-    'A set of keyless models provided by OpenCode — no API Key needed.',
-  '这些模型是限时免费的，官方可能随时下线；清单由内核自带，启动时自动同步一次。':
-    'These models are free for a limited time and may be retired at any time. The list ships with the kernel and syncs automatically at startup.',
   选择项目: 'Select project',
   切换项目文件夹: 'Switch project folder',
   搜索文件夹: 'Search folders',

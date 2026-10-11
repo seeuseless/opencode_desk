@@ -126,16 +126,22 @@ POST 同一端点   model=big-pickle（免费）, 无 Authorization
    `zenFree` 是「压根不用 Key、不过平台」。界面上两者都显示「限免」（用户视角都是这段时间不花钱），
    但字段仍要分开存——一个不经过平台计费也没有倍率，混成一个字段迟早在某个分支上判错。
 
-2. **免费模型随时会消失。** 测的时候 `exo-free` 已经 410 下线，但内核清单里还挂着——
+2. **只收 OpenAI /chat/completions 兼容的那一类（`api.npm` 白名单）。**
+   内核清单里每个模型带 `api.npm`：`@ai-sdk/openai-compatible` = 走 /chat/completions（桌面端唯一支持的通道）；
+   `@ai-sdk/openai` = OpenAI 原生 SDK（/responses 等通道，2026-10-11 实测 `muse-spark-1.3-contributor-free` 是这种，调用报错）。
+   `parseZenModels` 按 npm 白名单过滤，`api` 字段缺失的同样滤掉——不知道走什么通道的不收；
+   官方清单一变，下次同步（点开模型选择器）自动生效。
+
+3. **免费模型随时会消失。** 测的时候 `exo-free` 已经 410 下线，但内核清单里还挂着——
    说明这份清单不是实时健康的。真下线了会表现为调用报错，暂不做自动摘除。
 
-3. **同步失败时绝不清空已有清单。** `fetchZenModels` 拿不到就返回空数组，
+4. **同步失败时绝不清空已有清单。** `fetchZenModels` 拿不到就返回空数组，
    `zen:refresh` 见到空数组直接返回、**不落盘**，避免内核没起时把整个免费分组弄消失。
 
-4. **`vision` 不能从 capabilities 推。** 它是本机专用标记（挑「识图代看」目标用），
+5. **`vision` 不能从 capabilities 推。** 它是本机专用标记（挑「识图代看」目标用），
    内核不认这个词；只映射内核明确标 true 的 `text/image/video`。
 
-5. **`genRoleOf` 靠名字判生成角色。** 免费模型里有 `nemotron-3-ultra-free` 这类，
+6. **`genRoleOf` 靠名字判生成角色。** 免费模型里有 `nemotron-3-ultra-free` 这类，
    别名里带 flash/free 不会被误判成生成类；但万一官方加了个叫 `*-image-free` 的，
    就会被当成生图模型从对话菜单里滤掉。加模型时留意这条。
 

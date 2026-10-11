@@ -1145,11 +1145,6 @@ export function SettingsView(p: Props) {
                 <RefreshCw size={14} className={zenBusy ? 'spin' : ''} /> {t('刷新')}
               </button>
             </h3>
-            <p className="sec-tip">
-              {t('OpenCode 官方提供的一批免密钥模型，不要填任何 API Key 即可使用。')}
-              <br />
-              {t('这些模型是限时免费的，官方可能随时下线；清单由内核自带，启动时自动同步一次。')}
-            </p>
             <div className="plist">
               <div className="prow">
                 <div className="prow-main">

@@ -29,6 +29,7 @@
   --ok: #177a4a; --err: #c2404f; --run: #3b6ef5; --shadow: rgba(30, 40, 70, 0.12);
   --content: #f8f8f8;
   --side-bg: #ececec;             /* 侧栏压回窗体同灰（默认跟随 --bg2=#f5f5f5，与内容面拉不开层次） */
+  --side-fg2: #4b5563;            /* 侧栏次级文字加深：任务列表行默认用这个色，ECECEC 底上 #6b7280 对比不足 4:1 读着费劲 */
   --field-bg: #ffffff; --field-line: #DBDBDB;
   --ai: #f1f1f1;
   /* --bg3 提到 #f5f5f5 后与侧栏底色（--side-bg 跟随 --bg2）同色，行悬浮/选中就看不见了。
@@ -419,6 +420,9 @@ html[data-bg-content='on'] .cbox {
 }
 .sess:hover { background: var(--side-hover); color: var(--side-fg); }
 .sess.on { background: var(--side-hover); color: var(--side-fg); }
+/* 浅色下任务/会话列表行文字直接用主文字色（默认次级灰在 ECECEC 底上太浅读着费劲）；
+   行内时间 .sess-date 自带 opacity 0.65，跟随变深后仍能与标题拉开层次 */
+:root[data-theme='light'] .sess { color: var(--side-fg); }
 .code-file { gap: 7px; }
 .code-file-ico { flex: none; color: var(--side-fg2); }
 .code-list-empty { margin: 2px 0 2px 22px; padding: 7px 8px; color: var(--side-fg2); font-size: 12px; }
