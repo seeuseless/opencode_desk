@@ -989,6 +989,17 @@ setUpdateSink((s) => {
   if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('update:changed', s)
 })
 
+/**
+ * 启动后自动查一次更新，之后每 4 小时查一次（仅打包态；dev 版本号恒等于源码，没有"新版"可比）。
+ * 只做「发现」并把状态推给界面——侧栏「工作区」右侧的更新入口、设置→关于 都靠这条状态点亮；
+ * 下载与安装永远等用户在界面上点，绝不静默下载。
+ */
+if (app.isPackaged) {
+  const CHECK_MS = 4 * 60 * 60 * 1000
+  setTimeout(() => void checkUpdate(), 20_000) // 等窗口建好、网络栈就绪再查（checkUpdate 内部自带 8s 超时）
+  setInterval(() => void checkUpdate(), CHECK_MS)
+}
+
 ipcMain.handle(
   'modelauth:reply',
   (_e, req: { reqId: string; scope: 'once' | 'session' | 'always' | 'reject' }) => {

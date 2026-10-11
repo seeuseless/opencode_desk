@@ -1,4 +1,5 @@
 import { app, shell } from 'electron'
+import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -520,9 +521,15 @@ export function cancelDownload(): UpdateState {
 /**
  * 拉起安装包（用户点「立即安装」）。
  *
- * Windows 上跑 NSIS 安装包：它会自己接管——关掉旧版本、装新版本、重新启动应用。
- * 所以这里**先把应用退掉**再 spawn，否则文件占用会让覆盖安装失败（"文件正在使用"）。
- * 顺序上：先 spawn（此时安装器进程已独立于本进程），再 app.quit()。
+ * Windows 上跑 NSIS 安装包，走**静默原地升级**（参数是 electron-builder NSIS 模板原生支持的
+ * 三个标志，见 templates/nsis/installSection.nsh）：
+ *  · `/S` 无界面安装；
+ *  · `--updated` 走"升级"路径——安装目录沿用注册表里上一次的位置（multiUser.nsh 的
+ *    initMultiUser），并按 KeepShortcuts 保留桌面与开始菜单快捷方式（installUtil.nsh 的
+ *    setIsTryToKeepShortcuts），应用还在运行时自动等它退出、关不掉再收尾；
+ *  · `--force-run` 装完自动拉起新版本（installSection.nsh：assisted + silent 分支）。
+ * 所以一次静默安装 = 原地换文件 + 自动重启，**桌面图标、任务栏固定都不受影响**。
+ * 极少数环境 spawn 失败则回落打开安装向导，由用户手动下一步（向导同样默认原目录）。
  *
  * macOS 的 dmg 只是"挂载一个磁盘映像"，不能替你完成替换，所以那里是打开它让用户自己拖；
  * 界面文案会据此区分（update:install 的返回值里带 manual 标记）。
@@ -531,13 +538,22 @@ export function installUpdate(): { ok: boolean; manual?: boolean; error?: string
   const file = st.file
   if (!file || !existsSync(file)) return { ok: false, error: '安装包不存在或已被删除，请重新下载' }
   const manual = process.platform !== 'win32' // 非 Windows：交还给用户手动完成
-  try {
-    void shell.openPath(file)
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
-  }
-  if (!manual) {
-    // 给安装器一点时间真正起来（它是独立进程，但句柄传递有个瞬间），再退自己
+  if (manual) {
+    try {
+      void shell.openPath(file)
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  } else {
+    try {
+      spawn(file, ['/S', '--updated', '--force-run'], { detached: true, stdio: 'ignore' })
+        .on('error', () => void shell.openPath(file))
+        .unref()
+    } catch {
+      void shell.openPath(file)
+    }
+    // 给安装器一点时间真正起来（它是独立进程，但句柄传递有个瞬间），再退自己。
+    // 就算还没退完，安装器的 --updated 路径也会等应用退出，不会卡在"文件正在使用"。
     setTimeout(() => app.quit(), 300)
   }
   return { ok: true, manual }

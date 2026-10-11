@@ -9,6 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
+import type { UpdateState } from '../../electron/main/types'
 import { getLang, setLang, t, type Lang } from './i18n'
 import { load, save } from './store'
 import { CUSTOM_ID, THEMES, DEFAULT_THEME_BG, type ThemeBgCfg, type ThemeBgSlot, type ThemeBgMode } from './theme'
@@ -73,6 +74,11 @@ export default function App() {
   const [codeStyle, setCodeStyle] = useState<CodeStyle>(() => {
     const value = load<string>('qingniao.codeStyle', 'github')
     return CODE_STYLES.some((x) => x.id === value) ? value as CodeStyle : 'github'
+  })
+  /** 界面缩放系数（设置 → 通用 → 界面大小；Ctrl+= / Ctrl+- / Ctrl+0）：webFrame 整窗缩放，改一次存一次 */
+  const [zoom, setZoom] = useState<number>(() => {
+    const value = load<number>('qingniao.zoom', 1)
+    return typeof value === 'number' && value >= 0.7 && value <= 2 ? value : 1
   })
   const [view, setView] = useState<View>('chat')
   /** 标题栏左侧的会话标题（首条用户信息）：由 ChatView 上报，切走时它自己清空 */
@@ -150,6 +156,8 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   /** 外部请求的定位（带自增 tick，重复点同一个入口也能重新跳） */
   const [settingsReq, setSettingsReq] = useState<SettingsReq | null>(null)
+  /** 应用更新状态：主进程启动后自动检查 + 定期轮查，有新版时侧栏「工作区」右侧点亮更新入口 */
+  const [updateSt, setUpdateSt] = useState<UpdateState | null>(null)
   /** 平台登录态：左下角账号入口与账号页共用一份，登录/退出后由主进程推更新 */
   const [platformSt, setPlatformSt] = useState<PlatformStatus | null>(null)
   /** 登录/退出进行中（按钮转圈，避免重复点） */
@@ -259,17 +267,44 @@ export default function App() {
 
   useEffect(() => save('qingniao.codeMode', codeMode), [codeMode])
 
-  // Ctrl+N 新建任务：与左栏顶部「新建任务」同一动作（内置浏览器 webview 聚焦时收不到，回聊天区即可用）
+  // 快捷键：Ctrl+N 新建任务（当前正停在某个项目文件夹时，新任务就落在这个文件夹，
+  // 否则落内置「任务」目录）；Ctrl+= / Ctrl+- / Ctrl+0 界面缩放。
+  // 内置浏览器 webview 聚焦时键盘事件进不了本窗口，回聊天区即可用。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
+      if (!e.ctrlKey || e.altKey || e.metaKey) return
+      if (e.key === 'n' || e.key === 'N') {
+        if (e.shiftKey) return
         e.preventDefault()
-        newTask()
+        const cur = projects.find((x) => x.id === activeId)
+        if (cur && !cur.builtin && cur.id !== 'builtin') newSessionFor(cur.id, false)
+        else newTask()
+        return
+      }
+      if (e.key === '=' || e.key === '+') {
+        e.preventDefault()
+        changeZoom(zoom + 0.1)
+      } else if (e.key === '-') {
+        e.preventDefault()
+        changeZoom(zoom - 0.1)
+      } else if (e.key === '0') {
+        e.preventDefault()
+        changeZoom(1)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+
+  /** 改界面缩放：限制 70%~200%，按 0.1 步进取整（浮点直接累加会漂移出 0.30000000000000004） */
+  function changeZoom(value: number) {
+    setZoom(Math.round(Math.max(0.7, Math.min(2, value)) * 10) / 10)
+  }
+
+  useEffect(() => {
+    save('qingniao.zoom', zoom)
+    window.qingniao.zoomSet(zoom)
+  }, [zoom])
 
   useEffect(() => save('qingniao.codeFiles', codeFiles), [codeFiles])
 
@@ -303,6 +338,20 @@ export default function App() {
     observer.observe(pane)
     return () => observer.disconnect()
   }, [codeMode, view, activeId])
+
+  // 更新状态：初始拉一次快照，之后跟着主进程推送走（检查结果/下载进度/就绪）。
+  // 推送是全量快照，直接整体覆盖即可，不渲染层合增量。
+  useEffect(() => {
+    let alive = true
+    void window.qingniao.getUpdateState().then((s) => {
+      if (alive) setUpdateSt(s)
+    })
+    const off = window.qingniao.onUpdateChanged((s) => setUpdateSt(s))
+    return () => {
+      alive = false
+      off()
+    }
+  }, [])
 
   useEffect(() => {
     if (view !== 'settings' && view !== 'schedules') return
@@ -941,6 +990,8 @@ export default function App() {
           onDeleteSession={deleteSessionOf}
           onOpenSettings={() => openSettingsAt('general')}
           onOpenFolder={openFolder}
+          update={updateSt}
+          onOpenUpdate={() => openSettingsAt('about')}
           projectSortMode={projectSortMode}
           onReorderProjects={reorderProjects}
           mobile={mobile}
@@ -1102,6 +1153,8 @@ export default function App() {
               onCodeStyle={setCodeStyle}
                normalChatWidth={normalChatWidth}
                onNormalChatWidth={setNormalChatWidth}
+              zoom={zoom}
+              onZoom={changeZoom}
               projectSortMode={projectSortMode}
               onProjectSortMode={changeProjectSortMode}
               userAnchors={userAnchors}

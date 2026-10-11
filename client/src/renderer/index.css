@@ -382,6 +382,9 @@ html[data-bg-content='on'] .cbox {
 }
 .workspace-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .workspace-actions .icon-btn { width: 28px; height: 28px; }
+/* 头部「更新」入口：只在发现有新版/下载中/已就绪时出现，主色提醒（hot=有待办的新版） */
+.workspace-actions .upd-btn { color: var(--accent); }
+.workspace-actions .upd-btn:hover { color: var(--on-accent); background: var(--accent); }
 
 .projlist { flex: 1; overflow-y: auto; }
 

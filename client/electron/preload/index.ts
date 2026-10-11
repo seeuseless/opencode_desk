@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webFrame } from 'electron'
 import type {
   AccessLevel,
   DepItem,
@@ -254,6 +254,10 @@ const api = {
     return () => ipcRenderer.removeListener('update:changed', handler)
   },
   winMin: () => ipcRenderer.send('win:min'),
+  /** 界面缩放（设置 → 通用 → 界面大小；Ctrl+= / Ctrl+- / Ctrl+0）：整窗缩放，内置浏览器的网页内容不受影响 */
+  zoomSet: (factor: number): void => {
+    webFrame.setZoomFactor(factor)
+  },
   winMax: () => ipcRenderer.send('win:max'),
   winClose: () => ipcRenderer.send('win:close'),
   winIsMax: (): Promise<boolean> => ipcRenderer.invoke('win:isMax'),

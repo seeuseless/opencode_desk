@@ -30,9 +30,9 @@ export const MODEL_DEFAULTS = { context: 1_000_000, output: 128_000, input: ['te
 /** 单个模型的思考形态（用户在配置里为该模型自己选，替代旧的自动探测）。
  *  - 'off'：不支持思考，输入框思考选择器禁用；
  *  - 'toggle'：只有「关闭 / 开启」，思考默认开启；
- *  - 'low' | 'medium' | 'high'：固定档位，选择器给「低 / 中 / 高」，默认就是这一档。
+ *  - 'low' | 'medium' | 'high' | 'xhigh' | 'max'：固定档位，选择器给「低 / 中 / 高 / 超高 / 最大」，默认就是这一档。
  *  缺省（undefined）按 'toggle' 处理：思考默认开启，用户在「关 / 开」之间切。 */
-export type ThinkingMode = 'off' | 'toggle' | 'low' | 'medium' | 'high'
+export type ThinkingMode = 'off' | 'toggle' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /**
  * 模型的生成角色（设置里逐模型显式选）。

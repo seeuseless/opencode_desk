@@ -5,6 +5,9 @@ import { t } from '../i18n'
 import { LICENSE_SECTIONS, LICENSE_TITLE } from '../lib/license'
 import type { UpdateState } from '../../../electron/main/types'
 
+/** Windows 的安装是 NSIS 静默原地升级（见 electron/main/updater.ts installUpdate），其余平台只能打开安装包手动替换 */
+const IS_WIN = /Windows/.test(navigator.userAgent)
+
 /**
  * 设置 → 关于：版本信息与更新。
  *
@@ -177,7 +180,10 @@ export function UpdatePanel() {
                   <Rocket size={14} /> {t('立即安装并重启')}
                 </button>
                 <span className="ud-hint">
-                  {t('安装包已下好（{v}）。点「立即安装」会关闭青鸟并启动安装程序。', { v: fmtSize(latest.size) })}
+                  {t('安装包已下好（{v}）。', { v: fmtSize(latest.size) })}
+                  {IS_WIN
+                    ? t('点「立即安装」会自动完成更新并重启青鸟，桌面图标与任务栏保持不变。')
+                    : t('点「立即安装」会打开安装包，请按提示完成替换。')}
                 </span>
               </>
             ) : downloading ? (

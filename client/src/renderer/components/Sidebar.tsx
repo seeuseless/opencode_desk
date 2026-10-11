@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import {
+  ArrowUpCircle,
   ChevronDown,
   ChevronRight,
   CircleUser,
@@ -14,6 +15,7 @@ import {
   LogIn,
   MessageSquarePlus,
   RefreshCw,
+  Rocket,
   Settings,
   Smartphone,
   Timer,
@@ -26,6 +28,7 @@ import { t } from '../i18n'
 import { isScheduleSession, fmtYmd } from '../oc'
 import type { ProjectSortMode } from '../App'
 import type { DeskStatus, PlatformStatus, Session } from '../oc'
+import type { UpdateState } from '../../../electron/main/types'
 
 /** 项目的访问权限档位（定义在主进程 types.ts，这里 re-export 给渲染层各处引用） */
 export type { AccessLevel } from '../../../electron/main/types'
@@ -97,6 +100,10 @@ interface Props {
   onOpenSettings: () => void
   /** 在系统文件管理器里打开项目目录（右键菜单第一项，为了快速定位项目文件夹） */
   onOpenFolder: (proj: Project) => void
+  /** 应用更新状态（主进程自动检查并推送）：有新版本/下载中/已就绪时，头部出现「更新」入口 */
+  update: UpdateState | null
+  /** 点击「更新」入口 → 打开设置-关于页，在那里完成下载与安装 */
+  onOpenUpdate: () => void
   projectSortMode: ProjectSortMode
   onReorderProjects: (from: number, to: number) => void
   /** 移动端接入状态；null = 还没问过主进程 */
@@ -123,7 +130,7 @@ interface Props {
 
 export function Sidebar(p: Props) {
   /**
-   * 每个文件夹「已显示会话条数」，点「显示更多会话」每次 +5。
+   * 每个文件夹「已显示会话条数」，点「显示更多」每次 +5。
    *
    * **刻意不持久化**：会话列表是「最近几条」的用途，展开状态属于当下这一次浏览的心智，
    * 存到磁盘的后果是——用户某次点开看多了的目录，下次重启还是长长一列，
@@ -313,13 +320,40 @@ export function Sidebar(p: Props) {
         ? t('移动端：已放行，等待手机扫码连接')
         : t('移动端：未放行')
 
+  /**
+   * 头部「更新」入口：只在「有新版本 / 正在下载 / 已可安装」三态出现——
+   * 常态不占位，无新版或检查失败一律安静（失败想重试走 设置→关于）。
+   * 点击进设置-关于页，下载与安装都在那里完成。
+   */
+  const upd = p.update
+  const updPct =
+    upd?.progress && upd.progress.total > 0
+      ? Math.min(100, Math.round((upd.progress.received / upd.progress.total) * 100))
+      : null
+  const updBtn = upd?.canInstall
+    ? { hot: false, title: t('更新已就绪，点击安装'), icon: <Rocket size={15} /> }
+    : upd?.progress
+      ? {
+          hot: false,
+          title: updPct !== null ? `${t('正在下载更新…')} ${updPct}%` : t('正在下载更新…'),
+          icon: <LoaderCircle size={15} className="spin" />
+        }
+      : upd?.latest
+        ? { hot: true, title: t('发现新版本 {v}，点击更新', { v: upd.latest.version }), icon: <ArrowUpCircle size={15} /> }
+        : null
+
   return (
     <>
       <aside className="side" style={{ width: p.width, minWidth: p.width }}>
-        {/* 顶部工作区栏：名称固定，右侧两个动作分别是打开文件夹和添加任务。 */}
+        {/* 顶部工作区栏：名称固定，右侧动作依次是「更新」（仅发现有新版时出现）、打开文件夹、添加任务。 */}
         <div className="side-workspace-head">
           <span>{t('工作区')}</span>
           <div className="workspace-actions">
+            {updBtn && (
+              <button className={'icon-btn upd-btn' + (updBtn.hot ? ' hot' : '')} title={updBtn.title} onClick={p.onOpenUpdate}>
+                {updBtn.icon}
+              </button>
+            )}
             <button className="icon-btn" title={t('打开文件夹')} onClick={p.onAddProject}>
               <FolderOpen size={15} />
             </button>
@@ -449,7 +483,7 @@ export function Sidebar(p: Props) {
                         {(shownCount[proj.id] ?? COLLAPSE_AT) < list.length ? (
                           <>
                             <ChevronRight size={13} />
-                            {t('显示更多会话')}
+                            {t('显示更多')}
                           </>
                         ) : (
                           <>

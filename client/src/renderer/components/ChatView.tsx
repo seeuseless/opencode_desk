@@ -286,9 +286,13 @@ export function ChatView(p: Props) {
     if (thinkKind === 'off') return ''
     const stored = thinkMap[p.model]
     if (thinkKind === 'toggle') return stored === 'none' ? 'none' : 'on'
-    if (stored === 'low' || stored === 'medium' || stored === 'high') return stored
+    if (stored === 'low' || stored === 'medium' || stored === 'high' || stored === 'xhigh' || stored === 'max') return stored
     // 上一次记的是开关型的值：搬成语义等价档位（开→配置默认档，关→低）
-    if (stored === 'none') return fallback === 'low' || fallback === 'medium' || fallback === 'high' ? 'low' : fallback
+    if (stored === 'none') {
+      return fallback === 'low' || fallback === 'medium' || fallback === 'high' || fallback === 'xhigh' || fallback === 'max'
+        ? 'low'
+        : fallback
+    }
     return fallback
   })()
   const thinkRef = useRef(thinkVal)

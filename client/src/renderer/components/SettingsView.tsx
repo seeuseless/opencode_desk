@@ -53,6 +53,8 @@ const THINK_LABELS: { key: ThinkingMode; label: string; tip: string }[] = [
   { key: 'low', label: '低', tip: '固定低档思考' },
   { key: 'medium', label: '中', tip: '固定中档思考' },
   { key: 'high', label: '高', tip: '固定高档思考' },
+  { key: 'xhigh', label: '超高', tip: '固定超高档思考' },
+  { key: 'max', label: '最大', tip: '固定最大档思考' },
   { key: 'off', label: '不支持', tip: '禁用思考' }
 ]
 
@@ -81,6 +83,9 @@ interface Props {
   onCodeStyle: (style: CodeStyle) => void
   normalChatWidth: number
   onNormalChatWidth: (width: number) => void
+  /** 界面缩放系数（界面大小；Ctrl+= / Ctrl+- / Ctrl+0 与这里共用一份） */
+  zoom: number
+  onZoom: (v: number) => void
   projectSortMode: ProjectSortMode
   onProjectSortMode: (mode: ProjectSortMode) => void
   /** 对话左侧「-」用户消息导航锚点条显隐（默认不显示，通用页可开） */
@@ -946,6 +951,21 @@ export function SettingsView(p: Props) {
                 {l.label}
               </button>
             ))}
+          </div>
+          <h4 className="sub-title">{t('界面大小')}</h4>
+          <p className="sec-tip">
+            {t('放大或缩小整个界面；也可以用快捷键 Ctrl ++ 放大、Ctrl -- 缩小、Ctrl 0 恢复默认。')}
+          </p>
+          <div className="acct-tabs">
+            <button type="button" className="seg-btn" onClick={() => p.onZoom(p.zoom + 0.1)}>
+              {t('放大')}
+            </button>
+            <button type="button" className="seg-btn" onClick={() => p.onZoom(p.zoom - 0.1)}>
+              {t('缩小')}
+            </button>
+            <button type="button" className="seg-btn" onClick={() => p.onZoom(1)}>
+              {t('恢复默认')}
+            </button>
           </div>
           <h4 className="sub-title">{t('聊天宽度')}</h4>
           <p className="sec-tip">{t('仅影响非代码模式下的聊天内容宽度，默认使用较宽布局。')}</p>

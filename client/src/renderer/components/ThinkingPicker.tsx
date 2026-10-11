@@ -7,7 +7,7 @@ import type { ThinkingKind } from '../oc'
  * 思考档位（内核 model variant）。档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，
  * **没有「不传思考参数」这种状态**——支持思考的模型一律给出明确档位，默认就把思考打开：
  * - 配置选了「关/开」（默认）→ 选项就「关 / 开」，默认**开**；
- * - 配置选了固定档（低/中/高）→ 选项就「低 / 中 / 高」，默认**该档**；
+ * - 配置选了固定档（低/中/高/超高/最大）→ 选项就是这几档，默认**该档**；
  * - 配置选了「不支持」→ 禁用，仅显示「不支持」。
  * 用户随时可自己切，切过的按模型记住（localStorage）。
  */
@@ -38,7 +38,9 @@ export function ThinkingPicker({ value, onChange, kind }: { value: string; onCha
         : [
             { key: 'low', label: '低' },
             { key: 'medium', label: '中' },
-            { key: 'high', label: '高' }
+            { key: 'high', label: '高' },
+            { key: 'xhigh', label: '超高' },
+            { key: 'max', label: '最大' }
           ]
   const valid = options.some((o) => o.key === value)
   // 存档值不属于当前档位集合（如模型从分档变开关、老存档是 low）时落到默认档；
@@ -53,7 +55,7 @@ export function ThinkingPicker({ value, onChange, kind }: { value: string; onCha
         title={
           disabled
             ? t('该模型在配置里设为「不支持思考」，故思考档位不可用')
-            : t('思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选「低/中/高」就给「低/中/高」（默认该档）')
+            : t('思考档位按你为这个模型在配置里选的思考形态给出。选「关/开」就给「关/开」（默认开）；选固定档就给 低/中/高/超高/最大（默认该档）')
         }
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}

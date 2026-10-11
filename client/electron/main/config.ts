@@ -487,7 +487,7 @@ export function setOfficeMcp(v: { path: string }): void {
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
- * 固定把档位写全（低/中/高 + 开），**显示哪些档位交给渲染层按模型自身能力判定**，配置侧不再区分模型：
+ * 固定把档位写全（低/中/高/超高/最大 + 开），**显示哪些档位交给渲染层按模型自身能力判定**，配置侧不再区分模型：
  * 内核遇到请求里没声明过的档位名时不合并任何 options（等于服务端默认），多写不会有害；
  * 反过来若只按配置写一种，模型能力与配置不符时用户就选不到正确档位。
  */
@@ -495,6 +495,8 @@ const THINK_VARIANTS: Record<string, unknown> = {
   low: { reasoningEffort: 'low' },
   medium: { reasoningEffort: 'medium' },
   high: { reasoningEffort: 'high' },
+  xhigh: { reasoningEffort: 'xhigh' },
+  max: { reasoningEffort: 'max' },
   // toggle 型（只有开/关）的「开」：统一按高档思考发出
   on: { reasoningEffort: 'high' },
   // 「关」：显式关闭思考。OpenAI 兼容端点的通用值是 reasoning_effort=none

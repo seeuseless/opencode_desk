@@ -160,16 +160,16 @@ export const MODEL_ROLE_LABEL: Record<string, string> = {
   asr: '语音识别'
 }
 
-/** 思考方式：effort = 低/中/高；toggle = 只有开/关；off = 不支持思考。
+/** 思考方式：effort = 低/中/高/超高/最大；toggle = 只有开/关；off = 不支持思考。
  *  档位集合由用户在配置里为该模型选的 `思考形态`（ModelCfg.thinking）决定，不再自动探测。 */
 export type ThinkingKind = 'off' | 'toggle' | 'effort'
 /**
  * 思考形态（配置里的 `ModelCfg.thinking`）→ 输入框思考选择器的档位集合。
- * 'off' → 不支持（禁用）；'toggle'/缺省 → 关/开；固定档 → 低/中/高。
+ * 'off' → 不支持（禁用）；'toggle'/缺省 → 关/开；固定档 → 低/中/高/超高/最大。
  */
 export function thinkingKindOf(mode: ThinkingMode | undefined): ThinkingKind {
   if (mode === 'off') return 'off'
-  if (mode === 'low' || mode === 'medium' || mode === 'high') return 'effort'
+  if (mode === 'low' || mode === 'medium' || mode === 'high' || mode === 'xhigh' || mode === 'max') return 'effort'
   return 'toggle'
 }
 
@@ -178,7 +178,7 @@ export function thinkingKindOf(mode: ThinkingMode | undefined): ThinkingKind {
  * 不支持思考的一律不传（空串）。`mode` 是配置里为该模型选的思考形态，缺省按「关/开」的「开」处理。
  */
 export function defaultThinkingValue(mode: ThinkingMode | undefined): string {
-  if (mode === 'low' || mode === 'medium' || mode === 'high') return mode
+  if (mode === 'low' || mode === 'medium' || mode === 'high' || mode === 'xhigh' || mode === 'max') return mode
   return mode === 'off' ? '' : 'on'
 }
 
