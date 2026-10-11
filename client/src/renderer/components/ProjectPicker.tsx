@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, Folder, FolderPlus, Search } from 'lucide-react'
+import { Check, ChevronDown, Folder, FolderPlus, Search, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { fuzzyMatch, splitByRanges } from '../lib/fuzzy'
 import { t } from '../i18n'
 import type { Project } from './Sidebar'
@@ -9,18 +9,15 @@ interface Props {
   value?: string
   onChange: (id: string) => void
   onPickDir: () => void
-  /** 全局访问权限档位（权限对所有文件夹生效，不跟项目走） */
-  access: 'default' | 'full'
-  onAccess: (level: 'default' | 'full') => void
 }
 
 /**
- * 项目级联下拉：按钮显示当前项目，面板里是项目列表 + 底部「选择文件夹」+「访问权限」。
+ * 项目级联下拉：按钮显示当前项目，面板里是项目列表 + 底部「选择文件夹」。
  *
- * 访问权限 2026-09-27 曾移到 设置 → 通用 作全局配置，后又移回聊天里、
- * 放在「选择文件夹」下方（与上次不同：这次固定在项目面板底部，常显当前档位）。
+ * 访问权限曾三易其位（聊天 → 设置 → 项目面板内）——现做成独立控件 AccessPicker
+ * 与「选择文件夹」同一行（档位写在按钮上常显，面板一关也能看到当前档位）。
  */
-export function ProjectPicker({ projects, value, onChange, onPickDir, access, onAccess }: Props) {
+export function ProjectPicker({ projects, value, onChange, onPickDir }: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
@@ -144,18 +141,66 @@ export function ProjectPicker({ projects, value, onChange, onPickDir, access, on
               <FolderPlus size={14} className="pp-ico" />
               <span className="pp-name">{t('选择文件夹')}</span>
             </button>
-            <label className="pp-access">
-              <span className="pp-access-tip">{t('访问权限')}</span>
-              <select
-                className="pp-access-select"
-                value={access}
-                onChange={(e) => onAccess(e.target.value as 'default' | 'full')}
-              >
-                <option value="default">{t('默认权限')}</option>
-                <option value="full">{t('完全控制')}</option>
-              </select>
-            </label>
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 访问权限（档位对所有文件夹生效，不跟项目走）：与「选择文件夹」同一行的独立控件，
+ *  档位文字直接写在按钮上常显（完全控制偏高危，按钮亮色提示）；面板里给两档的完整说明。 */
+export function AccessPicker({ access, onChange }: { access: 'default' | 'full'; onChange: (level: 'default' | 'full') => void }) {
+  const [open, setOpen] = useState(false)
+  const wrap = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  return (
+    <div className="menu-wrap ap" ref={wrap}>
+      <button
+        type="button"
+        className={'menu-trigger ap' + (access === 'full' ? ' full' : '')}
+        title={t('访问权限（对所有文件夹生效）')}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {access === 'full' ? <ShieldAlert size={14} /> : <ShieldCheck size={14} />}
+        <span className="menu-label">{access === 'full' ? t('完全控制') : t('默认权限')}</span>
+        <ChevronDown size={14} className={'chev' + (open ? ' up' : '')} />
+      </button>
+      {open && (
+        <div className="menu-panel ap up">
+          <button
+            type="button"
+            className={'menu-item' + (access === 'default' ? ' on' : '')}
+            onClick={() => {
+              onChange('default')
+              setOpen(false)
+            }}
+          >
+            <ShieldCheck size={14} />
+            <span>{t('默认权限')}</span>
+            {access === 'default' && <Check size={13} className="mi-check" />}
+          </button>
+          <button
+            type="button"
+            className={'menu-item' + (access === 'full' ? ' on' : '')}
+            onClick={() => {
+              onChange('full')
+              setOpen(false)
+            }}
+          >
+            <ShieldAlert size={14} />
+            <span>{t('完全控制')}</span>
+            {access === 'full' && <Check size={13} className="mi-check" />}
+          </button>
         </div>
       )}
     </div>

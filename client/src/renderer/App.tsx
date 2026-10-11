@@ -126,9 +126,7 @@ export default function App() {
   const [browserMaxSignal, setBrowserMaxSignal] = useState(0)
   /** 浏览器面板开合/放大（ChatView 上报），驱动标题栏浏览器按钮的行为与图标 */
   const [browserUi, setBrowserUi] = useState({ open: false, max: false })
-  /** 自增计数：标题栏「代码审查」按钮开/关右侧审查面板 */
-  const [reviewSignal, setReviewSignal] = useState(0)
-  /** 代码审查面板开合（ChatView 上报），驱动标题栏按钮高亮 */
+  /** 代码审查面板开合（ChatView 上报），代码模式据此放宽对话列最小宽 */
   const [reviewUi, setReviewUi] = useState({ open: false })
   const [sessionId, setSessionId] = useState('')
   /** 处理中的会话集合（切走也保留，侧栏对应任务行各自显示加载图标；多个任务并行互不覆盖） */
@@ -874,7 +872,6 @@ export default function App() {
     setAccessAsk(null)
     if (!ask) return
     setSettings(await window.qingniao.setAccess(ask.level))
-    setNotice(t('已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。'))
   }
 
   // 展示顺序：自动模式按最近有对话活动的文件夹排最前，固定模式按用户拖拽的顺序；
@@ -899,8 +896,11 @@ export default function App() {
   const rightcolStyle = codeWorkspaceVisible
     ? ({ '--code-head-width': `${codeHeadWidth}px` } as CSSProperties)
     : undefined
+  // 代码模式下右栏面板（浏览/审查）打开时对话列保底 640 = 320 对话 + 320 面板，
+  // 不给这个保底，面板会被 320 的对话列挤到近乎 0 宽；留 320 后左缘还能拖动加宽
+  const panelOpen = browserUi.open || reviewUi.open
   const chatPaneStyle = codeWorkspaceVisible
-    ? { flex: `0 1 ${chatWidth}px`, width: chatWidth, minWidth: 320 }
+    ? { flex: `0 1 ${chatWidth}px`, width: chatWidth, minWidth: panelOpen ? 640 : 320 }
     : ({ '--chat-content-width': `${normalChatWidth}px` } as CSSProperties)
 
   return (
@@ -955,9 +955,6 @@ export default function App() {
           onToggleBrowser={() => setBrowserSignal((v) => v + 1)}
           browserOpen={browserUi.open}
           browserMax={browserUi.max}
-          showBrowser={!codeMode}
-          onToggleReview={() => setReviewSignal((v) => v + 1)}
-          reviewOpen={reviewUi.open}
           codeInfo={codeWorkspaceVisible ? codeInfo : null}
           codeControls={codeWorkspaceVisible ? codeControls : null}
           onBrowserMax={() => setBrowserMaxSignal((v) => v + 1)}
@@ -1014,7 +1011,6 @@ export default function App() {
                 focusSignal={focusTick}
                 browserToggleSignal={browserSignal}
                 browserMaxSignal={browserMaxSignal}
-                reviewToggleSignal={reviewSignal}
                 onReviewUi={setReviewUi}
                 codeMode={codeMode}
                 showUserAnchors={userAnchors}

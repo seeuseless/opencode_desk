@@ -22,12 +22,13 @@
   /* AI 回复气泡底色（与用户气泡呼应）：默认跟随浮层表面色，简约浅覆盖为浅灰 */
   --ai: var(--bg3);
 }
-/* 简约浅：#ECECEC 灰底窗体，聊天区与输入框是白色内容面 */
+/* 简约浅：左侧（侧栏/窗体）#ECECEC 灰底，右侧内容面（标题栏/聊天/输入/右栏面板）#F8F8F8 */
 :root[data-theme='light'] {
   --bg: #ececec; --bg2: #f5f5f5; --bg3: #f5f5f5; --line: #dcdcdc;
   --fg: #1f232b; --fg2: #6b7280; --accent: #3b6ef5; --on-accent: #ffffff;
   --ok: #177a4a; --err: #c2404f; --run: #3b6ef5; --shadow: rgba(30, 40, 70, 0.12);
-  --content: #ffffff;
+  --content: #f8f8f8;
+  --side-bg: #ececec;             /* 侧栏压回窗体同灰（默认跟随 --bg2=#f5f5f5，与内容面拉不开层次） */
   --field-bg: #ffffff; --field-line: #DBDBDB;
   --ai: #f1f1f1;
   /* --bg3 提到 #f5f5f5 后与侧栏底色（--side-bg 跟随 --bg2）同色，行悬浮/选中就看不见了。
@@ -488,6 +489,8 @@ html[data-bg-content='on'] .cbox {
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--surface-code); color: var(--code-fg);
 }
+/* 右栏面板（浏览/审查）打开时给面板腾地方：代码列最小宽下调（面板自身最小宽由对话列 580 保底） */
+.content:has(.review-panel, .browser-panel:not(.hidden)) .code-pane { min-width: 160px; }
 .code-head {
   height: 50px; min-height: 50px; display: flex; align-items: center; gap: 8px;
   padding: 0 10px 0 16px; border-bottom: 1px solid var(--line);
@@ -1020,6 +1023,22 @@ html[data-bg-content='on'] .cbox {
 .jump:hover { filter: brightness(1.06); color: var(--accent); }
 @keyframes jump-in { from { opacity: 0; transform: translate(50%, 6px); } to { opacity: 1; transform: translate(50%, 0); } }
 
+/* ================= 右上角「代码审查」小卡片 ================= */
+/* 本会话有文件改动才出现：图标 + 累计统计（+N/-M），点击开关右侧审查面板；absolute 钉在 .main 右上角 */
+.rev-card {
+  position: absolute; top: 12px; right: 16px; z-index: 6;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 11px; border-radius: 999px;
+  background: var(--bg2); color: var(--fg2);
+  border: none; font-size: 12px; line-height: 1;
+  box-shadow: 0 4px 18px var(--shadow), 0 0 0 1px var(--line);
+}
+.rev-card svg { flex: none; }
+.rev-card:hover { color: var(--fg); filter: brightness(1.05); }
+.rc-add, .rc-del { font-weight: 600; font-variant-numeric: tabular-nums; }
+.rc-add { color: var(--ok); }
+.rc-del { color: var(--err); }
+
 /* ================= 任务队列条（输入框上方） ================= */
 .qbar { padding: 0 24px 6px; background: var(--surface); }
 .qbar .col { background: var(--field-bg); border: 1px solid var(--field-line); border-radius: 12px; padding: 4px 8px 6px; }
@@ -1072,8 +1091,7 @@ html[data-bg-content='on'] .cbox {
    （用容器查询绑定到 .cbox 实际宽度，窗口小/右栏开都会触发，不用 JS；
      发送/停止在最右且 flex-shrink:0，其余都能缩，任何宽度下都不会被挤出） */
 @container (max-width: 540px) { .crow > .menu-wrap.ap { display: none; } }
-/* 输入区很窄时访问权限这一行也隐藏（权限靠设置页兜底，核心操作优先） */
-@container (max-width: 460px) { .crow > .menu-wrap.pp .pp-access { display: none; } }
+/* 输入区很窄时访问权限整个藏掉（权限靠设置页兜底，核心操作优先） */
 @container (max-width: 460px) { .crow > .menu-wrap.tp { display: none; } }
 @container (max-width: 400px) {
   .crow > .menu-wrap.pp .menu-label { display: none; }
@@ -1306,21 +1324,7 @@ html[data-bg-content='on'] .cbox {
 }
 .pp-pick:hover { color: var(--fg); }
 .pp-ico { flex-shrink: 0; }
-/*「访问权限」：紧接「选择文件夹」下方，一行标签 + 原生下拉 select */
-.pp-access {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  margin-top: 4px; padding: 8px 8px 6px;
-  border-top: 1px solid var(--line);
-}
-.pp-access-tip {
-  font-size: 12px; color: var(--fg2); flex-shrink: 0;
-}
-.pp-access-select {
-  font-size: 12px; color: var(--fg);
-  background: var(--field-bg); border: 1px solid var(--field-line);
-  border-radius: 8px; padding: 5px 8px; min-width: 0; flex: 1;
-}
-.pp-access-select:focus { outline: none; border-color: var(--accent); }/* ================= 访问权限选择（ap 前缀）= 底部输入区独立控件 =================
+/* ================= 访问权限选择（ap 前缀）= 底部输入区独立控件 =================
    位置：紧挨「选择文件夹」触发按钮的右侧，与它同排。
    早先塞在项目下拉面板的右栏里，面板一关就看不见当前档位，用户根本意识不到有这个开关。
    现在做成一颗常显的按钮，档位文字直接写在按钮上；面板里再给两档的完整说明。 */
@@ -1336,24 +1340,10 @@ html[data-bg-content='on'] .cbox {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--field-line));
 }
 
-.menu-panel.ap { min-width: 250px; width: 250px; }
-/* 档位块：与设置页 .seg 同一套语言（图标 + 粗标题 + 细说明），选中态边框亮 + 淡底 */
-.ap-b {
-  display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left;
-  padding: 9px 10px; border-radius: 8px; font-size: 13px;
-  border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);
-}
-.ap-b + .ap-b { margin-top: 4px; }
-.ap-b:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--field-line)); color: var(--fg); }
-.ap-b.on {
-  border-color: var(--accent); color: var(--fg);
-  background: color-mix(in srgb, var(--accent) 8%, var(--field-bg));
-}
-.ap-b > svg { flex-shrink: 0; margin-top: 1px; }
-.ap-b.on > svg { color: var(--accent); }
-.ap-t { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ap-t b { font-size: 13px; font-weight: 600; }
-.ap-t i { font-style: normal; font-size: 11.5px; color: var(--fg2); line-height: 1.45; }
+.menu-panel.ap { min-width: 200px; width: 200px; }
+/* 菜单项文字撑满、勾贴最右；选中项主色加粗，与项目/模型菜单同一套观感 */
+.menu-panel.ap .menu-item span { flex: 1; min-width: 0; }
+.menu-panel.ap .menu-item.on { color: var(--accent); font-weight: 600; }
 
 /* 触发按钮：带 border 效果 */
 .menu-trigger.pp {
@@ -2046,8 +2036,8 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .bp-wv { flex: 1; min-height: 0; width: 100%; border: none; background: #fff; }
 /* 无网址时的占位：盖在常驻的 webview 上面（webview 不能卸载，否则 AI 操作不了） */
 .bp-nourl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--fg2); font-size: 12.5px; background: var(--bg); }
-/* 右缘拖拽把手：浏览器现在位于对话左侧；拖拽用 pointer capture，指针划进 webview 也不丢事件 */
-.bp-resizer, .rp-resizer { position: absolute; right: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; touch-action: none; }
+/* 左缘拖拽把手：面板在对话右侧，把手贴对话/面板分界线；拖拽用 pointer capture，指针划进 webview 也不丢事件 */
+.bp-resizer, .rp-resizer { position: absolute; left: -3px; top: 0; bottom: 0; width: 6px; cursor: col-resize; z-index: 5; touch-action: none; }
 
 /* ================= 项目右键菜单（自绘，位置跟鼠标） ================= */
 /* 全屏透明遮罩：点空白/右键/Esc 收起菜单。菜单本体在里面，fixed 定位到鼠标处 */

@@ -23,8 +23,6 @@ const TW_APP: Record<string, string> = {
   '没能打开选择文件夹对话框：{msg}': '無法開啟選擇資料夾對話框：{msg}',
   '设置已写入，但内核没能重启成功：{msg}。可以重新保存一次，或重启本应用。':
     '設定已寫入，但核心未能重新啟動：{msg}。可以重新儲存一次，或重新啟動本應用。',
-  '已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。':
-    '已切換為「完全控制」：AI 讀寫檔案、執行指令、呼叫其他模型都不再詢問（對所有資料夾生效）。',
   拖拽调整侧栏宽度: '拖曳調整側欄寬度',
   拖拽调整代码与对话宽度: '拖曳調整程式碼與對話寬度',
   计划任务: '排程任務',
@@ -743,8 +741,6 @@ const EN_APP: Record<string, string> = {
   '没能打开选择文件夹对话框：{msg}': 'Could not open the folder picker dialog: {msg}',
   '设置已写入，但内核没能重启成功：{msg}。可以重新保存一次，或重启本应用。':
     'Settings were written, but the kernel failed to restart: {msg}. Try saving again, or restart the app.',
-  '已切换为「完全控制」：AI 读写文件、执行命令、调用其他模型都不再询问（对所有文件夹生效）。':
-    'Switched to "Full Control": AI reads/writes files, runs commands and calls other models without asking (applies to all folders).',
   拖拽调整侧栏宽度: 'Drag to resize sidebar',
   拖拽调整代码与对话宽度: 'Drag to resize code and chat panes',
   计划任务: 'Scheduled Tasks',

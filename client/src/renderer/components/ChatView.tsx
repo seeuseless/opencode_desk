@@ -12,7 +12,7 @@ import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
-import { ProjectPicker } from './ProjectPicker'
+import { AccessPicker, ProjectPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
 import { Markdown } from './Markdown'
@@ -55,9 +55,7 @@ interface Props {
   browserToggleSignal: number
   /** 浏览器打开时标题栏最大化按钮的触发计数（App 转发，用于面板放大/还原） */
   browserMaxSignal: number
-  /** 自增计数：标题栏「代码审查」按钮的触发计数（App 转发，每点一次 +1） */
-  reviewToggleSignal?: number
-  /** 上报代码审查面板开合（标题栏按钮据此决定高亮） */
+  /** 上报代码审查面板开合（App 据此在代码模式放宽对话列最小宽） */
   onReviewUi?: (s: { open: boolean }) => void
   /** 纯写代码模式：关闭并隐藏内置浏览器、权限与思考入口 */
   codeMode: boolean
@@ -484,23 +482,20 @@ export function ChatView(p: Props) {
   }, [msgs])
 
   // 主进程「AI 要用面板浏览器」事件（panel_* 工具发现 webview 还没挂载时触发）：
-  // 挂载 webview 并自动弹出面板——AI 首次打开网址就该让用户看到；代码模式下面板位置与布局冲突，仍只挂载不弹。
+  // 挂载 webview 并自动弹出面板——AI 首次打开网址就该让用户看到。
   useEffect(() => {
     return window.qingniao.onEvent((raw) => {
       if ((raw as { type?: string }).type !== 'qingniao.browser.wake') return
       setPanelBorn(true)
       // AI 首次打开网址自动弹面板；与右栏代码审查面板互斥，打开浏览器的同时收掉审查
-      if (!p.codeMode) {
-        setReviewOpen(false)
-        setPanelOpen(true)
-      }
+      setReviewOpen(false)
+      setPanelOpen(true)
     })
-  }, [p.codeMode])
+  }, [])
 
   // 对话里点击需浏览器打开的链接（Markdown 组件派发）：打开面板并导航到该地址
   useEffect(() => {
     const onOpen = (e: Event): void => {
-      if (p.codeMode) return
       const u = (e as CustomEvent).detail
       if (typeof u !== 'string' || !u) return
       setPinnedUrl(u)
@@ -510,7 +505,7 @@ export function ChatView(p: Props) {
     }
     window.addEventListener('qingniao:open-in-browser', onOpen)
     return () => window.removeEventListener('qingniao:open-in-browser', onOpen)
-  }, [p.codeMode])
+  }, [])
 
   // 切会话时清掉用户点开的地址：面板若开着回到新会话的 AI 浏览上下文
   useEffect(() => {
@@ -584,10 +579,6 @@ export function ChatView(p: Props) {
     setChatHidden(false) // 面板都关了，隐藏态一起复位，别再带着回右栏布局
   }
 
-  useEffect(() => {
-    if (p.codeMode) closeBrowserPanel()
-  }, [p.codeMode])
-
   /**
    * 标题栏按钮：开/关内置浏览器面板（常规右栏不放大；开着就关）。
    *
@@ -595,7 +586,7 @@ export function ChatView(p: Props) {
    * 想退出全屏点标题栏的「还原」；「AI 对话」开关则挪到了地址栏右侧那颗电源图标。
    */
   function toggleBrowserFromHeader() {
-    if (p.codeMode || browserMax) return
+    if (browserMax) return
     if (panelOpen) {
       closeBrowserPanel()
       return
@@ -606,8 +597,8 @@ export function ChatView(p: Props) {
     setBrowserMax(false)
   }
 
-  /** 标题栏「代码审查」按钮：开/关右侧审查面板；与浏览器面板互斥（都挤在右栏） */
-  function toggleReviewFromHeader() {
+  /** 对话右上角「代码审查」小卡片：开/关右侧审查面板；与浏览器面板互斥（都挤在右栏） */
+  function toggleReview() {
     if (browserMax) return
     setReviewOpen((v) => {
       const next = !v
@@ -1303,12 +1294,6 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.browserMaxSignal])
 
-  // 标题栏「代码审查」按钮：每 +1 开/关一次右侧审查面板
-  useEffect(() => {
-    if ((p.reviewToggleSignal ?? 0) > 0) toggleReviewFromHeader()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p.reviewToggleSignal])
-
   // 向 App 上报浏览器面板开合与放大状态（标题栏按钮据此决定行为与图标）
   useEffect(() => {
     p.onBrowserUi({ open: panelOpen, max: browserMax })
@@ -1957,6 +1942,10 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firstUserText, isSchedule, schedDate])
 
+  // 右上角审查卡片的统计：本会话累计 +N/-M（reviewFiles 已跨轮合并，行数直接求和）
+  const revAdd = reviewFiles.reduce((s, f) => s + f.additions, 0)
+  const revDel = reviewFiles.reduce((s, f) => s + f.deletions, 0)
+
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
@@ -2144,6 +2133,20 @@ export function ChatView(p: Props) {
         </div>
       )}
 
+      {/* 右上角「代码审查」小卡片：本会话有文件改动才出现，图标 + 累计统计（+N/-M），点击开关右侧审查面板。
+          全屏浏览时对话已变右下角浮动卡，卡片不渲染 */}
+      {!browserMax && reviewFiles.length > 0 && (
+        <button
+          className="rev-card"
+          title={reviewOpen ? t('关闭代码审查') : t('代码审查（本会话 AI 改动的文件）')}
+          onClick={toggleReview}
+        >
+          <FileDiffIcon size={13} />
+          {revAdd > 0 && <span className="rc-add">+{revAdd}</span>}
+          {revDel > 0 && <span className="rc-del">-{revDel}</span>}
+        </button>
+      )}
+
       {!atBottom && (
         <div className="jumpwrap">
           <button className="jump" title={t('回到底部')} onClick={jumpBottom}>
@@ -2279,14 +2282,15 @@ export function ChatView(p: Props) {
               <Paperclip size={14} />
             </button>
             {!p.codeMode && (
-              <ProjectPicker
-                projects={p.projects}
-                value={p.project?.id}
-                onChange={p.onSwitchProject}
-                onPickDir={p.onPickDir}
-                access={p.access}
-                onAccess={p.onAccess}
-              />
+              <>
+                <ProjectPicker
+                  projects={p.projects}
+                  value={p.project?.id}
+                  onChange={p.onSwitchProject}
+                  onPickDir={p.onPickDir}
+                />
+                <AccessPicker access={p.access} onChange={p.onAccess} />
+              </>
             )}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
@@ -2329,7 +2333,7 @@ export function ChatView(p: Props) {
     {/* webview 挂上就不再卸载（AI 要一直能操作它），显不显示只看 visible */}
     {(panelOpen || panelBorn) && (
       <BrowserPanel
-        visible={panelOpen && !p.codeMode}
+        visible={panelOpen}
         url={pinnedUrl || aiBrowseUrl}
         navSeq={pinSeq}
         max={browserMax}
@@ -2369,12 +2373,12 @@ function ReviewPanel({ projectPath, files, onClose }: {
   const [full, setFull] = useState('')
   const [fullErr, setFullErr] = useState('')
   const [loading, setLoading] = useState(false)
-  /** 右缘拖出的面板宽度（px）；null = 默认 40%（与浏览面板同判据） */
+  /** 左缘拖出的面板宽度（px）；null = 默认 40%（与浏览面板同判据） */
   const [width, setWidth] = useState<number | null>(null)
   const [dragShield, setDragShield] = useState(false)
   const panelRef = useRef<HTMLElement | null>(null)
 
-  /** 拖右缘调宽：指针 capture 全程留在主文档，对话列保底 320px（与浏览面板同判据） */
+  /** 拖左缘调宽：指针 capture 全程留在主文档，对话列保底 320px（与浏览面板同判据） */
   function startResize(e: ReactPointerEvent) {
     e.preventDefault()
     setDragShield(true)
@@ -2384,7 +2388,7 @@ function ReviewPanel({ projectPath, files, onClose }: {
     const x0 = e.clientX
     const w0 = panel.offsetWidth
     const move = (ev: PointerEvent) =>
-      setWidth(Math.min(Math.max(240, w0 + (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
+      setWidth(Math.min(Math.max(240, w0 - (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -2462,7 +2466,7 @@ function ReviewPanel({ projectPath, files, onClose }: {
                       ) : fullErr ? (
                         <div className="rp-empty">{fullErr}</div>
                       ) : (
-                        <CodeBlock text={full} file={rel} />
+                        <CodeBlock text={full} file={rel} force />
                       )}
                     </div>
                   </div>
@@ -2475,7 +2479,7 @@ function ReviewPanel({ projectPath, files, onClose }: {
     </aside>
   )
 }
-/** 左侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，右缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
+/** 左侧浏览面板：内嵌浏览器（webview 直接渲染网址，可交互，左缘可拖宽）；导航工具栏经 portal 放到标题栏中间，分享/放大/关闭不再重复（用标题栏右上角原生功能） */
 function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleMark, chatHidden, onToggleChat }: {
   /** 面板是否可见：false 时只隐藏 UI，webview 继续挂着，AI 照常能操作 */
   visible: boolean
@@ -2502,7 +2506,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
   const [src] = useState(url || 'about:blank')
   /** 当前页标题：收藏时作显示名（page-title-updated 事件跟踪） */
   const [title, setTitle] = useState('')
-  /** 右缘拖出的面板宽度（px）；null = 默认 40% */
+  /** 左缘拖出的面板宽度（px）；null = 默认 40% */
   const [width, setWidth] = useState<number | null>(null)
   /** webview 历史状态：驱动前进/后退按钮可用性 */
   const [nav, setNav] = useState({ back: false, fwd: false })
@@ -2582,7 +2586,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
     wvRef.current.loadURL(u)
   }
 
-  /** 拖右缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
+  /** 拖左缘调宽：pointer capture 让指针划过 webview 时事件不丢 */
   function startResize(e: ReactPointerEvent) {
     e.preventDefault()
     setDragShield(true)
@@ -2592,7 +2596,7 @@ function BrowserPanel({ visible, url, navSeq, max, slot, onUrl, marks, onToggleM
     const x0 = e.clientX
     const w0 = panel.offsetWidth
     const move = (ev: PointerEvent) =>
-      setWidth(Math.min(Math.max(240, w0 + (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
+      setWidth(Math.min(Math.max(240, w0 - (ev.clientX - x0)), Math.max(240, row.clientWidth - 320)))
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
@@ -3859,8 +3863,9 @@ function renderDiffLines(text: string): DiffLine[] {
   return lines
 }
 
-/** 展开详情代码块：diff 着色 / highlight.js 语法高亮 / 纯文本 */
-function CodeBlock({ text, file, diff }: { text: string; file?: string; diff?: boolean }) {
+/** 展开详情代码块：diff 着色 / highlight.js 语法高亮 / 纯文本。
+ *  默认超 2 万字符不再高亮（流式工具输出省性能）；force 跳过限制——审查面板「全文」要看完整源码高亮 */
+function CodeBlock({ text, file, diff, force }: { text: string; file?: string; diff?: boolean; force?: boolean }) {
   if (diff) {
     const lines = renderDiffLines(text)
     const hasColor = lines.some((l) => l.kind !== 'ctx')
@@ -3885,7 +3890,7 @@ function CodeBlock({ text, file, diff }: { text: string; file?: string; diff?: b
   let html = escapeHtml(text)
   try {
     const lang = file ? extLang(file) : undefined
-    if (text.length < 20000) {
+    if (force || text.length < 20000) {
       html = lang && hljs.getLanguage(lang)
         ? hljs.highlight(text, { language: lang, ignoreIllegals: true }).value
         : hljs.highlightAuto(text).value
