@@ -128,10 +128,18 @@ export default function IdeDevice() {
     // 软键盘适配：iOS Safari 键盘弹出不缩 100dvh，底部输入栏会被键盘盖住（得滚动才能看到）。
     // 用 visualViewport 的可视高度驱动 --qn-vvh（配合 index.css 的 .qn-viewport 优先级），
     // 键盘弹出/收起、地址栏收放都实时跟随；安卓走 meta 的 interactive-widget=resizes-content。
+    // 聊天页本身不滚动 document（外层 .qn-viewport 是 overflow-hidden，只有中间消息列滚），
+    // 但 iOS 弹键盘时会把 document 往下滚「让聚焦输入框露出来」，滚出偏移后三段布局整体被推移：
+    // 输入栏漂出可见区（点输入框反而看不见）或下方露出一条空白。每次可视视口变化都把
+    // document 归零，配合 --qn-vvh 收缩，输入栏就稳稳贴住键盘上沿。
     useEffect(() => {
         const vv = window.visualViewport
         if (!vv) return
-        const apply = () => document.documentElement.style.setProperty('--qn-vvh', vv.height + 'px')
+        const apply = () => {
+            document.documentElement.style.setProperty('--qn-vvh', vv.height + 'px')
+            document.documentElement.scrollTop = 0
+            document.body.scrollTop = 0
+        }
         apply()
         vv.addEventListener('resize', apply)
         vv.addEventListener('scroll', apply)
@@ -515,8 +523,11 @@ export default function IdeDevice() {
                 </header>
 
                 {/* min-h-0：flex 列里的默认 min-height:auto 会让这一段不肯缩到内容以下，
-                    消息一多就会把底部输入栏顶出屏幕（那正是要修的那个毛病）。 */}
-                <div ref={scrollRef} className="qn-hide-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+                    消息一多就会把底部输入栏顶出屏幕（那正是要修的那个毛病）。
+                    overflow-x-hidden：纵向滑动时手指常带横向分量，overflow-y-auto 的
+                    x 轴会按规则算成 auto，整列被带着左右晃——这里掐掉，宽代码/表格
+                    仍由 .qn-md 的 pre/table 自己内部横向滚，不受影响。 */}
+                <div ref={scrollRef} className="qn-hide-scroll min-h-0 flex-1 space-y-3 overflow-x-hidden overflow-y-auto px-3 py-3">
                     {loadingMsgs && <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />拉取电脑上的聊天记录…</div>}
                     {!loadingMsgs && msgs.length === 0 && (
                         <div className="py-10 text-center text-sm text-muted-foreground">还没有内容，说点什么吧</div>
@@ -550,9 +561,9 @@ export default function IdeDevice() {
                     )}
                 </div>
 
-                {/* 底部：模型选择 + 输入 + 发送/停止（状态与电脑一致，双向）。
+                {/* 底部：卡片式输入（与桌面端同一视觉口径）。
                     shrink-0：消息流再长也不许把它压扁；qn-safe-bottom 给手势条让位。 */}
-                <div className="qn-safe-bottom shrink-0 border-t px-3 pb-3 pt-2">
+                <div className="qn-safe-bottom shrink-0 px-3 pt-2">
                     {pickModel && models.length > 0 && (
                         <div className="mb-2 max-h-[40vh] overflow-y-auto rounded-lg border bg-card p-1">
                             {models.map((m) => (
@@ -566,14 +577,12 @@ export default function IdeDevice() {
                             ))}
                         </div>
                     )}
-                    {/* 一行三件，高度统一 40px（h-10 / min-h-10 / size-10）：输入框在最左，
-                        模型选择跟在输入框后面，发送/停止压最右。三者一样高才不会看着歪。
-                        min-w-0 是关键：flex 子项默认 min-width:auto，textarea 会被自身
-                        固有宽度（cols 默认值）撑住不肯缩，把右边的发送按钮挤出屏幕。 */}
-                    <div className="flex items-end gap-2">
+                    {/* 桌面端卡片式输入：卡片 = 顶部多行 textarea + 底部操作行（模型选择在左、发送/停止圆钮在右），
+                        与桌面 .cbox（2 行 textarea + .crow 底部行）同一口径。focus-within 让输入框聚焦时卡片描边高亮。 */}
+                    <div className="rounded-2xl border bg-background p-1.5 focus-within:border-primary">
                         <textarea
-                            className="h-10 min-w-0 flex-1 resize-none rounded-2xl border bg-background px-3 py-2 text-sm leading-6 outline-none focus:border-primary"
-                            rows={1}
+                            className="w-full resize-none bg-transparent px-1.5 py-1 text-sm leading-6 outline-none"
+                            rows={2}
                             placeholder={online ? '发消息给电脑上的青鸟…' : '电脑不在线'}
                             value={draft}
                             onChange={(e) => setDraft(e.target.value)}
@@ -584,29 +593,31 @@ export default function IdeDevice() {
                                 }
                             }}
                         />
-                        <button
-                            className="flex h-10 max-w-[6rem] shrink-0 items-center gap-1 rounded-full border px-3 text-xs text-muted-foreground disabled:opacity-40"
-                            onClick={() => setPickModel((v) => !v)}
-                            disabled={!models.length}
-                            title={curModelLabel}
-                        >
-                            <span className="truncate">{curModelLabel}</span>
-                            <ChevronDown className="size-3.5 shrink-0" />
-                        </button>
-                        {sending ? (
-                            <button className="grid size-10 shrink-0 place-items-center rounded-full bg-destructive text-destructive-foreground" onClick={stop} title="停止">
-                                <Square className="size-4" />
-                            </button>
-                        ) : (
+                        <div className="mt-1 flex items-center justify-between px-1">
                             <button
-                                className="grid size-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
-                                onClick={send}
-                                disabled={!draft.trim() || !online}
-                                title="发送"
+                                className="flex max-w-[9rem] shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs text-muted-foreground disabled:opacity-40"
+                                onClick={() => setPickModel((v) => !v)}
+                                disabled={!models.length}
+                                title={curModelLabel}
                             >
-                                <Send className="size-4" />
+                                <span className="truncate">{curModelLabel}</span>
+                                <ChevronDown className="size-3.5 shrink-0" />
                             </button>
-                        )}
+                            {sending ? (
+                                <button className="grid size-9 shrink-0 place-items-center rounded-full bg-destructive text-destructive-foreground" onClick={stop} title="停止">
+                                    <Square className="size-4" />
+                                </button>
+                            ) : (
+                                <button
+                                    className="grid size-9 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground disabled:opacity-40"
+                                    onClick={send}
+                                    disabled={!draft.trim() || !online}
+                                    title="发送"
+                                >
+                                    <Send className="size-4" />
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </div>
 

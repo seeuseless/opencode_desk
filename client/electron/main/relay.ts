@@ -652,7 +652,9 @@ const dirQ = (directory?: string) => (directory ? `?directory=${encodeURICompone
 
 /** 项目清单指纹：只关心「有哪些项目、叫什么」，顺序与附加字段不比 */
 function projectsSig(list: { id: string; path: string; name: string }[]): string {
-  return list.map((p) => `${p.path}\u0000${p.name}`).sort().join('\u0001')
+  // 顺序敏感（不做 sort）：桌面按「最近活动 / 固定拖拽序」推来的展示顺序本身就是要对手机生效的，
+  // 仅顺序变化也要触发 projects.changed，手机侧重拉 projects.list 才能跟上桌面同一顺序。
+  return list.map((p) => `${p.path}\u0000${p.name}`).join('\u0001')
 }
 
 /** 设备名：平台后台列表里靠它区分机器 */

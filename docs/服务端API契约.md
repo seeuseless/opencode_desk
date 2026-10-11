@@ -260,6 +260,9 @@ Bearer。非本人设备 → 404 `该客户端不存在`。响应 200：`{ "mess
 projects.list / models.list / sessions.list / session.create
 session.messages / session.send / session.stop
 ```
+- `projects.list` 的**顺序 = 桌面端当前展示顺序**（按最近活动 / 固定拖拽序，内置「任务」目录恒在最前）：
+  桌面把展示顺序推给主进程，手机首页按此原样渲染，两端文件夹排序一致。
+  顺序变化（不只是增删）也会推一条 `projects.changed`，手机侧据此重拉。
 
 响应 200：`{ "id": 12, "status": "pending" }`
 - 电脑不在线 → 409 `电脑不在线：请确认青鸟已打开、账号已登录、且「移动端连接」已开启`

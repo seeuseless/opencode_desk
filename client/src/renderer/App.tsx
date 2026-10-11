@@ -838,10 +838,9 @@ export default function App() {
     return window.qingniao.onMobileChanged(setMobile)
   }, [])
 
-  // 项目列表要推给主进程：移动端服务读不到渲染层 localStorage，没这份清单就不知道能操作哪些目录
-  useEffect(() => {
-    void window.qingniao.mobileSetProjects(projects.map((x) => ({ id: x.id, path: x.path, name: x.name })))
-  }, [projects])
+  // 项目清单推给主进程的 effect 移到了 orderedProjects 计算之后（见下方「推送项目清单」），
+  // 手机端按桌面展示顺序读取，两端文件夹排序一致。
+
 
   // 计划任务在后台（托盘驻留时）到点执行：主进程推过来后，补拉内置「任务」目录的会话列表，
   // 新出现的「[计划] xxx」会话展开目录即可见（与 refreshSessions 同样的只补不覆盖合并）；
@@ -948,6 +947,15 @@ export default function App() {
     }
     return (lastActive[b.id] ?? b.added ?? 0) - (lastActive[a.id] ?? a.added ?? 0)
   })
+
+  // 推给手机的清单按「桌面展示顺序」orderedProjects：手机端 projects.list 直接读这份，
+  // 两端文件夹排序才一致。门控用签名（顺序 + id/名/路径）——最近活动时间戳变频繁，
+  // 但顺序没实际变时不触发 IPC，relay 侧顺序敏感指纹也只会真变了才推 projects.changed。
+  const mobileProjectsSig = orderedProjects.map((p) => `${p.id}\u0000${p.name}\u0000${p.path}`).join('\u0001')
+  useEffect(() => {
+    void window.qingniao.mobileSetProjects(orderedProjects.map((x) => ({ id: x.id, path: x.path, name: x.name })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobileProjectsSig])
 
   function reorderProjects(from: number, to: number) {
     if (projectSortMode !== 'fixed') return
