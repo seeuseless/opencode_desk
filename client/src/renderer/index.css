@@ -703,6 +703,8 @@ html[data-bg-content='on'] .cbox {
 :root[data-theme='light'] .md pre,
 :root[data-theme='light'] .md code { background: var(--ai); }
 .amsg.busyline { display: flex; align-items: center; gap: 7px; color: var(--fg2); font-size: 13px; }
+/* 轮首「已工作」徽标：轮结束后灰字固定显示总耗时 */
+.turn-badge { display: flex; align-items: center; gap: 5px; margin: 14px 0 2px; font-size: 11.5px; color: var(--fg2); }
 /* 通知区：所有状态通知贴在聊天输入窗（.cwrap）上方、水平居中。
    「聊天对话框上方」指输入框上头这条，不是界面/消息区最顶部——
    消息区是独立滚动区，这条在它外层 flex 里、于输入框之前，天然固定在底部、不随消息滚动。

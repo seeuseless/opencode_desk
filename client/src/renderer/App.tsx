@@ -259,6 +259,18 @@ export default function App() {
 
   useEffect(() => save('qingniao.codeMode', codeMode), [codeMode])
 
+  // Ctrl+N 新建任务：与左栏顶部「新建任务」同一动作（内置浏览器 webview 聚焦时收不到，回聊天区即可用）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault()
+        newTask()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
   useEffect(() => save('qingniao.codeFiles', codeFiles), [codeFiles])
 
   useEffect(() => {

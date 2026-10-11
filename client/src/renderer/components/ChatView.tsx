@@ -1300,11 +1300,43 @@ export function ChatView(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [panelOpen, browserMax])
 
-  // 向 App 上报代码审查面板开合（标题栏按钮据此显示高亮）
+  // 向 App 上报代码审查面板开合（App 据此在代码模式放宽对话列最小宽）
   useEffect(() => {
     p.onReviewUi?.({ open: reviewOpen })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewOpen])
+
+  // 每轮工作时长（持久化到 localStorage，刷新/重开会话后历史轮照常显示）：
+  // 会话 id → 轮首用户消息 id → 秒数。读取时顺手清洗脏值（早先版本落表缺陷可能写入天量秒数）
+  const [turnSpentAll, setTurnSpentAll] = useState<Record<string, Record<string, number>>>(() => {
+    const clean: Record<string, Record<string, number>> = {}
+    for (const [sid, table] of Object.entries(load<Record<string, Record<string, number>>>('qingniao.turnSpent', {}))) {
+      const t: Record<string, number> = {}
+      for (const [k, v] of Object.entries(table)) if (v > 0 && v <= 86400) t[k] = v
+      if (Object.keys(t).length) clean[sid] = t
+    }
+    return clean
+  })
+  const turnSpent = turnSpentAll[p.sessionId] ?? {}
+  useEffect(() => save('qingniao.turnSpent', turnSpentAll), [turnSpentAll])
+  const turnStartRef = useRef(0)
+  const prevBusyRef = useRef(false)
+  useEffect(() => {
+    if (busy && !prevBusyRef.current) turnStartRef.current = Date.now()
+    if (!busy && prevBusyRef.current && turnStartRef.current) {
+      const owner = [...msgs].reverse().find((m) => m.info.role === 'user')?.info.id
+      const sec = Math.round((Date.now() - turnStartRef.current) / 1000)
+      // 一轮工作不该超过一天：超限（起算点丢失等异常）宁可不记，别让「已工作」显示天文数字
+      if (owner && sec > 0 && sec <= 86400)
+        setTurnSpentAll((s) => ({
+          ...s,
+          [p.sessionId]: { ...(s[p.sessionId] ?? {}), [owner]: sec }
+        }))
+      turnStartRef.current = 0
+    }
+    prevBusyRef.current = busy
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy])
 
   // 切会话时收起审查面板回到新会话的初始状态
   useEffect(() => {
@@ -1917,6 +1949,15 @@ export function ChatView(p: Props) {
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
+  // 每条 assistant 消息是否轮首（owner 变化处）：轮结束后「已工作」徽标只挂轮首一条
+  let prevTurnOwner: string | undefined
+  const turnStarts = new Map<string, boolean>()
+  for (const m of msgs) {
+    const owner = turnOwner.get(m.info.id)
+    turnStarts.set(m.info.id, m.info.role === 'assistant' && owner !== undefined && owner !== prevTurnOwner)
+    if (owner !== undefined) prevTurnOwner = owner
+  }
+
   /**
    * 会话标题：用户发的第一条信息（过长在标题栏截断），计划会话再带上执行日期。
    *
@@ -1995,8 +2036,9 @@ export function ChatView(p: Props) {
               <div>{t('Enter 发送 · Shift+Enter 换行 · 处理中可随时停止，已发送的消息可编辑后重发')}</div>
             </div>
           )}
-          {msgs.map((m) => {
-            if (m.info.role === 'user') {
+            {msgs.map((m) => {
+              const owner = turnOwner.get(m.info.id)
+              if (m.info.role === 'user') {
               // 自动续跑发的「继续」：隐藏气泡，重试进度走尾部状态条（第 x/10 次）
               if (autoContinueIds.current.has(m.info.id)) return null
               // 内核给用户消息挂的 synthetic 过程文本要排除掉：read 工具会在同一个用户
@@ -2019,6 +2061,10 @@ export function ChatView(p: Props) {
             }
             return (
               <div key={m.info.id} className="amsg">
+                {/* 轮首的「已工作」徽标：轮结束后固定显示该轮总耗时（处理中的实时时长看尾部状态条） */}
+                {turnStarts.get(m.info.id) && owner != null && turnSpent[owner] ? (
+                  <div className="turn-badge">{t('已工作 {v}', { v: fmtElapsed(turnSpent[owner]) })}</div>
+                ) : null}
                 {partRows(m.parts, p.project?.path).map((row) => {
                   if (row.kind === 'part') {
                     const part = row.part
@@ -2895,12 +2941,14 @@ function upsertPart(
 /**
  * 折叠容器：内容超过 maxPx 高时收起，露出渐隐的尾部 + 「展开全文」。
  * 用实测高度判定（比字数/行数更准），内容变化时自动复测。
+ * defaultOpen = 初始就展开（AI 回复正文用——自动展开全文，超长可手动收起）。
  */
 function Collapsible({
   children,
   maxPx,
   forceText,
-  live
+  live,
+  defaultOpen
 }: {
   children: ReactNode
   /** 折叠阈值（px） */
@@ -2915,8 +2963,10 @@ function Collapsible({
    * 等这轮结束（live 转 false）再按高度折叠，用户读的是连续的整段。
    */
   live?: boolean
+  /** 初始展开（默认收起）；只在超长时出现「收起/展开全文」按钮 */
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!!defaultOpen)
   const [over, setOver] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   // 文本变化即复测（流式输出时先不高，长到超阈值才出现按钮）
@@ -3619,7 +3669,7 @@ function PartView({ part, projectPath, preview, live, diffs, count, previewParts
         />
       )
     }    return (
-      <Collapsible maxPx={520} forceText={part.text} live={live}>
+      <Collapsible maxPx={520} forceText={part.text} live={live} defaultOpen>
         <Markdown text={part.text} />
       </Collapsible>
     )
