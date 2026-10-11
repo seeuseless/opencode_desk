@@ -125,6 +125,23 @@ export default function IdeDevice() {
         return () => { document.title = prev }
     }, [])
 
+    // 软键盘适配：iOS Safari 键盘弹出不缩 100dvh，底部输入栏会被键盘盖住（得滚动才能看到）。
+    // 用 visualViewport 的可视高度驱动 --qn-vvh（配合 index.css 的 .qn-viewport 优先级），
+    // 键盘弹出/收起、地址栏收放都实时跟随；安卓走 meta 的 interactive-widget=resizes-content。
+    useEffect(() => {
+        const vv = window.visualViewport
+        if (!vv) return
+        const apply = () => document.documentElement.style.setProperty('--qn-vvh', vv.height + 'px')
+        apply()
+        vv.addEventListener('resize', apply)
+        vv.addEventListener('scroll', apply)
+        return () => {
+            vv.removeEventListener('resize', apply)
+            vv.removeEventListener('scroll', apply)
+            document.documentElement.style.removeProperty('--qn-vvh')
+        }
+    }, [])
+
     /* ---------------- 通信：指令走 rpc，实时走 events ---------------- */
 
     const post = async <T,>(path: string, body?: unknown): Promise<T> => {
@@ -499,7 +516,7 @@ export default function IdeDevice() {
 
                 {/* min-h-0：flex 列里的默认 min-height:auto 会让这一段不肯缩到内容以下，
                     消息一多就会把底部输入栏顶出屏幕（那正是要修的那个毛病）。 */}
-                <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
+                <div ref={scrollRef} className="qn-hide-scroll min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
                     {loadingMsgs && <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />拉取电脑上的聊天记录…</div>}
                     {!loadingMsgs && msgs.length === 0 && (
                         <div className="py-10 text-center text-sm text-muted-foreground">还没有内容，说点什么吧</div>
@@ -685,7 +702,7 @@ export default function IdeDevice() {
                                                     }
                                                 >
                                                     <ChevronDown className="size-3.5" />
-                                                    加载更多（还有 {list.length - shown} 个）
+                                                    加载更多
                                                 </button>
                                             )}
                                         </div>
@@ -780,8 +797,10 @@ function PartView({ part }: { part: Part }) {
         )
     }
 
+    // 正文与桌面同口径：**不套气泡底色**（正文是答复本身，桌面 ChatView 就是白底直排），
+    // 宽度占满消息列——套灰气泡会让人误以为这是引用/备注，也和桌面看起来不一样。
     return (
-        <div className="qn-md max-w-[92%] break-words rounded-2xl bg-muted px-3 py-2 text-sm leading-relaxed">
+        <div className="qn-md w-full break-words text-sm leading-relaxed">
             <Markdown remarkPlugins={[remarkGfm]}>{part.text ?? ''}</Markdown>
         </div>
     )

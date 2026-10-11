@@ -131,6 +131,23 @@
     }
 }
 
+/* 软键盘适配（iOS Safari 键盘不缩 dvh，输入栏会被键盘盖住——「要滚动才能看到输入框」的根源）：
+   IdeDevice 挂载时用 visualViewport 的高度设置 --qn-vvh，键盘弹出/收起、地址栏收放都实时跟随。
+   有 JS 变量时优先用它；Android Chrome 走 meta 的 interactive-widget=resizes-content 也能缩视口。 */
+@supports (height: 1dvh) {
+    .qn-viewport {
+        height: var(--qn-vvh, 100dvh);
+    }
+}
+
+/* 消息流隐藏滚动条：手机上桌面式灰条很突兀（滑动本身就有位置反馈），隐藏更贴近原生聊天 */
+.qn-hide-scroll {
+    scrollbar-width: none;
+}
+.qn-hide-scroll::-webkit-scrollbar {
+    display: none;
+}
+
 /** 刘海屏/手势条：底部输入栏别贴着home indicator，让出 env(safe-area-inset-bottom) */
 @supports (padding-bottom: env(safe-area-inset-bottom)) {
     .qn-safe-bottom {
