@@ -1,8 +1,8 @@
-﻿{
+{
   "name": "qingniao",
   "desktopName": "com.qingniao.desktop",
   "version": "1.7.13",
-  "description": "闈掗笩 QingNiao 鈥?寮€婧愬伐浣滃姪鎵嬶紙Electron 妗岄潰澹?+ OpenCode agent 鍐呮牳锛?,
+  "description": "青鸟 QingNiao — 开源工作助手（Electron 桌面壳 + OpenCode agent 内核）",
   "homepage": "https://github.com/seeuseless/opencode_desk",
   "repository": {
     "type": "git",
@@ -39,17 +39,17 @@
     "dist:linux": "node scripts/gen-update-meta.mjs && electron-vite build && node scripts/check-kernel.mjs && electron-builder --linux --publish never"
   },
   "//dependencies": [
-    "鈿狅笍 杩欓噷鍙斁**杩愯鏈燂紙鎵撳寘鍚庯級鐪熸浼氳鍔犺浇**鐨勫寘锛屽埆鐨勪竴寰嬭繘 devDependencies銆?,
-    "electron-builder 浼氭妸 dependencies 鍙婂叾鏁存５浼犻€掍緷璧栨爲鏀惰繘 app.asar 鈥斺€?鑰屾覆鏌撳眰鐨勪緷璧?,
-    "锛坮eact / lucide-react / highlight.js / react-markdown 鈥︼級宸茶 Vite 鎵撹繘 out/renderer 鍗曟枃浠讹紝",
-    "婧愮爜渚т笉鍐嶉渶瑕佸畠浠紱鐣欏湪 dependencies 鍙細璁?asar 鐧借儢 70MB+锛?026-09-22 瀹炴祴 74MB 鈫?~1MB锛夈€?,
-    "MCP 鐩稿叧鍖呮槸鐙珛 node 杩涚▼锛岀敱 resources/mcp/*.mjs 鎻愪緵锛堣剼鏈湰韬殢 extraResources 鎵撳寘锛夛紝",
-    "鍚屾牱涓嶈杩涘畨瑁呭寘銆?,
+    "⚠️ 这里只放**运行期（打包后）真正会被加载**的包，别的一律进 devDependencies。",
+    "electron-builder 会把 dependencies 及其整棵传递依赖树收进 app.asar —— 而渲染层的依赖",
+    "（react / lucide-react / highlight.js / react-markdown …）已被 Vite 打进 out/renderer 单文件，",
+    "源码侧不再需要它们；留在 dependencies 只会让 asar 白胖 70MB+（2026-09-22 实测 74MB → ~1MB）。",
+    "MCP 相关包是独立 node 进程，由 resources/mcp/*.mjs 提供（脚本本身随 extraResources 打包），",
+    "同样不该进安装包。",
     "",
-    "褰撳墠渚濊禆娓呭崟锛?,
-    "  路 opencode-ai  鈥斺€?agent 鍐呮牳锛涘叾 bin/opencode.exe 鐢?extraResources 鎷峰埌 resources/bin",
-    "  路 qrcode-generator 鈥斺€?electron/main/relay.ts 鍞竴杩愯鏃?import锛堢Щ鍔ㄧ閰嶅鐢讳簩缁寸爜锛?,
-    "鍏朵綑鍏ㄩ儴涓?devDependencies锛堝惈 opencode 鐨勫钩鍙板寘锛岃涓嬫柟 files 鎺掗櫎璇存槑锛夈€?
+    "当前依赖清单：",
+    "  · opencode-ai  —— agent 内核；其 bin/opencode.exe 由 extraResources 拷到 resources/bin",
+    "  · qrcode-generator —— electron/main/relay.ts 唯一运行时 import（移动端配对画二维码）",
+    "其余全部为 devDependencies（含 opencode 的平台包，见下方 files 排除说明）。"
   ],
   "dependencies": {
     "opencode-ai": "^1.18.33",
