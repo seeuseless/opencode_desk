@@ -4,9 +4,9 @@
 //
 // 用法：
 //
-//	server                      # 本地一体化：绑 127.0.0.1，端口从 9002 起找可用的
+//	server                      # 本地一体化：绑 127.0.0.1，端口从 35000 起找可用的
 //	QINGNIAO_HOST=0.0.0.0 \     # 独立部署：绑全部网卡，手机/桌面端都通过网络访问
-//	QINGNIAO_PORT=9002 \
+//	QINGNIAO_PORT=35000 \
 //	QINGNIAO_PUBLIC_URL=https://api.example.com \
 //	server
 //
@@ -42,7 +42,7 @@ func main() {
 		log.Fatalf("建数据目录失败: %v", err)
 	}
 
-	// 端口从 9002 起找可用的：桌面端默认地址写的是 9002，被占了就顺延
+	// 端口从 35000 起找可用的：桌面端默认地址写的是 35000，被占了就顺延
 	port, err := config.PickPort(cfg.Port)
 	if err != nil {
 		log.Fatalf("找不到可用端口: %v", err)

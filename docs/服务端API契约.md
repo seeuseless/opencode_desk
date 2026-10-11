@@ -55,7 +55,7 @@
   "token": "plainTextToken",
   "expires_at": "2036-10-07T09:00:00+00:00",
   "user": { "id": 1, "name": "张三", "email": "a@b.c" },
-  "gateway": "http://127.0.0.1:9002/api/ide/v1"
+  "gateway": "http://127.0.0.1:35000/api/ide/v1"
 }
 ```
 - token 有效期 10 年，可吊销。
@@ -70,7 +70,7 @@ Bearer。响应 200：
 {
   "user": { "id": 1, "name": "张三", "email": "a@b.c" },
   "token": { "id": 5, "name": "ide:青鸟", "expires_at": "2036-10-07T09:00:00+00:00" },
-  "gateway": "http://127.0.0.1:9002/api/ide/v1"
+  "gateway": "http://127.0.0.1:35000/api/ide/v1"
 }
 ```
 
@@ -172,7 +172,7 @@ Bearer。请求：
 {
   "id": 1, "name": "青鸟 · Windows · HOST", "platform": "Windows",
   "token": "64位随机串", "secret": "64位随机串",
-  "path": "/ide/device/xxx", "url": "http://127.0.0.1:9002/ide/device/xxx",
+  "path": "/ide/device/xxx", "url": "http://127.0.0.1:35000/ide/device/xxx",
   "enabled": true, "online": true, "mobile_online": false,
   "last_seen_at": "2026-10-07 09:00:00", "mobile_seen_at": null,
   "created_at": "2026-10-07 09:00:00"

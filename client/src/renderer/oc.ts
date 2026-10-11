@@ -306,6 +306,33 @@ export const BROWSER_CTX_PREFIX = '␞␞浏览器上下文␞␞\n'
  */
 export const ATTACH_CTX_PREFIX = '␞␞附件路由␞␞\n'
 
+/**
+ * 服务进程约定注入标记：每会话首轮以 noReply 注入一次「启动常驻服务的标准姿势」，
+ * AI 可见、界面不渲染（ChatView 的 isCtxOnly 据此跳过）。
+ * 输出里约定的 QN_SERVICE_PID=<pid> 回显由 ChatView 解析后登记到主进程（见 procstore）。
+ */
+export const SERVICE_CTX_PREFIX = '␞␞服务进程约定␞␞\n'
+
+/** 服务进程约定正文：Windows 下启动常驻服务的标准姿势（后台化 + PID 回显），防终端被前台服务卡死 */
+export const SERVICE_RULES = `启动常驻服务/服务器（需要长期运行的进程）时，必须遵守：
+1. 禁止用 nohup、<命令> & 这类 Unix 后台语法——本机 Windows 终端不能真正后台化，服务会占住终端把任务卡死。
+2. 统一用这一条命令启动（整行原样，只替换尖括号部分；外层单引号不能改成双引号）：
+powershell -NoProfile -Command '$env:NAME="value"; $p = Start-Process -FilePath "<exe>" -ArgumentList "<args>" -WorkingDirectory "<dir>" -WindowStyle Hidden -PassThru; Write-Output ("QN_SERVICE_PID=" + $p.Id)'
+   - 环境变量用 $env:NAME="value" 前置（如 $env:GOERP_ADDR=":9002"），不能像 Unix 那样写在命令前面；没有就省略。
+   - 输出里的 QN_SERVICE_PID=<pid> 必须原样保留，界面靠它登记这个服务进程。
+3. 启动后隔 2~3 秒再验证端口（curl 或 netstat）；失败先看程序自己的日志、查端口占用，不要换方式反复重启。
+4. 停止服务用：taskkill /pid <pid> /t /f （也可以让用户在对话下方的服务进程卡里点停止）。`
+
+/** 对话内展示的「本会话服务进程」（AI 按约定启动、回显 PID 后登记；主进程存活探测对账） */
+export interface QnProc {
+  pid: number
+  /** 启动命令摘要 */
+  cmd: string
+  /** 从命令里识别出的服务端口 */
+  port?: number
+  startedAt: number
+}
+
 /** 内核 question 工具的提问请求（question.v2.asked 事件推送，阻塞等待用户应答） */
 export interface QuestionAsk {
   id: string

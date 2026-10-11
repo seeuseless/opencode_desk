@@ -2,7 +2,7 @@
 //
 // 本地一体化模式（桌面端随包分发）下所有项都有合理默认值，用户零配置：
 //
-//	· 端口从 9002 起找可用的（与桌面端 DEFAULT_PLATFORM_URL 对齐）
+//	· 端口从 35000 起找可用的（与桌面端 DEFAULT_PLATFORM_URL 对齐；避开 80/3000/8080 这类常用端口段）
 //	· SQLite 单文件落在 ~/.qingniaoai/server.db，与内核数据隔离
 //	· 管理员账号首次启动时自动创建（admin / 随机密码打到日志）
 //
@@ -48,7 +48,8 @@ type Config struct {
 }
 
 // DefaultPort 桌面端默认平台地址用的端口（electron/main/types.ts 的 DEFAULT_PLATFORM_URL）。
-const DefaultPort = 9002
+// 选高位段避开常用服务端口（80/81/3000/8080…），被占时 PickPort 从这里顺延。
+const DefaultPort = 35000
 
 // DefaultDataDirName 桌面端数据目录名（与内核共处 ~/.qingniaoai）。
 const DefaultDataDirName = ".qingniaoai"

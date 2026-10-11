@@ -16,8 +16,8 @@ export default defineConfig({
   server: {
     port: 9003,
     proxy: {
-      // 开发时前端跑 9003，API 转到 9002 的服务端
-      '/api': { target: 'http://127.0.0.1:9002', changeOrigin: true }
+      // 开发时前端跑 9003，API 转到 35000 的服务端（server 的 DefaultPort）
+      '/api': { target: 'http://127.0.0.1:35000', changeOrigin: true }
     }
   }
 })

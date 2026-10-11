@@ -1,4 +1,5 @@
 import { app, shell } from 'electron'
+import { markQuitConfirmed } from './procstore.ts'
 import { spawn } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -554,6 +555,8 @@ export function installUpdate(): { ok: boolean; manual?: boolean; error?: string
     }
     // 给安装器一点时间真正起来（它是独立进程，但句柄传递有个瞬间），再退自己。
     // 就算还没退完，安装器的 --updated 路径也会等应用退出，不会卡在"文件正在使用"。
+    // 静默升级是用户明确发起的退出，先豁免「服务在跑」的退出确认（见 procstore）。
+    markQuitConfirmed()
     setTimeout(() => app.quit(), 300)
   }
   return { ok: true, manual }

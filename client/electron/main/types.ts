@@ -206,7 +206,7 @@ export interface DeviceCfg {
  * 以后上线换域名只改这一个值（或用环境变量 QINGNIAO_PLATFORM_URL 覆盖，便于临时切环境）。
  */
 export interface PlatformCfg {
-  /** 平台地址，如 http://127.0.0.1:9002 */
+  /** 平台地址，如 http://127.0.0.1:35000 */
   baseUrl: string
   /** 登录换来的长期授权 token（10 年有效，可在平台后台吊销） */
   token: string
@@ -296,7 +296,9 @@ export interface Settings {
   modelAuth: string[]
 }
 
-export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:9002'
+// 默认平台地址与服务端 DefaultPort（server/internal/config/config.go）对齐：35000 起的高位段，
+// 避开 80/3000/8080 这类常用端口；server 被占会顺延，客户端启动时按 server.ts 的发现逻辑跟随
+export const DEFAULT_PLATFORM_URL = 'http://127.0.0.1:35000'
 
 export const DEFAULT_SETTINGS: Settings = {
   providers: [],

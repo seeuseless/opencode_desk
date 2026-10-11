@@ -18,6 +18,7 @@ import { readSchedules, removeSchedule, reorderSchedules, runScheduleNow, startS
 import type { ScheduleTask } from './types.ts'
 import { localUsage } from './usage.ts'
 import { delUiStore, loadUiStore, setUiStore } from './uistore.ts'
+import { procAdd, procAliveCount, procKill, procList, markQuitConfirmed, quitConfirmed } from './procstore.ts'
 
 /**
  * 主进程职责：
@@ -87,6 +88,32 @@ function createWindow(): void {
   const sendMax = (v: boolean) => mainWin?.webContents.send('win:maximized', v)
   mainWin.on('maximize', () => sendMax(true))
   mainWin.on('unmaximize', () => sendMax(false))
+  // 真退出前的服务进程确认：对话里 AI 启动的服务还在跑时，退出（Alt+F4 / 托盘「退出」）先问一声。
+  // 它们是独立进程、不会被退出带走，但退了之后对话里的服务进程卡就没了——用户只能去任务管理器找。
+  // 点标题栏 X 只是隐藏到托盘，不走这里；更新器静默升级与用户确认过的退出被 quitConfirmed 豁免。
+  mainWin.on('close', (e) => {
+    if (quitConfirmed()) return
+    const n = procAliveCount()
+    if (!n) return
+    e.preventDefault()
+    void dialog
+      .showMessageBox(mainWin!, {
+        type: 'warning',
+        message: `还有 ${n} 个 AI 启动的服务进程在运行`,
+        detail:
+          '退出青鸟不会关掉它们（会继续在后台运行），但对话里的服务进程卡会消失，之后只能在任务管理器里手动结束。\n\n仍然要退出吗？',
+        buttons: ['仍然退出', '取消'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          markQuitConfirmed()
+          app.quit()
+        }
+      })
+  })
   if (process.env['ELECTRON_RENDERER_URL']) {
     mainWin.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -1351,6 +1378,13 @@ ipcMain.handle('schedule:remove', (_e, id: string) => removeSchedule(id))
 ipcMain.handle('schedule:reorder', (_e, ids: string[]) => reorderSchedules(ids))
 ipcMain.handle('schedule:runNow', (_e, id: string) => runScheduleNow(id))
 
+// ---------- 对话级服务进程（AI 在会话里启动的常驻服务，对话内可查看/停止；见 procstore.ts） ----------
+ipcMain.handle('proc:list', (_e, sid: string) => procList(sid))
+ipcMain.handle('proc:add', (_e, req: { sid: string; proc: { pid: number; cmd: string; port?: number; startedAt: number } }) =>
+  procAdd(req.sid, req.proc)
+)
+ipcMain.handle('proc:kill', (_e, req: { sid: string; pid: number }) => procKill(req.sid, req.pid))
+
 // 自绘标题栏的窗口控制
 ipcMain.on('win:min', () => mainWin?.minimize())
 ipcMain.on('win:max', () => {
@@ -1442,6 +1476,10 @@ app.whenReady().then(async () => {
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })
   setOfficeMcp({ path: officeMcpPath() })
+  // 平台服务端（青鸟平台，Go 单二进制）：探测 health，不通时在本机扫顺延端口并落盘修正地址。
+  // 必须在 writeOpencodeConfig 之前——发现出的新端口要写进内核的平台网关地址；
+  // 也必须在 relay.apply() 之前——远程开关是 apply 的前提，否则服务端起来了也不会注册设备。
+  await server.ensure()
   writeOpencodeConfig(loadSettings())
   adapter.bin = opencodeBin()
   adapter.workspace = workspace
@@ -1489,10 +1527,7 @@ app.whenReady().then(async () => {
   }
 
   // 移动端中转通道：登录了就注册设备（二维码随即可用），开关开着才真的开始认领指令。
-  // 服务端（青鸟平台，Go 单二进制）：先探测 health，不通就拉起，通了自动打开「远程服务」开关。
-  // 必须在 relay.apply() 之前：远程开关是 apply 的前提，否则服务端起来了也不会注册设备。
-  await server.ensure()
-
+  // 服务端可用性探测已提前到写内核配置之前（见上方 server.ensure()）。
   relay.apply()
 
   // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做

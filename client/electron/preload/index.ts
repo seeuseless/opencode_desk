@@ -157,6 +157,18 @@ const api = {
     ipcRenderer.on('schedule:ran', handler)
     return () => ipcRenderer.removeListener('schedule:ran', handler)
   },
+  /**
+   * 本会话由 AI 启动的常驻服务进程（对话内展示/停止；登记来源与存活对账见 main/procstore.ts）。
+   * list 每次都先探测存活：外部被关掉 / 重启应用后已死的会自动清掉。
+   */
+  procList: (sid: string): Promise<{ pid: number; cmd: string; port?: number; startedAt: number }[]> =>
+    ipcRenderer.invoke('proc:list', sid),
+  procAdd: (sid: string, proc: { pid: number; cmd: string; port?: number; startedAt: number }): Promise<
+    { pid: number; cmd: string; port?: number; startedAt: number }[]
+  > => ipcRenderer.invoke('proc:add', { sid, proc }),
+  /** 停止服务进程（Windows 连子进程树一起杀），返回删除后的最新清单 */
+  procKill: (sid: string, pid: number): Promise<{ pid: number; cmd: string; port?: number; startedAt: number }[]> =>
+    ipcRenderer.invoke('proc:kill', { sid, pid }),
   /** 保存聊天里的图片/视频：远程地址下载、本地路径复制，弹系统另存为对话框；返回空串表示成功 */
   saveMedia: (source: string, name?: string): Promise<string> => ipcRenderer.invoke('media:save', { source, name }),
   /** 读本地图片为 data URL（聊天内嵌显示本地图用）；非图片或不存在的返回空串 */

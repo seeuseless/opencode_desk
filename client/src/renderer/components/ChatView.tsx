@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -74,12 +74,13 @@ function parseModel(key: string): ModelSel | undefined {
   return { providerID: key.slice(0, i), modelID: key.slice(i + 1) }
 }
 
-/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文 / 附件说明）：AI 可见、界面不渲染 */
+/** 「仅上下文」注入消息（项目记忆 / 浏览器页面上下文 / 附件说明 / 服务进程约定）：AI 可见、界面不渲染 */
 function isCtxOnly(txt: string): boolean {
   return (
     txt.startsWith(MEMORY_PREFIX) ||
     txt.startsWith(BROWSER_CTX_PREFIX) ||
-    txt.startsWith(ATTACH_CTX_PREFIX)
+    txt.startsWith(ATTACH_CTX_PREFIX) ||
+    txt.startsWith(SERVICE_CTX_PREFIX)
   )
 }
 
@@ -391,6 +392,12 @@ export function ChatView(p: Props) {
   // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
   const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
   const diffsBusy = useRef<Set<string>>(new Set())
+  // 本会话由 AI 启动的常驻服务（对话末尾进程卡展示/停止；登记与对账在主进程 procstore）
+  const [svcProcs, setSvcProcs] = useState<QnProc[]>([])
+  // 已解析登记过 QN_SERVICE_PID 的工具 part：part.updated 对同一 part 可能多次推送，防重复登记
+  const svcParsed = useRef<Set<string>>(new Set())
+  // 已注入过「服务进程约定」的会话：每会话只注一次（新会话/老会话首轮都会走到）
+  const svcCtxSids = useRef<Set<string>>(new Set())
 
   // ---------- 浏览面板 ----------
   // 面板的**可见性只由用户点击决定**：AI 调浏览器工具不弹面板，但 webview 一直活着，
@@ -1032,6 +1039,37 @@ export function ChatView(p: Props) {
     }
   }, [p.sessionId, p.project?.path])
 
+  // 本会话服务进程：切换会话即拉取；有进程时每 8 秒轮询——存活对账在主进程
+  // procList 里做（外部关掉/重启后已死的会被清掉，这里拿到列表直接渲染即自动消失）
+  useEffect(() => {
+    const sid = p.sessionId
+    if (!sid) {
+      setSvcProcs([])
+      return
+    }
+    let alive = true
+    const pull = (): void => {
+      window.qingniao.procList(sid)
+        .then((l) => {
+          if (alive) setSvcProcs(l)
+        })
+        .catch(() => {})
+    }
+    pull()
+    const timer = window.setInterval(pull, 8000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [p.sessionId])
+
+  /** 停止本会话的一个服务进程（含子进程树），主进程返回删除后的最新清单 */
+  function stopProc(pid: number): void {
+    const sid = sidRef.current
+    if (!sid) return
+    window.qingniao.procKill(sid, pid).then(setSvcProcs).catch(() => {})
+  }
+
   // 订阅内核事件：token 级增量 + part 快照 + 会话空闲
   useEffect(() => {
     const off = window.qingniao.onEvent(async (raw) => {
@@ -1080,6 +1118,23 @@ export function ChatView(p: Props) {
           if (mark != null && (startedAt === Infinity || startedAt <= mark)) return // 停止前的残骸（或无法判定启动时刻），不续命
           const foreign = s !== sidRef.current && !busyDir.current[s]
           markBusy(s, true, busyDir.current[s] ?? (s === sidRef.current ? dirRef.current : undefined), foreign)
+        }
+        // 服务进程登记：终端工具完成后从输出里解析约定的 QN_SERVICE_PID 回显（启动约定见
+        // SERVICE_CTX 注入）。放在会话过滤**之前**：用户切走会话的瞬间，这个会话启动的服务也不能漏登记。
+        if (part.type === 'tool' && part.state?.status === 'completed' && part.state.output && !svcParsed.current.has(part.id)) {
+          const tname = (part.tool ?? '').toLowerCase()
+          if (tname === 'bash' || tname === 'shell' || tname === 'execute') {
+            svcParsed.current.add(part.id)
+            const cmd = str((part.state.input as Record<string, unknown> | undefined)?.command)
+            const port = cmdPortOf(cmd)
+            let latest: QnProc[] | null = null
+            for (const m of part.state.output.matchAll(/QN_SERVICE_PID=(\d+)/g)) {
+              latest = await window.qingniao
+                .procAdd(part.sessionID, { pid: Number(m[1]), cmd: cmd ? cmd.slice(0, 120) : '服务进程', port, startedAt: Date.now() })
+                .catch(() => null)
+            }
+            if (latest && part.sessionID === sidRef.current) setSvcProcs(latest)
+          }
         }
         if (part.sessionID !== sidRef.current) return
         if (part.type === 'tool' && part.state?.status !== 'running') {
@@ -1802,6 +1857,17 @@ export function ChatView(p: Props) {
       }
     }
 
+    // 服务进程约定：每会话首轮注入一次「启动常驻服务的标准姿势」（Windows 下用 PowerShell
+    // Start-Process 后台化并回显 QN_SERVICE_PID）。失败回滚标记，下一轮重试。
+    if (sid && !svcCtxSids.current.has(sid)) {
+      try {
+        await oc.injectContext(sid, dir, SERVICE_CTX_PREFIX + SERVICE_RULES)
+        svcCtxSids.current.add(sid)
+      } catch {
+        /* 注入失败不阻塞对话 */
+      }
+    }
+
     markBusy(sid, true, dir)
     userStopMarks.current.delete(sid)
     const files = attsOverride ?? []
@@ -2142,6 +2208,32 @@ export function ChatView(p: Props) {
             />
           )}
           {todos.length > 0 && <TodoCard todos={todos} live={busy} />}
+          {/*
+            本会话服务进程卡：AI 按约定启动的常驻服务（回显 QN_SERVICE_PID 登记）。
+            每行：命令摘要 + 端口 + PID + 停止按钮；进程在外部被关掉后由轮询自动消失。
+          */}
+          {svcProcs.length > 0 && (
+            <div className="amsg svc-card">
+              <div className="svc-head">
+                <Terminal size={13} />
+                <span>{t('本会话服务进程')}</span>
+                <span className="svc-count">{svcProcs.length}</span>
+              </div>
+              {svcProcs.map((proc) => (
+                <div className="svc-item" key={proc.pid}>
+                  <span className="svc-dot" />
+                  <span className="svc-cmd" title={proc.cmd}>
+                    {proc.cmd}
+                  </span>
+                  {proc.port != null && <span className="svc-port">:{proc.port}</span>}
+                  <span className="svc-pid">PID {proc.pid}</span>
+                  <button className="icon-btn" title={t('停止进程（含子进程）')} onClick={() => stopProc(proc.pid)}>
+                    <Square size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {busy && (
             <div className="amsg busyline">
               {terminalBlocked ? (
@@ -3512,6 +3604,13 @@ function extLang(file: string): string | undefined {
 function parseTaskOutput(raw: string): string | null {
   const m = /<task_result>\n?([\s\S]*?)<\/task_result>/.exec(raw)
   return m ? m[1].trim() : null
+}
+
+/** 从服务启动命令里识别端口：--port N / PORT=N / :NNNN（4-5 位数字，如 GOERP_ADDR=:9002） */
+function cmdPortOf(cmd: string): number | undefined {
+  const m = /--port[= ](\d{2,5})\b/i.exec(cmd) ?? /\bPORT[=:](\d{2,5})\b/i.exec(cmd) ?? /:(\d{4,5})\b/.exec(cmd)
+  const n = m ? Number(m[1]) : NaN
+  return n >= 1 && n <= 65535 ? n : undefined
 }
 
 /** 解析 read 工具输出：文件取 <content> 剥行号；目录取 <entries> 只列条目，剥掉 path/type 包装 */
