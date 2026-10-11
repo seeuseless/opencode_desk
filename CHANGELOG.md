@@ -3,6 +3,23 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.10 — 2026-10-11
+
+限免模型通道收紧与浅色侧栏可读性。
+
+### 改善
+
+- **opencode 限免模型只收 OpenAI `/chat/completions` 兼容通道**：按内核清单里的 `api.npm` 白名单过滤（`@ai-sdk/openai-compatible`），原生 `@ai-sdk/openai` 通道（如 `muse-spark-1.3-contributor-free`，实测调用报错）与 `api` 字段缺失的一律不收；官方清单变化后下次同步自动生效。
+- **浅色主题侧栏列表文字加深**：任务/会话列表行（含代码模式文件树）文字改用主文字色，图标/时间等次级元素加深到 #4b5563——侧栏底色调为 #ECECEC 后原次级灰对比不足，读着费劲。
+
+### 修复
+
+- 设置页「opencode限免」分组的说明文案移除（内容过时且多余，繁/英语言包死条目一并清理）。
+
+### 说明
+
+- `client/resources/update.json` 已用 `client/scripts/gen-update-meta.mjs` 同步到 1.7.10。
+
 ## v1.7.9 — 2026-10-11
 
 回复阅读与过程可见性：AI 回复默认全文展开、每轮结束显示工作时长、Ctrl+N 快捷新建任务。
