@@ -52,5 +52,7 @@ client/dist-verify/
 /web/dist/
 
 # ---------------- 云端服务端（server_cloudflare/）----------------
+# 本地联调/冒烟的临时数据库（fake-desk.mjs、冒烟脚本反复创建，绝不入库）
+/server_cloudflare/.smoke-mail.db*
 node_modules/
 .wrangler/
