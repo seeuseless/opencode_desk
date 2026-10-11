@@ -82,34 +82,58 @@ admin.post('/auth/login', async (c) => {
   return c.json({ token: plain, user: userPayload(u) })
 })
 
-/** GET /api/upgrade — 桌面端检查新版本时优先走这里：国内 api.github.com 常被墙，服务端在 CF 出口可达 GitHub，
- *  代拉最新正式发布的概要（结构与 GitHub release 对齐，客户端复用它的版本比较与附件挑选逻辑）。 */
+/** 安装包附件命名（与 electron-builder artifactName + release.yml 完全一致）：按 tag 拼出下载直链，枚举全部架构。 */
+const UPGRADE_ASSET_NAMES = [
+  'QingNiao-Setup.exe',
+  'QingNiao-Setup-arm64.exe',
+  'QingNiao-Setup-x64.dmg',
+  'QingNiao-Setup-arm64.dmg',
+  'QingNiao-Setup-x86_64.AppImage',
+  'QingNiao-Setup-arm64.AppImage',
+  'QingNiao-Setup-amd64.deb',
+  'QingNiao-Setup-arm64.deb'
+]
+const UPGRADE_REPO = 'seeuseless/opencode_desk'
+
+/**
+ * GET /api/upgrade — 桌面端检查新版本时优先走这里：国内 api.github.com 常被墙，服务端在 CF 出口可达 GitHub，
+ *  代拉最新正式发布的概要（结构与 GitHub release 对齐，客户端复用版本比较与附件挑选）。
+ *  数据源用 **releases.atom（RSS 发布源）**而不是 GitHub REST API：RSS 走静态托管、不受 API 限流配额
+ *  （未认证 API 按共享出口 IP 60 次/时，多客户端一起查极易 403——用户看到的「GitHub 接口限流」正是这个）。
+ *  附件直链按既定命名规则由 tag 拼出，不再逐次拉 assets。Cache API 缓存 10 分钟进一步摊薄。 */
 admin.get('/upgrade', async (c) => {
+  const id = `upgrade:${new Date(Math.floor(Date.now() / 600_000) * 600_000).toISOString()}`
+  const hit = await caches.default?.match(new Request(`https://api.github.com/__qn_upgrade_cache__/${id}`))
+  if (hit) return new Response(await hit.text(), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } })
   try {
-    const r = await fetch('https://api.github.com/repos/seeuseless/opencode_desk/releases/latest', {
-      headers: { 'User-Agent': 'qingniao-server', Accept: 'application/vnd.github+json' },
+    const atom = await (await fetch(`https://github.com/${UPGRADE_REPO}/releases.atom`, {
+      headers: { 'User-Agent': 'qingniao-server' },
       signal: AbortSignal.timeout(8000)
-    })
-    if (!r.ok) return c.json({ ok: false, message: `GitHub ${r.status}` }, 502)
-    const g = (await r.json()) as {
-      tag_name?: string
-      body?: string
-      html_url?: string
-      published_at?: string
-      assets?: { name?: string; browser_download_url?: string; size?: number }[]
-    }
-    return c.json({
+    })).text()
+    // 首个「形如 vX.Y.Z」的 entry 标题即最新正式版本（跳过 feed 主标题与可能的预发布后缀）
+    const tag = [...atom.matchAll(/<title>([^<]+)<\/title>/g)]
+      .map((m) => m[1].trim())
+      .find((t) => /^v\d+\.\d+\.\d+$/.test(t))
+    if (!tag) throw new Error('发布源里没读到版本')
+    const content = (atom.match(/<content[^>]*>([\s\S]*?)<\/content>/) || [])[1] || ''
+    const body = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600)
+    const assets = UPGRADE_ASSET_NAMES.map((name) => ({
+      name,
+      browser_download_url: `https://github.com/${UPGRADE_REPO}/releases/download/${tag}/${name}`,
+      size: 0
+    }))
+    const payload = JSON.stringify({
       ok: true,
-      tag_name: g.tag_name ?? '',
-      body: g.body ?? '',
-      html_url: g.html_url ?? '',
-      published_at: g.published_at ?? '',
-      assets: (g.assets ?? []).map((a) => ({
-        name: a.name ?? '',
-        browser_download_url: a.browser_download_url ?? '',
-        size: Number(a.size) || 0
-      }))
+      tag_name: tag,
+      body,
+      html_url: `https://github.com/${UPGRADE_REPO}/releases/tag/${tag}`,
+      published_at: '',
+      assets
     })
+    const req = new Request(`https://api.github.com/__qn_upgrade_cache__/${id}`)
+    const resp = new Response(payload, { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'max-age=600' } })
+    await caches.default?.put(req, resp.clone())
+    return resp
   } catch (e) {
     return c.json({ ok: false, message: e instanceof Error ? e.message : String(e) }, 502)
   }
