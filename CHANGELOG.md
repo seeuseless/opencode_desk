@@ -3,6 +3,19 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.16 — 2026-10-12
+
+平台更新检查接口改读 GitHub 发布源（RSS），规避 API 共享出口限流导致的「查不到新版本」。
+
+### 修复
+
+- **`/api/upgrade` 改读 GitHub 发布源（releases.atom）**：平台此前代桌面端检查更新走的是 GitHub REST API，未认证调用按共享出口 IP 限流（60 次/时）——Cloudflare 出口上多个客户端同时查极易触发 403，用户「设置 → 关于」里看到的「GitHub 接口限流 HTTP 403」即此。现改为拉取 `releases.atom` 发布源：静态托管、不受 API 配额限制；版本号从 feed 首个「vX.Y.Z」条目解析，安装包下载直链按既定命名规则由 tag 拼出（不再逐次拉 assets 列表）；结果再经 Cache API 缓存 10 分钟摊薄出口请求。
+
+### 说明
+
+- 修复在服务端生效（云端 Workers 或本地部署都需要重新部署一次）；桌面端无需改动，检查路径不变（仍优先打平台 `/api/upgrade`、回落 api.github.com）。
+- `client/resources/update.json` 已用 `client/scripts/gen-update-meta.mjs` 同步到 1.7.16。
+
 ## v1.7.15 — 2026-10-11
 
 左下角账号显示邮箱与积分；工作区更新入口改绿色醒目条；更新检查改走平台优先。
