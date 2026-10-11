@@ -1,4 +1,4 @@
-# 内核 bash 工具机制与对话服务进程管理
+﻿# 内核 bash 工具机制与对话服务进程管理
 
 > 以代码为准，改动后同步。内核版本依据：opencode-ai 1.18.31（二进制字符串探查结论）。
 
@@ -31,10 +31,10 @@
 
 ## 平台服务端端口策略（35000 起，避开常用端口）
 
-- server（Go）默认端口 `DefaultPort = 35000`（`server/internal/config/config.go`），`PickPort` 被占从 35000 顺延最多 100 个——刻意避开 80/81/3000/8080 这类常用段，不与用户自己的服务（goerp 等）抢 9002。
+- 服务端本地形态默认端口 35000（`server_cloudflare/src/local/main.ts`，被占即启动失败需换 `PORT`）——刻意避开 80/81/3000/8080 这类常用段，不与用户自己的服务（goerp 等）抢 9002。
 - 桌面端默认平台地址 `DEFAULT_PLATFORM_URL = http://127.0.0.1:35000`（`electron/main/types.ts`）。
 - **发现跟随**：`server.ts` 的 `ensure()` 在写内核配置前跑——配置地址（回环）探不到 `/api/health` 时自动扫 `35000..35099` 再兼容旧段 `9002..9101`，找到自己的 server（health 返回 `ok:true`）就 `setPlatform({ baseUrl })` 落盘并重写内核配置（登录态不动）；没找到每 60s 重试。环境变量 `QINGNIAO_PLATFORM_URL` 与远程域名不猜。
-- 契约文档示例地址已同步 35000（`docs/服务端API契约.md`）；`server/web/vite.config.ts` 开发代理同。
+- 契约文档示例地址已同步 35000（`docs/服务端API契约.md`）；`web/vite.config.ts` 开发代理同。
 
 验证命令：`cd client && npm run typecheck && npm run build`；Go 侧 `cd server && go build ./...`。
 

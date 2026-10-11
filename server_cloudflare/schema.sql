@@ -206,3 +206,15 @@ CREATE TABLE IF NOT EXISTS settings (
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+-- 邮箱验证码（注册 / 验证码登录 / 超管换邮箱）：email+purpose 一行，验证通过或作废时删除；
+-- attempts 防暴力试码（错 5 次作废），created_at 兼作 60 秒重发节流的依据。
+CREATE TABLE IF NOT EXISTS mail_codes (
+    email       TEXT NOT NULL,
+    purpose     TEXT NOT NULL,
+    code        TEXT NOT NULL,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    expires_at  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (email, purpose)
+);

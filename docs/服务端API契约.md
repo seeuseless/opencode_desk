@@ -1,8 +1,8 @@
 # 服务端 API 契约（`/api/ide/*`）
 
-> **唯一事实来源。** 改协议必须同时改三处：本文档、`server/` 实现、`client/electron/main/` 调用方。
+> **唯一事实来源。** 改协议必须同时改三处：本文档、`server_cloudflare/` 实现、`client/electron/main/` 调用方。
 >
-> 本文档由 `opencode_desk_token_plan`（Laravel 实现）逐字段核对而来，Go 重写版必须 1:1 兼容——
+> 本文档由 `opencode_desk_token_plan`（Laravel 实现）逐字段核对而来，服务端（server_cloudflare）1:1 兼容——
 > 桌面端 `platform.ts` / `relay.ts` 里的 URL、请求体、响应字段一个都不能改。
 
 ## 0. 通用约定
@@ -362,13 +362,20 @@ Query：`page`、`per_page`（默认 20，最大 100）
 
 ## 6. 后台管理（精简范围）
 
-> 只做桌面端运营需要的五块：上游 / 模型 / 模型概况 / 用量 / 会员。
-> 权限组、小程序装修、应用市场、邮件、协议管理、TOTP 全部**不做**。
+> 只做桌面端运营需要的五块：上游 / 模型 / 模型概况 / 用量 / 会员，外加邮件（SMTP 配置 + 邮箱验证码）。
+> 权限组、小程序装修、应用市场、协议管理、TOTP 全部**不做**。
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/auth/login` | 账号密码登录（后台前端用） |
+| POST | `/api/auth/send-code` | 发邮箱验证码（`purpose`: `register`/`login`；60 秒节流；邮件未配置回 422） |
+| POST | `/api/auth/login` | 登录，发 1 年 token。`password`（管理员兜底）或 `code`（邮箱验证码，主方式）二选一 |
+| POST | `/api/auth/register` | 注册：邮箱 + 验证码，不设密码，成功即发 token（自动登录）。`users` 空表 = 初始化窗口：免验证码、可带 `password` 设管理员兜底密码、首个账号自动 admin |
 | GET | `/api/auth/me` | 当前登录者 |
+| GET | `/api/admin/mail-config` | SMTP 配置（密码不回显，只给 `has_pass`） |
+| PUT | `/api/admin/mail-config` | 保存 SMTP 配置（`pass` 留空 = 保持原密码）。键：host/port/user/pass/from/secure(`ssl`|`starttls`) |
+| POST | `/api/admin/mail-config/test` | 发测试邮件，SMTP 报错原样透传（502） |
+| POST | `/api/admin/profile/email/code` | 超管换邮箱第 1 步：发验证码到新邮箱（占用检查） |
+| PUT | `/api/admin/profile/email` | 超管换邮箱第 2 步：新邮箱 + 验证码确认 |
 | GET | `/api/admin/ai-upstreams` | 上游列表 |
 | POST | `/api/admin/ai-upstreams` | 新增上游 |
 | GET | `/api/admin/ai-upstreams/{id}` | 上游详情（含 Key 与模型） |
@@ -411,6 +418,8 @@ Query：`page`、`per_page`（默认 20，最大 100）
 users(id, name, email, password, role, points, status, created_at, updated_at)
 personal_access_tokens(id, user_id, name, token_hash, ip_address, user_agent, expires_at, created_at)
 login_logs(id, user_id, ip_address, device, user_agent, login_at, created_at)
+mail_codes(email, purpose, code, attempts, expires_at, created_at)  -- PK(email,purpose)；验证通过/作废即删
+settings(key, value, created_at, updated_at)  -- 邮件配置存 mail_host/mail_port/mail_user/mail_pass/mail_from/mail_secure
 
 ide_devices(id, user_id, name, platform, token, secret, lan_url, enabled,
             last_seen_at, mobile_seen_at, created_at, updated_at)

@@ -8,7 +8,6 @@
 
 export interface Env {
   DB: D1Database
-  ASSETS: Fetcher
   PUBLIC_URL: string
   TZ_HOURS: string
   PBKDF2_ITERS: string
@@ -51,6 +50,18 @@ export class ApiError extends Error {
 }
 
 export const fail = (status: number, message: string): ApiError => new ApiError(status, message)
+
+/**
+ * 把后台任务挂到运行时的后台：Workers 用 waitUntil（响应返回后继续跑完），
+ * 本地长驻进程没有 executionCtx，直接丢着跑即可。计费、登录日志这类不阻塞响应的活都走它。
+ */
+export function runBg(c: { executionCtx: { waitUntil: (p: Promise<unknown>) => void } }, p: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(p)
+  } catch {
+    p.catch(() => {})
+  }
+}
 
 // ---------- 时间 ----------
 

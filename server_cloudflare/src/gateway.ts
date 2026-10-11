@@ -25,7 +25,7 @@ import {
   type UpstreamModel
 } from './ai.ts'
 import { userOf, auth, type AppEnv } from './auth.ts'
-import { fail } from './db.ts'
+import { fail, runBg } from './db.ts'
 
 export const gw = new Hono<AppEnv>()
 gw.use('*', auth)
@@ -219,9 +219,10 @@ gw.post('/chat/completions', async (c) => {
         }
       })
     )
-    c.executionCtx.waitUntil(
+    runBg(
+      c,
       (async () => {
-        // 等扫描结束（流正常结束 flush 会 resolve；客户端断流时 60s 兜底），usage 定格后再入账
+        // 等扫流结束（流正常结束/flush 会让 resolve；客户端断流则 60s 兜底），usage 定格后再入账
         await Promise.race([finished, new Promise((r) => setTimeout(r, 60_000))])
         if (usage) {
           const { prompt, completion, total } = usageTokens(usage)

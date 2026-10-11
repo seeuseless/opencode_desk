@@ -4,17 +4,20 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "start": "node src/local/main.ts",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
-    "db:local": "wrangler d1 execute qingniao --local --file=./schema.sql",
+    "build:web": "npm --prefix ../web run build",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/local",
     "db:remote": "wrangler d1 execute qingniao --remote --file=./schema.sql",
     "tail": "wrangler tail"
   },
   "dependencies": {
+    "@hono/node-server": "^1.14.0",
     "hono": "^4.9.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261006.1",
+    "@types/node": "^24.0.0",
     "typescript": "^5.6.0",
     "wrangler": "^4.149.0"
   }

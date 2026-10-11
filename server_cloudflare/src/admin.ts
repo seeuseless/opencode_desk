@@ -24,6 +24,8 @@ import {
   trimLen
 } from './db.ts'
 import { auth, userOf, userPayload, type AppEnv } from './auth.ts'
+import { isMailConfigured, mailConfigOf, sendCode, setSetting, validEmail, verifyCode } from './mail/index.ts'
+import { sendMail } from './mail/smtp.ts'
 import {
   adjustPoints,
   availableUpstreamModels,
@@ -42,9 +44,13 @@ export const admin = new Hono<AppEnv>()
 
 // ---------- 公开：设置 / 登录 / 注册 ----------
 
-/** GET /api/settings — 后台界面要用的公开设置（只回站点名）。 */
+/** GET /api/settings — 后台界面要用的公开设置（站点名 + 邮件是否已配置，登录页据此选默认登录方式）。 */
 admin.get('/settings', async (c) => {
-  return c.json({ mall_name: await settingOf(c, 'mall_name', '青鸟平台'), logo_url: await settingOf(c, 'logo_url', '') })
+  return c.json({
+    mall_name: await settingOf(c, 'mall_name', '青鸟平台'),
+    logo_url: await settingOf(c, 'logo_url', ''),
+    mail_configured: await isMailConfigured(c)
+  })
 })
 
 async function settingOf(c: Context<AppEnv>, key: string, def: string): Promise<string> {
@@ -52,44 +58,71 @@ async function settingOf(c: Context<AppEnv>, key: string, def: string): Promise<
   return row?.value || def
 }
 
-/** POST /api/auth/login — 账号密码登录（后台前端用），发 1 年 token。 */
+/** POST /api/auth/login — 登录（后台前端与桌面端登录页用），发 1 年 token。
+ *  两种方式：password = 账号密码（管理员兜底）；code = 邮箱验证码（邮件配置后的主方式）。 */
 admin.post('/auth/login', async (c) => {
-  const req = await body<{ email?: string; password?: string }>(c)
-  const email = (req.email ?? '').trim()
-  if (!email || !req.password) throw fail(422, '请输入邮箱与密码')
-  const u = await findUserByEmail(c.env.DB, email)
-  if (!u || !(await checkPassword(req.password, u.password))) throw fail(422, '邮箱或密码不正确')
+  const req = await body<{ email?: string; password?: string; code?: string }>(c)
+  const email = (req.email ?? '').trim().toLowerCase()
+  if (!email) throw fail(422, '请输入邮箱')
+  let u: UserRow | null
+  if ((req.code ?? '').trim()) {
+    await verifyCode(c, email, 'login', req.code!.trim())
+    u = await findUserByEmail(c.env.DB, email)
+    if (!u) throw fail(404, '该邮箱尚未注册')
+  } else {
+    if (!req.password) throw fail(422, '请输入密码或邮箱验证码')
+    u = await findUserByEmail(c.env.DB, email)
+    if (!u) throw fail(422, '邮箱或密码不正确')
+    if (!u.password) throw fail(422, '该账号未设置密码，请使用邮箱验证码登录')
+    if (!(await checkPassword(req.password, u.password))) throw fail(422, '邮箱或密码不正确')
+  }
   if (u.status !== 'active') throw fail(403, '账号已被禁用')
   const plain = await issueToken(c, u.id, 'web', Date.now() + 365 * 86400_000)
   await addLoginLog(c, u.id, '后台')
   return c.json({ token: plain, user: userPayload(u) })
 })
 
-// 注册验证码：与 Go 版一致写死（本地部署没有可投递的邮箱，它拦的是手滑打错，不是安全边界）
-const FIXED_REGISTER_CODE = '000000'
+/** POST /api/auth/send-code — 发邮箱验证码（公开接口）。purpose：register=注册 / login=验证码登录。 */
+admin.post('/auth/send-code', async (c) => {
+  const req = await body<{ email?: string; purpose?: string }>(c)
+  const email = (req.email ?? '').trim().toLowerCase()
+  if (!validEmail(email)) throw fail(422, '邮箱格式不正确')
+  const purpose = req.purpose === 'login' ? 'login' : 'register'
+  if (purpose === 'register') {
+    if (await findUserByEmail(c.env.DB, email)) throw fail(409, '该邮箱已注册，请直接登录')
+  } else if (!(await findUserByEmail(c.env.DB, email))) {
+    throw fail(404, '该邮箱尚未注册')
+  }
+  await sendCode(c, email, purpose)
+  return c.json({ message: '验证码已发送，请查收邮箱' })
+})
 
-/** POST /api/auth/register — 注册新账号（公开接口；建出来的都是 member，第一个账号自动 admin）。 */
+/** POST /api/auth/register — 注册新账号（公开接口；建出来的都是 member，第一个账号自动 admin）。
+ *  注册 = 邮箱 + 邮件验证码，不设密码（之后登录走验证码）；注册成功直接发 token（自动登录）。
+ *  例外：users 空表 = 初始化窗口——免验证码、允许顺带设置管理员兜底密码
+ *  （全新部署时邮件必然还没配，窗口不放开就没人能成为第一个管理员）。 */
 admin.post('/auth/register', async (c) => {
-  const req = await body<{ email?: string; password?: string; name?: string; code?: string }>(c)
+  const req = await body<{ email?: string; name?: string; code?: string; password?: string }>(c)
   const email = (req.email ?? '').trim().toLowerCase()
   const name = (req.name ?? '').trim()
-  const pass = req.password ?? ''
-  const at = email.indexOf('@')
-  if (at <= 0 || at === email.length - 1 || !email.slice(at).includes('.') || /\s/.test(email) || email.length > 120) {
-    throw fail(422, '邮箱格式不正确')
-  }
-  if (pass.length < 6 || pass.length > 72) throw fail(422, '密码长度需在 6~72 位之间')
-  if ((req.code ?? '').trim() !== FIXED_REGISTER_CODE) throw fail(422, '验证码不正确')
+  if (!validEmail(email)) throw fail(422, '邮箱格式不正确')
 
-  let finalName = name || email.slice(0, at)
+  const count = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM users`).first<{ n: number }>())?.n ?? 0
+  if (count > 0) await verifyCode(c, email, 'register', (req.code ?? '').trim())
+
+  let hash = ''
+  if (count === 0 && (req.password ?? '').trim()) {
+    const pass = req.password!.trim()
+    if (pass.length < 6 || pass.length > 72) throw fail(422, '密码长度需在 6~72 位之间')
+    hash = await hashPassword(pass, pbkdf2Iters(c.env))
+  }
+
+  let finalName = name || email.slice(0, email.indexOf('@'))
   finalName = trimLen(finalName, 60)
   if (!finalName) throw fail(422, '请填写账号名')
 
   if (await findUserByEmail(c.env.DB, email)) throw fail(409, '该邮箱已注册，请直接登录')
 
-  // 没有任何账号时第一个注册的是管理员（对应 Go 版首启动 ensureAdmin；注册入口绝不给自助提权留口子）
-  const count = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM users`).first<{ n: number }>())?.n ?? 0
-  const hash = await hashPassword(pass, pbkdf2Iters(c.env))
   const now = rfc()
   const r = await c.env.DB
     .prepare(
@@ -781,6 +814,81 @@ mgmt.get('/members/:id/usages', async (c) => {
   )
 })
 
+// ---------- 邮件配置（管理员） ----------
+
+/** GET /admin/mail-config — SMTP 配置。密码从不回显，只给 has_pass。 */
+mgmt.get('/mail-config', async (c) => {
+  const cfg = await mailConfigOf(c)
+  return c.json({
+    host: cfg?.host ?? '',
+    port: cfg?.port ?? 465,
+    user: cfg?.user ?? '',
+    from: cfg?.from ?? '',
+    secure: cfg?.secure ?? 'ssl',
+    has_pass: !!cfg?.pass
+  })
+})
+
+/** PUT /admin/mail-config — 保存 SMTP 配置。pass 留空 = 保持原密码（前端拿不到旧密码，只能留空不改）。 */
+mgmt.put('/mail-config', async (c) => {
+  const req = await body<{ host?: string; port?: number; user?: string; pass?: string; from?: string; secure?: string }>(c)
+  const host = (req.host ?? '').trim()
+  if (!host) throw fail(422, '请填写 SMTP 服务器地址')
+  const from = (req.from ?? '').trim()
+  if (!validEmail(from)) throw fail(422, '请填写正确的发件人邮箱')
+  const secure = req.secure === 'starttls' ? 'starttls' : 'ssl'
+  const port = Math.trunc(Number(req.port)) || (secure === 'ssl' ? 465 : 587)
+  await setSetting(c, 'mail_host', host)
+  await setSetting(c, 'mail_port', String(port))
+  await setSetting(c, 'mail_user', (req.user ?? '').trim())
+  await setSetting(c, 'mail_from', from)
+  await setSetting(c, 'mail_secure', secure)
+  const pass = (req.pass ?? '').trim()
+  if (pass) await setSetting(c, 'mail_pass', pass)
+  return c.json({ message: '已保存' })
+})
+
+/** POST /admin/mail-config/test — 用当前配置发一封测试邮件，SMTP 报错原样透传给管理员。 */
+mgmt.post('/mail-config/test', async (c) => {
+  const req = await body<{ to?: string }>(c)
+  const to = (req.to ?? '').trim().toLowerCase()
+  if (!validEmail(to)) throw fail(422, '请填写正确的收件邮箱')
+  const cfg = await mailConfigOf(c)
+  if (!cfg) throw fail(422, '请先保存 SMTP 配置')
+  try {
+    await sendMail(cfg, to, {
+      subject: '青鸟邮件配置测试',
+      html: '<p style="font-family:sans-serif;">这是一封测试邮件。收到它说明 SMTP 配置正确，验证码邮件可以正常发出了。</p>'
+    })
+  } catch (e) {
+    throw fail(502, `发送失败：${(e as Error).message}`)
+  }
+  return c.json({ message: '测试邮件已发送，请查收' })
+})
+
+// ---------- 超管改邮箱（右上角） ----------
+// 初始化的管理员邮箱可能是假的（收不到验证码），换邮箱本身要走「新邮箱收码」验证。
+
+mgmt.post('/profile/email/code', async (c) => {
+  const req = await body<{ email?: string }>(c)
+  const email = (req.email ?? '').trim().toLowerCase()
+  if (!validEmail(email)) throw fail(422, '邮箱格式不正确')
+  if (await findUserByEmail(c.env.DB, email)) throw fail(409, '该邮箱已被占用')
+  await sendCode(c, email, 'email-change')
+  return c.json({ message: '验证码已发送，请查收新邮箱' })
+})
+
+mgmt.put('/profile/email', async (c) => {
+  const req = await body<{ email?: string; code?: string }>(c)
+  const email = (req.email ?? '').trim().toLowerCase()
+  if (!validEmail(email)) throw fail(422, '邮箱格式不正确')
+  await verifyCode(c, email, 'email-change', (req.code ?? '').trim())
+  if (await findUserByEmail(c.env.DB, email)) throw fail(409, '该邮箱已被占用')
+  const me = userOf(c)
+  await c.env.DB.prepare(`UPDATE users SET email = ?, updated_at = ? WHERE id = ?`).bind(email, rfc(), me.id).run()
+  return c.json({ message: '邮箱已更新', user: { ...userPayload(me), email } })
+})
+
 mgmt.get('/dashboard', async (c) => {
   const tz = Number(c.env.TZ_HOURS) || 8
   const localMidnight = Date.UTC(
@@ -813,6 +921,7 @@ mgmt.get('/dashboard', async (c) => {
     online,
     upstreams,
     models,
+    mail_configured: await isMailConfigured(c),
     calls_today: today?.calls ?? 0,
     tokens_today: today?.tokens ?? 0
   })

@@ -47,24 +47,9 @@ client/dist-verify/
 /null
 /null.*
 
-# ---------------- 服务端（server/）----------------
-# Go 构建产物
-/server/bin/
-/server/server
-/server/server.exe
-# SQLite 数据库（本地一体化模式的运行时数据，绝不入库）
-/server/*.db
-/server/*.db-wal
-/server/*.db-shm
-# 前端构建产物：由 go:embed 进二进制，源码在 server/web/
-#   server/web/dist     —— 由 electron-builder 的 extraResources 引用说明残留
-#   server/internal/web/dist —— go:embed 实际打包的那份（vite outDir 指向这里）
-/server/web/dist/
-/server/internal/web/dist/
-/server/web/node_modules/
-# 本地配置（含密钥）
-/server/.env
-/server/.env.local
+# ---------------- 前端（web/）----------------
+# Vite 构建产物：Workers 的 assets 与本地部署入口都引用它
+/web/dist/
 
 # ---------------- 云端服务端（server_cloudflare/）----------------
 node_modules/
