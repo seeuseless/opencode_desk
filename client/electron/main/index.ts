@@ -224,8 +224,15 @@ ipcMain.handle('workspace:list', (_e, req: { projectPath: string; dirPath?: stri
 })
 
 ipcMain.handle('workspace:read', (_e, req: { projectPath: string; filePath: string }) => {
-  const { root, target } = workspaceFile(req?.projectPath, req?.filePath)
-  const real = workspaceTargetRealPath(root, target)
+  const rel = String(req?.filePath ?? '').trim()
+  let real: string
+  if (isAbsolute(rel)) {
+    // AI 会把文件写到项目外（diff 里记的是完整路径），审查面板「全文」按绝对路径直接读
+    real = rel
+  } else {
+    const { root, target } = workspaceFile(req?.projectPath, rel)
+    real = workspaceTargetRealPath(root, target)
+  }
   const stat = statSync(real)
   if (!stat.isFile()) throw new Error('所选路径不是文件')
   if (stat.size > MAX_CODE_BYTES) throw new Error('文件超过 2 MB，暂不支持编辑查看')

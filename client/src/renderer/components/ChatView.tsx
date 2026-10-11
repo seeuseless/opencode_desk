@@ -2454,7 +2454,8 @@ function ReviewPanel({ projectPath, files, onClose }: {
     window.qingniao
       .workspaceRead(projectPath, relPath(sel.file, projectPath))
       .then((r) => setFull(r.content))
-      .catch(() => setFullErr(t('读取失败（文件可能已删除或并非文本）')))
+      .catch((e: unknown) =>
+        setFullErr(e instanceof Error && e.message ? e.message : t('读取失败（文件可能已删除或并非文本）')))
       .finally(() => setLoading(false))
   }, [sel, mode, projectPath])
 
