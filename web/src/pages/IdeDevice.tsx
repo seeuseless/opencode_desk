@@ -766,9 +766,11 @@ function PartView({ part }: { part: Part }) {
                     onClick={() => setOpen((v) => !v)}
                 >
                     <Brain className="size-3.5 shrink-0" />
-                    <span>思考</span>
-                    <span className="truncate">{open ? '' : part.text!.slice(0, 40)}</span>
-                    {open ? <ChevronDown className="ml-auto size-3.5 shrink-0" /> : <ChevronRight className="ml-auto size-3.5 shrink-0" />}
+                    <span className="shrink-0">思考</span>
+                    {/* 预览要单行截断：flex 子项默认 min-width:auto，会被长文本撑破整行（「思考」都被挤换行），
+                        min-w-0 + flex-1 + truncate 才是标准的「占中间、可收缩、单行省略」组合 */}
+                    <span className="min-w-0 flex-1 truncate">{open ? '' : part.text!.slice(0, 40)}</span>
+                    {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
                 </button>
                 {open && (
                     <div className="border-t px-2.5 py-2 text-xs leading-relaxed whitespace-pre-wrap break-words text-muted-foreground">
@@ -791,7 +793,7 @@ function PartView({ part }: { part: Part }) {
             <div className="flex items-center gap-2 px-0.5 text-xs text-muted-foreground">
                 <span className={`size-1.5 shrink-0 rounded-full ${dot}`} />
                 <span className="shrink-0">{toolName(part.tool ?? '')}</span>
-                {part.detail && <span className="truncate font-mono text-[11px] opacity-70">{part.detail}</span>}
+                {part.detail && <span className="min-w-0 flex-1 truncate font-mono text-[11px] opacity-70">{part.detail}</span>}
                 <span className="ml-auto shrink-0">{label}</span>
             </div>
         )
