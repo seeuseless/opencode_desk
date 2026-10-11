@@ -1,0 +1,37 @@
+{
+  // 青鸟平台服务端 · Cloudflare Workers 版。
+  // 协议与 Go 版（server/）1:1 兼容：docs/服务端API契约.md 是唯一事实来源。
+  "name": "qingniao-server",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // 前端（登录页 /ide/login、手机端、后台管理）直接复用 Go 版的 Vite 构建产物：
+  // assets 先按文件命中，/api/* 先走 Worker（run_worker_first），其余路径 SPA 兜底回 index.html。
+  "assets": {
+    "directory": "../server/internal/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/up"]
+  },
+
+  // 数据库：wrangler d1 create qingniao 后把返回的 database_id 填进来（见 README）
+  "d1_databases": [
+    { "binding": "DB", "database_name": "qingniao", "database_id": "REPLACE_WITH_YOUR_D1_ID" }
+  ],
+
+  // 健康采集：每分钟一轮，每轮每个上游只探一个模型（与 Go 版守护进程同节拍）
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+
+  "vars": {
+    // 对外基地址（响应里的 gateway 字段、设备二维码 url 用）。留空则按请求的 origin 自动算，
+    // 绑了自定义域名后建议显式写，如 "https://api.example.com"
+    "PUBLIC_URL": "",
+    // 统计口径的时区偏移（小时）：今日/昨日/按天的「日界」。Go 版跑在用户本机=北京时间，这里默认 +8
+    "TZ_HOURS": "8",
+    // 密码 PBKDF2 迭代次数。Workers 免费版 CPU 限制 10ms，登录报 1102 就调低（如 25000）或上付费版
+    "PBKDF2_ITERS": "100000"
+  }
+}

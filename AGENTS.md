@@ -9,13 +9,14 @@
 |---|---|
 | `client/` | Electron + React 桌面端（原仓库根的全部内容迁入） |
 | `server/` | Go 服务端：IDE 接口 + OpenAI 兼容网关 + 上游管理 + 积分计费 + 后台/手机端页面 |
+| `server_cloudflare/` | 同一套协议的 Cloudflare Workers 实现（D1 + 复用 Go 版前端产物），部署见其 README |
 | `docs/` | 调研结论与设计文档 |
 | `scripts/` | 跨端构建脚本 |
 
 ## 约定
 
 - **协议零漂移**：`/api/ide/*` 的 URL、请求体、响应字段以 `docs/服务端API契约.md` 为唯一事实来源。
-  改协议必须同时改契约文档、`server/` 实现、`client/electron/main/` 调用方三处。
+  改协议必须同时改契约文档、`server/` 实现、`server_cloudflare/` 实现、`client/electron/main/` 调用方四处。
 - 客户端自己的构建/打包配置都在 `client/` 内（`client/package.json`、`client/electron-builder.yml`），
   脚本用 `__dirname/..` 定位根，不要写死仓库根路径。
 - 服务端编成**单二进制 + SQLite**，前端静态资源用 `go:embed` 内嵌；
