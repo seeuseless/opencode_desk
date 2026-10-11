@@ -29,7 +29,6 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "gen:deps": "node scripts/gen-deps.mjs",
     "gen:update": "node scripts/gen-update-meta.mjs",
-    "build:server": "node scripts/build-server.mjs",
     "check:kernel": "node scripts/check-kernel.mjs",
     "ensure:electron": "node scripts/ensure-electron.mjs",
     "postinstall": "node scripts/ensure-electron.mjs && node scripts/gen-deps.mjs && node scripts/gen-update-meta.mjs",

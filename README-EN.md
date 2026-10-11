@@ -64,59 +64,6 @@ yarn dist:mac      # electron-builder macOS dmg (CI adds --arm64 --x64 for dual 
 > - macOS builds are unsigned and un-notarized; on first launch, **right-click → "Open"** to bypass
 >   Gatekeeper (double-clicking directly will be blocked).
 
-## Releasing (bump version → push a tag; GitHub does the rest)
-
-All installers are **built automatically by GitHub Actions** — there is no need (and no reason) to build
-and upload packages locally. Bump the version, push a `v*` tag, and let CI handle the rest:
-
-```
-Bump the version in package.json (e.g. 1.0.1 — **must match the tag**)
-  → add an entry with the same version at the top of CHANGELOG.md
-  → commit && push
-  → create and push the tag  ← this triggers CI
-```
-
-```bash
-# 1. Bump the version + write the changelog (versions must match)
-vim package.json          # "version": "1.0.1"
-vim CHANGELOG.md          # add a ## v1.0.1 entry at the top
-
-# 2. Commit and push
-git commit -am "release: v1.0.1" && git push
-
-# 3. Tag and push — CI takes over from here
-git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
-```
-
-Once the tag is pushed, **GitHub Actions automatically** (`.github/workflows/release.yml`):
-
-1. Builds on `windows-latest` and `macos-latest` **in parallel**, producing **dual-arch** packages per
-   platform: Windows x64 + ARM64, macOS Apple Silicon + Intel (six attachments in total)
-2. Verifies the artifacts (installer names, the kernel binary inside matches the package architecture,
-   macOS permission bits) — cross-arch packages get the matching agent kernel swapped in by the
-   beforePack hook, and the checks read PE / Mach-O headers to assert the architecture
-3. Attaches the installers to the Release for that tag
-
-The Windows and macOS builds run **in parallel**; a failure on the macOS line (e.g. no signing
-certificate, runner flakiness) does not block the Windows release — the Windows installers still
-appear in the Release as usual.
-
-Users then see the update prompt in "Settings → About" — **no manual announcement needed**;
-the in-app updater automatically claims the installer matching the current machine architecture.
-
-> ⚠️ **Only the Windows x64 attachment name is fixed** (`QingNiao-Setup.exe`, re-uploaded under the same
-> name each release). This is what makes in-app "one-click download" possible: it uses the fixed path
-> `releases/latest/download/QingNiao-Setup.exe` and **never touches `api.github.com`** (often
-> unreachable in mainland China). CI renames the x64 package to this fixed name before uploading;
-> all other attachments (Windows ARM64, both macOS architectures) carry an `-<arch>` suffix
-> (`QingNiao-Setup-arm64.exe`, `QingNiao-Setup-x64.dmg`, etc.). Historical versions are traced via
-> git tags and their Release pages.
-
-If a release fails, re-run it manually from the [Actions](https://github.com/seeuseless/opencode_desk/actions)
-page: use `workflow_dispatch` and enter the tag to rebuild.
-
-See [docs/发版与更新提示.md](./docs/发版与更新提示.md) for details (Chinese).
-
 ## Features
 
 1. Project tree: add local folders as projects, expand/collapse independently, sort by recent activity, delete sessions (tasks)
@@ -132,6 +79,8 @@ See [docs/发版与更新提示.md](./docs/发版与更新提示.md) for details
 11. Project memory: memory lives with the project in `.qingniao/memory/` (`MEMORY.md` long-term + `YYYY-MM-DD.md` daily log); new chats automatically inject the history (injections are not echoed in the chat), and after each turn the key points are appended automatically
 12. Skills: visual `SKILL.md` management in Settings, grouped by **global / project**, with create, edit, rename, delete and open-folder; frontmatter is validated against kernel rules before saving (naming, required description, length); the model only ever sees "name + description" and reads the full text on demand, so nothing sits in the context window
 13. Update checks: "Settings → About" checks new versions against GitHub Releases, shows release notes and supports **one-click download → install & restart**; downloads use the fixed `releases/latest/download/QingNiao-Setup.exe` address without touching `api.github.com`, so it works in mainland China
+14. Platform server (independent process): one TypeScript implementation (`server_cloudflare/`) with two deployment shapes — Cloudflare Workers cloud / local Node + SQLite; OpenAI-compatible gateway, upstream/model management, token billing, e-mail verification codes and an admin console
+15. Mobile remote control: scan a QR code to pair; view projects/tasks, chat and watch the AI stream live from any network; desktop and phone sync through the platform relay (command claim + event push)
 
 ## Configuration & Data (local, isolated from ~/.config/opencode)
 
@@ -176,18 +125,26 @@ two places are managed by QingNiao:
 
 ## Structure
 
+This repository is a **monorepo**: the desktop client + the platform server (one implementation, cloud/local deployments) + the server's web frontend.
+
 ```
-electron/main/adapter.ts   Kernel lifecycle: spawn opencode serve, SSE event bridge, REST pass-through
-electron/main/config.ts    settings.json ↔ opencode.json generation, XDG isolation, key env injection
-electron/main/updater.ts   In-app updates: check GitHub Releases → download → hand over to the installer
-src/renderer/              React UI (oc.ts facade API, Markdown, step animations, todo card, queue)
-scripts/
-  gen-icon.mjs             Generate icon.png / icon.ico / icon.icns from SVG (run manually after icon changes)
-  gen-deps.mjs             Snapshot dependencies into deps.json (data source for Settings → Dependencies)
-  gen-update-meta.mjs      Generate update.json (repo coordinates + tag prefix; change it when the repo moves)
-  check-kernel.mjs         Pre-packaging check that the kernel binary is real, not a placeholder
-  smoke.mjs                Kernel smoke test
-electron-builder.yml       Packaging config (artifact names, files whitelist, mac/win targets)
+client/                      Electron desktop app (everything runs under client/)
+  electron/main/            Main process
+    adapter.ts              Kernel lifecycle: spawn opencode serve, SSE event bridge, REST pass-through
+    config.ts               settings.json ↔ opencode.json generation, XDG isolation, key env injection
+    platform.ts / relay.ts  Platform client and mobile relay channel
+    server.ts               Server reachability probing (local auto-discovery, remote URL re-attach)
+    updater.ts              In-app updates: check GitHub Releases → download → hand over to the installer
+  src/renderer/             React UI (oc.ts facade API, Markdown, step animations, todo card, queue)
+  electron-builder.yml      Packaging config (artifact names, files whitelist, win/mac/linux targets)
+server_cloudflare/           Platform server (the single implementation, Hono + TypeScript)
+  src/app.ts                Application core (Hono, runtime-agnostic)
+  src/index.ts              Workers cloud entry (fetch + health-collection cron)
+  src/local/                Local deployment entry (node:sqlite D1 adapter, static files, scheduled probing)
+  src/mail/                 SMTP client and e-mail verification codes
+  schema.sql                Schema (wrangler on cloud / auto-applied on local first start)
+web/                         Server frontend source (login / mobile / admin), Vite build shared by both shapes
+docs/                        Design docs and the API contract (服务端API契约.md is the single source of truth)
 .github/workflows/release.yml  tag → build → upload Release attachments
 ```
 

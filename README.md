@@ -37,10 +37,10 @@ yarn dist:mac      # electron-builder 打 macOS dmg（CI 上加 --arm64 --x64 �
 yarn dist:linux    # electron-builder 打 Linux AppImage + deb（CI 上加 --x64 --arm64 出双架构双格式）
 ```
 
-> **服务端独立运行**：平台服务端（Go 单二进制 + SQLite）是独立进程，桌面端不负责拉起——
-> 安装包只含桌面端。服务端在哪都行：本机自己起 / 局域网另一台 / 云端独立部署。
-> 桌面端启动时探测 `{平台地址}/api/health`：通了就自动打开平台功能；不通则平台功能不出现在界面里。
-> 起服务端或改平台地址见 [服务端 server](#服务端-server)。
+> **服务端独立运行**：平台服务端（`server_cloudflare/`，一套 TypeScript 代码）是独立进程，桌面端不负责拉起——
+> 安装包只含桌面端。部署形态二选一：**Cloudflare Workers 云端**（免费额度即可）或**本地部署**（Node + SQLite，
+> `npm start` 即跑）。桌面端启动时探测 `{平台地址}/api/health`：本地部署会自动发现本机服务；云端在
+> 「设置 → 关于 → 远程 URL」里填一次。详见 [服务端 server_cloudflare](#服务端-server_cloudflare)。
 
 > 用 `npm install` / `npm run xxx` 亦可；仓库内 `client/yarn.lock` 锁定版本，**推荐 yarn**。
 > 换源请在 `client/.npmrc` 里配，不要改 `client/yarn.lock` 里的 `resolved`（commit 上去会影响 CI 拉包）。
@@ -72,57 +72,6 @@ yarn dist:linux    # electron-builder 打 Linux AppImage + deb（CI 上加 --x64
 > - Linux 附件名里的架构段有两套命名：`x86_64`（AppImage）与 `amd64`（deb），都不是笔误——
 >   这是 electron-builder 对两种格式分别套用的 Linux 惯例命名（x64 的两种映射），arm64 在两种格式下都叫 `arm64`。
 
-## 发版（改 version → 打 tag，其余交给 GitHub）
-
-本项目的安装包**全部由 GitHub Actions 自动构建**，本地不需要（也不应该）手动出包再上传。
-只需改版本号、打一个 `v*` tag 推上去，剩下的交给 CI：
-
-```
-改 client/package.json 的 version（如 1.0.1，**必须与 tag 一致**）
-  → 在 CHANGELOG.md 顶部落一条同版本号的条目
-  → commit && push
-  → 打 tag 并推送  ← 这一步触发 CI
-```
-
-```bash
-# 1. 改版本号 + 写更新日志（两者版本号要一致）
-vim client/package.json    # "version": "1.0.1"
-vim CHANGELOG.md          # 顶部落一条 ## v1.0.1
-
-# 2. 提交推送
-git commit -am "release: v1.0.1" && git push
-
-# 3. 打 tag 推送 —— CI 从此处开始自动干活
-git tag -a v1.0.1 -m "release v1.0.1" && git push origin v1.0.1
-```
-
-推完 tag 后 **GitHub Actions 自动**（`.github/workflows/release.yml`）：
-
-1. 在 `windows-latest`、`macos-latest`、`ubuntu-latest` 上**并行**构建，每个平台一次出**双架构**包：
-   Windows x64 + ARM64、macOS Apple Silicon + Intel、Linux x64 + ARM64（共八个附件）
-2. 校验产物（安装包名、包内内核是否为真且与包架构一致、mac 权限位、Linux 内核 ELF 架构与可执行位）——
-   交叉架构的包由 beforePack 钩子换入对应架构的 agent 内核，校验读 PE / Mach-O / ELF
-   头断言架构没打岔
-3. 把安装包挂到该 tag 对应的 Release 附件上
-
-三个平台的构建是**并行**的；macOS 与 Linux 那两条线即使失败（例如无签名证书、runner 环境波动、
-AppImage 工具下载失败）也不会拦下 Windows 的发版，Release 里仍会正常出现 Windows 的两个安装包。
-
-用户端随即能在「设置 → 关于」看到更新提示——**不需要手动通知**；
-应用内更新会按当前机器架构自动认领正确的安装包。
-
-> ⚠️ **只有 Windows x64 的附件名是固定的**（`QingNiao-Setup.exe`，每次发版覆盖上传同名附件）。
-> 这是应用内"一键下载"能自动找到地址的前提：它走
-> `releases/latest/download/QingNiao-Setup.exe` 这条固定路径，**不经过 `api.github.com`**（国内常不通）。
-> CI 上 x64 包构建后重命名回这个固定名再上传；其余附件（Windows ARM64、macOS 与 Linux 的各两种架构）
-> 都带 `-<arch>` 后缀（`QingNiao-Setup-arm64.exe`、`QingNiao-Setup-x64.dmg`、
-> `QingNiao-Setup-x86_64.AppImage` 等），历史版本靠 git tag 与各自的 Release 页面追溯。
-
-发版失败时可在 [Actions](https://github.com/seeuseless/opencode_desk/actions) 页手动重跑：
-`workflow_dispatch` 填入要补建的 tag 即可。
-
-详见 [docs/发版与更新提示.md](./docs/发版与更新提示.md)。
-
 ## 功能
 
 1. 项目树：添加本地文件夹为项目、独立展开/收起、按最近活动排序、会话（任务）删除
@@ -138,8 +87,8 @@ AppImage 工具下载失败）也不会拦下 Windows 的发版，Release 里仍
 11. 项目记忆：记忆随项目走，存于项目目录 `.qingniao/memory/`（`MEMORY.md` 长期约定 + `YYYY-MM-DD.md` 每日流水）；新对话自动注入历史上下文（注入内容不回显在聊天里），每轮结束后自动追加「用户提问 + AI 结论」要点
 12. 技能（Skills）：设置页可视化管理 `SKILL.md`，按**全局 / 项目**两组展示，支持新建、编辑、改名、删除与打开目录，保存前按内核规则校验 frontmatter（名称规范、描述必填、描述长度）；模型平时只看到「名称 + 描述」，判断需要才读全文，不占常驻上下文
 13. 更新提示：设置 → 关于里检查新版本（对着 GitHub Releases 比版本号），有新版本就显示更新说明并支持**一键下载 → 立即安装重启**，全程不用去浏览器翻 Release 页；下载走 `releases/latest/download/QingNiao-Setup.exe` 固定地址，不经 `api.github.com`，国内可直连
-14. 平台服务端（独立运行）：Go 单二进制 + SQLite，可本机起、局域网或云端部署；桌面端启动探测 `{平台地址}/api/health`、通了自动打开平台功能；含 OpenAI 兼容网关、上游/模型管理、token 积分计费、手机中转与后台运营界面
-15. 手机端远程操作：扫码配对，手机在任意网络下查看项目/任务、收发消息、看 AI 实时输出；桌面端与手机通过平台中转（指令认领 + 事件回传）+NL+
+14. 平台服务端（独立运行）：一套 TypeScript 代码（`server_cloudflare/`）两种部署形态——Cloudflare Workers 云端 / 本地 Node + SQLite；含 OpenAI 兼容网关、上游/模型管理、token 积分计费、手机中转、邮件验证码与后台运营界面
+15. 手机端远程操作：扫码配对，手机在任意网络下查看项目/任务、收发消息、看 AI 实时输出；桌面端与手机通过平台中转（指令认领 + 事件回传），任务列表与聊天内容实时同步
 ## 配置与数据（本机，与用户 ~/.config/opencode 隔离）
 
 ```
@@ -176,7 +125,7 @@ AppImage 工具下载失败）也不会拦下 Windows 的发版，Release 里仍
 
 ## 结构
 
-本仓库是 **monorepo**，两端协作：桌面客户端 + 平台服务端（独立进程，可本机/局域网/云端部署）。
+本仓库是 **monorepo**：桌面客户端 + 平台服务端（一套实现，云端/本地两种部署）+ 服务端前端。
 
 ```
 client/                      Electron 桌面端（一切都在 client/ 下跑）
@@ -184,76 +133,45 @@ client/                      Electron 桌面端（一切都在 client/ 下跑）
     adapter.ts              内核生命周期：spawn opencode serve、SSE 事件桥、REST 透传
     config.ts               settings.json ↔ opencode.json 生成、XDG 目录隔离、密钥 env 注入
     platform.ts / relay.ts  平台客户端与手机中转通道
-    server.ts               服务端可用性探测（health 通了才开平台功能）
+    server.ts               服务端可用性探测（本地自动发现、远程 URL 重接）
     updater.ts              应用内更新：查 GitHub Releases → 下载 → 交给安装包升级
   src/renderer/             React 界面（oc.ts 门面 API、Markdown、步骤动画、任务清单、队列）
   scripts/
-    build-server.mjs        发版前编译 Go 服务端到 server/bin（进安装包）
     gen-icon.mjs            从 SVG 生成 icon.png / icon.ico / icon.icns
     check-kernel.mjs        打包前校验内核二进制是真货而非占位脚本
     smoke.mjs               内核冒烟测试
   electron-builder.yml      打包配置（产物名、files 白名单、win/mac/linux 目标）
-server/                      平台服务端（Go 单二进制 + SQLite，见服务端一节）
-  cmd/server/main.go        入口：HTTP + 自动建表 + 管理员初始化 + 健康采集
-  internal/api/             /api/ide/* 契约接口、后端管理接口、静态资源
-  internal/gateway/          OpenAI 兼容网关（上游故障转移 + SSE 透传）
-  internal/upstream/         上游模型同步 / 探测 / 导入
-  internal/store/            SQLite 数据层
-  internal/health/           模型概况采集器（每 10 秒、每上游探一个模型）
-  internal/web/              内嵌前端（go:embed，后端 + 手机端页面）
-  web/                      前端源码（移动端最精确至 /ide/device、登录、后台精简版）
+server_cloudflare/           平台服务端（唯一实现，Hono + TypeScript）
+  src/app.ts                应用本体（Hono，与运行时无关）
+  src/index.ts              Workers 云端入口（fetch + 健康采集 cron）
+  src/local/                本地部署入口（node:sqlite 适配 D1、静态资源、定时健康采集）
+  src/mail/                 SMTP 客户端与邮箱验证码
+  src/admin.ts / ide.ts / gateway.ts / ai.ts / device.ts / upstream.ts   后台 / 手机中转 / 网关 / 计费
+  schema.sql                建表（云端 wrangler 执行 / 本地首启自动执行）
+web/                         服务端前端源码（登录页 / 手机端 / 后台管理），Vite 产物两端共用
 docs/                        设计文档与 API 契约（服务端API契约.md 是唯一事实来源）
 .github/workflows/release.yml  tag → 构建 → 上传 Release 附件
 ```
 
-## 服务端 server
+## 服务端 server_cloudflare
 
-平台服务端是用 Go 写的 **单二进制 + SQLite**，负责：
+平台服务端是**一套 TypeScript 实现**（Hono），负责：
 
 - **IDE 接口**：登录授权、模型清单、OpenAI 兼容网关（`/api/ide/v1/*`）
 - **手机中转**：桌面端注册 / 指令认领 / 事件回传（`/api/ide/desk/*`）、手机端页面（`/api/ide/device/*`）
 - **用量与积分**：token 计费（`ceil(tokens ÷ 1000 × 有效倍率)`）、消耗明细、积分流水
 - **上游与模型管理**：OpenAI 兼容上游 CRUD、多 Key 故障转移、自动拉模型、健康采集
-- **后台 + 手机端前端**：只用 Go 二进制里的 `go:embed`，不额外部署静态文件
+- **邮件验证码**：SMTP 发信、注册 / 登录 / 换邮箱的验证码（后台「邮件设置」里配置）
+- **前端**：登录页、手机端、后台管理（顶层 `web/` 的 Vite 产物，两种部署形态共用）
 
-### 两种跑法
+### 两种部署形态
 
-| 跑法 | 说明 |
+| 形态 | 说明 |
 | --- | --- |
-| **独立运行（默认）** | 服务端是独立进程；本机起（`go run ./cmd/server`）、局域网另台机、或云端都行，桌面端在「平台地址」填它 |
-| **独立部署** | 服务端放服务器上，桌面端在「设置 → 平台地址」填它；手机在 4G 也能通过它操作桌面端 |
+| **Cloudflare Workers 云端** | D1 数据库 + 平台静态托管；免费额度每天 10 万请求，用户不用装任何东西。部署五步见 [server_cloudflare/README](server_cloudflare/README.md) |
+| **本地部署** | `npm install && npm run build:web && npm start`，Node ≥ 22.5 直接跑 TS；数据不出本机，桌面端自动发现 |
 
-### 本地开发 / 手动起服务
-
-```bash
-cd server
-# 构建前端（go:embed 内嵌）
-cd web && npm install && npm run build && cd ..
-# 起服务（端口 9002，数据落 ~/.qingniaoai/server.db）
-go run ./cmd/server
-```
-
-或一条命令编出可分发二进制：
-
-```bash
-cd client && node scripts/build-server.mjs   # 编到 server/bin/qingniao-server(.exe)
-```
-
-### 环境变量
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `QINGNIAO_PORT` | `9002` | 监听端口 |
-| `QINGNIAO_HOST` | `127.0.0.1` | 监听地址；独立部署设 `0.0.0.0` |
-| `QINGNIAO_DATA_DIR` | `~/.qingniaoai` | 数据目录（SQLite 落 `server.db`） |
-| `QINGNIAO_PUBLIC_URL` | 自动 | 对外基地址（二维码 URL / gateway 用） |
-| `QINGNIAO_ADMIN_USER` | `admin` | 首次启动自动创建的管理员账号名 |
-| `QINGNIAO_ADMIN_PASS` | `admin123` | 管理员初始密码（首次启动时定死，建库后改 DB 或直接登录后台改） |
-| `QINGNIAO_UPSTREAM_PROXY` | 空 | 访问国外上游的本机代理（如 `http://127.0.0.1:7890`） |
-
-### 默认管理员
-
-首次启动（库里无用户时）自动创建管理员：**`admin@local` / `admin123`**，日志首行会打印。登录后即改。
+桌面端接入：本地部署什么都不用填（自动发现）；云端在「设置 → 关于 → 远程 URL」填 Workers/自定义域名地址。
 
 ### API 契约
 
