@@ -287,8 +287,10 @@ class Relay {
 
   private markBusy(sid: string, on: boolean, external = false): void {
     if (this.busy[sid] === on) return
-    if (on) this.busy[sid] = true
-    else delete this.busy[sid]
+    // 关态也要记下来（不能 delete）：sessions.list 每轮认领都会按内核现状对账一遍，
+    // delete 会让「本来就不忙」的会话每次都被当成状态变化重推 busy:false——
+    // 手机页面轮询时平台上每秒多出几十条废事件。
+    this.busy[sid] = on
     // 手机按钮状态跟着它走：电脑上点了停止，手机上也会亮回「发送」
     this.push({ type: 'session.busy', payload: { sessionID: sid, busy: on } })
     // 只把「外部（手机）发起」的 busy 变化注入桌面渲染层——手机发消息的瞬间就亮「处理中」。

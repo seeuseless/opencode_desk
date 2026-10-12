@@ -1467,6 +1467,15 @@ if (!app.requestSingleInstanceLock()) {
   }
 }
 
+// GPU 进程连续崩溃（exit_code=-1073741819）时整个 App 会直接退出：
+// 光 disableHardwareAcceleration 不够（软件合成仍会拉起 GPU 进程），
+// 要用命令行开关彻底禁掉 GPU 进程。必须在 ready 之前调用。
+if (process.env.QN_DISABLE_GPU) {
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.disableHardwareAcceleration()
+}
+
 app.whenReady().then(async () => {
   // Windows 任务栏图标归属（否则 dev 模式可能沿用 Electron 默认图标）
   app.setAppUserModelId('com.qingniao.desktop')

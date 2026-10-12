@@ -414,36 +414,59 @@ export default function App() {
         const sid = pr.sessionID ?? pr.info?.id ?? ''
         const dir = pr.directory ?? pr.info?.directory ?? ''
         const target = dir || Object.keys(sessionsMapRef.current).find((p) => sessionsMapRef.current[p].some((s) => s.id === sid)) || ''
-        // 只处理已知项目目录：非项目/子代理目录不进 sessionsMap
-        if (!target || !projectsRef.current.some((p) => p.path === target)) return
+        // 真实项目路径：先精确命中，再大小写兜底（Windows 文件夹路径可能大小写不一致）
+        const proj =
+          (target && projectsRef.current.find((p) => p.path === target)) ||
+          (target && projectsRef.current.find((p) => p.path.toLowerCase() === target.toLowerCase())) ||
+          undefined
         if (e.type === 'session.deleted') {
-          // 删除：从该目录列表精确移除（目录尚未缓存过就没有可删的）
-          if (sid) setSessionsMap((m) => (m[target] ? { ...m, [target]: m[target].filter((s) => s.id !== sid) } : m))
+          // 删除：从目标目录精确移除；解析不到目录就按 sid 从所有已缓存列表里清掉
+          if (proj) {
+            if (sid && proj.path in sessionsMapRef.current)
+              setSessionsMap((m) => ({ ...m, [proj.path]: m[proj.path].filter((s) => s.id !== sid) }))
+          } else if (sid && Object.keys(sessionsMapRef.current).length > 0) {
+            setSessionsMap((m) => {
+              const out: Record<string, Session[]> = {}
+              let changed = false
+              for (const k of Object.keys(m)) {
+                const v = m[k].filter((s) => s.id !== sid)
+                if (v.length !== m[k].length) changed = true
+                out[k] = v
+              }
+              return changed ? out : m
+            })
+          }
           return
         }
-        // created / updated：防抖重拉（500ms 合并，流式期间不逐条打内核）；
-        // 用「只补/改、不删」合并，内核偶发漏返回时不会把用户正看的任务行清掉
-        if (sessionSyncTimer.current[target]) clearTimeout(sessionSyncTimer.current[target])
-        sessionSyncTimer.current[target] = setTimeout(() => {
-          delete sessionSyncTimer.current[target]
-          const proj = projectsRef.current.find((p) => p.path === target)
-          if (!proj) return
-          oc.sessions(target)
-            .then((raw) => {
-              const list = sortSessions(raw)
-              setSessionsMap((m) => {
-                const merged = [...(m[target] ?? [])]
-                for (const s of list) {
-                  const i = merged.findIndex((x) => x.id === s.id)
-                  if (i >= 0) merged[i] = s
-                  else merged.push(s)
-                }
-                return { ...m, [target]: sortSessions(merged) }
+        // created / updated：防抖重拉该目录（500ms 合并，流式期间不逐条打内核），只补/改不删合并。
+        const reloadProject = (p: Project) => {
+          if (sessionSyncTimer.current[p.path]) clearTimeout(sessionSyncTimer.current[p.path])
+          sessionSyncTimer.current[p.path] = setTimeout(() => {
+            delete sessionSyncTimer.current[p.path]
+            oc.sessions(p.path)
+              .then((raw) => {
+                const list = sortSessions(raw)
+                setSessionsMap((m) => {
+                  const merged = [...(m[p.path] ?? [])]
+                  for (const s of list) {
+                    const i = merged.findIndex((x) => x.id === s.id)
+                    if (i >= 0) merged[i] = s
+                    else merged.push(s)
+                  }
+                  return { ...m, [p.path]: sortSessions(merged) }
+                })
+                touchActive(p, list)
               })
-              touchActive(proj, list)
-            })
-            .catch(() => {})
-        }, 500)
+              .catch(() => {})
+          }, 500)
+        }
+        if (proj) {
+          reloadProject(proj)
+        } else if (e.type === 'session.created') {
+          // 解析不到目录且是新建（离散事件）：全量刷新所有已知项目，保证文件夹任务不漏
+          for (const p of projectsRef.current) reloadProject(p)
+        }
+        // session.updated 解析不到目录就直接跳过：高频事件不做全量刷新，避免反复打内核
       } else if (e.type === 'qingniao.sse.reconnected') {
         // SSE 断线重连：断开期间可能漏掉 session.idle，对仍标记 busy 的会话做一次轻量重同步
         // ——仅清"已确实完成"的（最后一条助手消息已有完整文本），绝不凭数据补记 busy。

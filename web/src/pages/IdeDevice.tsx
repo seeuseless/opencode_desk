@@ -104,6 +104,9 @@ export default function IdeDevice() {
     /** 事件回调里要用到的最新值：回调只注册一次，不能闭包住旧 state */
     const openPathRef = useRef('')
     openPathRef.current = openPath
+    /** projects 的最新镜像：syncTasks 判定目录是否命中已知项目、是否要全量刷，避免闭包拿到旧清单 */
+    const projectsRef = useRef<Project[]>(projects)
+    projectsRef.current = projects
     const loadTasksRef = useRef<(path: string) => Promise<void>>(async () => {})
     /** 事件回调只注册一次，读不到最新 state：发送态用 ref 镜像一份 */
     const sendingRef = useRef(false)
@@ -328,16 +331,19 @@ export default function IdeDevice() {
      * 电脑上任务有增删改名 → 重拉任务列表。
      *
      * 早先只重拉「手机上正展开着的那一个项目」，于是电脑上往别的项目里新建任务，
-     * 手机这边完全没反应——用户看着就是「不同步」。现在按事件里带的 directory
-     * 精确重拉；内核没给目录（老事件形状）就退回「所有已经拉过的项目都重来一遍」。
+     * 手机这边完全没反应——用户看着就是「不同步」。现在按事件里带的 directory 精确重拉；
+     * 目录一旦没精确命中已知项目（缺失 / 大小写 / 路径表示不一致）就刷**所有已知项目**——
+     * 宁可多拉也不让文件夹任务因目录字符串对不上而漏刷。
      *
      * 攒 300ms 再发：电脑上一轮对话里连续改好几次是常事，逐条重拉会打成请求风暴，
      * 而 300ms 对「实时」来说察觉不到。
      */
     const syncTasks = (dir: string) => {
         if (!onlineRef.current) return
-        for (const p of dir ? [dir] : Object.keys(tasksRef.current)) {
-            pendingSync.current.add(p)
+        if (dir && projectsRef.current.some((p) => p.path === dir)) {
+            pendingSync.current.add(dir)
+        } else {
+            for (const p of projectsRef.current) pendingSync.current.add(p.path)
         }
         if (syncTimer.current) clearTimeout(syncTimer.current)
         syncTimer.current = setTimeout(() => {
@@ -387,7 +393,7 @@ export default function IdeDevice() {
     /** 重拉项目清单（电脑上加了文件夹，手机上点一下就能同步过来） */
     const refreshProjects = async () => {
         // onlineRef：事件回调里也会调它，而事件回调只注册一次，闭包里的 online 是首帧那个 false
-        if (!onlineRef.current) { setTip('电脑不在线'); return }
+        if (!onlineRef.current) return
         try {
             const r = await rpc<{ projects: Project[] }>('projects.list')
             setProjects(r.projects || [])
@@ -420,7 +426,7 @@ export default function IdeDevice() {
      * 现在标题就是用户发的那句话（截前 30 字），来源信息不再出现在任务名里。
      */
     const newTask = (p: Project) => {
-        if (!online) { setTip('电脑不在线'); return }
+        if (!online) return
         setOpenPath(p.path)
         setCur({ path: p.path, name: p.name, id: '', title: '新任务' })
         setMsgs([])
@@ -439,7 +445,7 @@ export default function IdeDevice() {
 
     const send = async () => {
         const text = draft.trim()
-        if (!text || !cur || sending) return
+        if (!online || !text || !cur || sending) return
         setDraft('')
         setMsgs((m) => [
             ...m,

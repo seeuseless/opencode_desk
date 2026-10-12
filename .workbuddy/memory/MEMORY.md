@@ -8,6 +8,8 @@
 - **内核真正日志**：`~/.qingniaoai/data/opencode/log/opencode.log`（断流/上游错误只写这里，常不发 session.error 事件）。
 - `Temp\opencode\api.log` 是用户另一个 wms-api(Nest) 项目的日志，**与青鸟无关**，别再查错方向。
 - SSE 遥测：`~/.qingniaoai/qn-event-telemetry.json`（sseReconnects 断连计数）。
+- **内核 1.18.31 事件流陷阱（2026-10-12 排障定版）**：`GET /event` 变成**按目录**流，不带 `?directory=` 只有心跳、会话事件一个不发；跨项目必须用 `GET /global/event`，每行 `{directory, project, payload:{type, properties}}` 要解包 payload，`type:'sync'` 是 v2 包装要跳过（adapter.ts openEventBridge 已修）。症状：桌面 UI 与手机 relay 同时收不到任何内核事件（不流式、不亮 busy、H5 消息不同步）。
+- **relay.markBusy 关态不能 delete**：sessions.list 每轮对账会把全部会话重推 busy:false（手机页面轮询时平台每秒几十条废事件），已改为记布尔值。
 - 消息 error 结构：`info.error = { name, data: { message } }`；上游断流被内核统一标为 `MessageAbortedError`（不能再无条件静默它）。
 
 ## 架构要点（2026-09-27 定版）

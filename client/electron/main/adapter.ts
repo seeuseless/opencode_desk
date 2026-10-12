@@ -210,7 +210,7 @@ class Adapter {
       let backoff = 1000
       while (!this.stopping && !signal.aborted) {
         try {
-          const res = await fetch(this.base + '/event', { signal, headers: { accept: 'text/event-stream' } })
+          const res = await fetch(this.base + '/global/event', { signal, headers: { accept: 'text/event-stream' } })
           if (!res.ok || !res.body) throw new Error('SSE HTTP ' + res.status)
           const reader = res.body.getReader()
           const dec = new TextDecoder()
@@ -225,8 +225,17 @@ class Adapter {
               buf = buf.slice(nl + 1)
               if (!line.startsWith('data:')) continue
               try {
-                const evt = JSON.parse(line.slice(5).trim()) as { type?: string; properties?: Record<string, unknown> }
-                if (evt && typeof evt.type === 'string') {
+                // 内核 1.18.31 起 /event 变成按目录的流（不带 directory 只有心跳，没有会话事件），
+                // 跨项目要用 /global/event；它的每行是 {directory, project, payload:{type, properties}}。
+                // 兼容旧版裸 {type, properties} 形状：有 payload 就解包，没有就当裸事件。
+                // payload.type === 'sync' 是新 v2 持久化事件的包装（syncEvent.data），渲染层不认识，跳过。
+                const raw = JSON.parse(line.slice(5).trim()) as {
+                  type?: string
+                  properties?: Record<string, unknown>
+                  payload?: { type?: string; properties?: Record<string, unknown> }
+                }
+                const evt = raw?.payload ?? raw
+                if (evt && typeof evt.type === 'string' && evt.type !== 'sync') {
                   this.safePush({ type: evt.type, properties: evt.properties ?? {} })
                 }
               } catch {
