@@ -1005,8 +1005,8 @@ html[data-bg-content='on'] .cbox {
 .step-body .todo-text { font-size: 12px; line-height: 20px; }
 .step-body .todo-idx, .step-body .todo-box { height: 20px; }
 
-/* ================= 本会话服务进程卡 ================= */
-.svc-card { padding: 10px 12px; background: var(--bg2); border-radius: 12px; box-shadow: 0 0 0 1px var(--line); }
+/* ================= 本会话服务进程（底部工具行入口 + 展开面板） ================= */
+/* 旧对话流进程卡样式已废弃（.svc-card），清单改挂在底部工具行图标的向上浮层里 */
 .svc-head {
   display: flex; align-items: center; gap: 6px;
   font-size: 12.5px; color: var(--fg2); margin-bottom: 6px;
@@ -1018,6 +1018,25 @@ html[data-bg-content='on'] .cbox {
 .svc-port { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--accent); }
 .svc-pid { flex-shrink: 0; font-variant-numeric: tabular-nums; color: var(--fg2); font-size: 11.5px; }
 .svc-item .icon-btn { flex-shrink: 0; }
+
+/* 触发图标：右上角数量角标（小圆片压在 Terminal 图标外角） */
+.svc-badge-wrap { position: relative; display: inline-flex; }
+.svc-badge {
+  position: absolute; top: -7px; right: -9px;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: 7px; background: var(--accent); color: #fff;
+  font-size: 9.5px; line-height: 14px; font-weight: 600;
+  font-variant-numeric: tabular-nums; text-align: center;
+  pointer-events: none;
+}
+.crow-term.svc-trigger.on { background: var(--bg3); color: var(--fg); }
+
+/* 展开面板：向上浮出，宽度够放下 命令摘要+端口+PID+停止；进程多时内部滚动 */
+.menu-panel.svc {
+  width: 380px; max-width: 72vw; left: 0;
+  max-height: 260px; padding: 8px 10px;
+}
+.menu-panel.svc .svc-head { margin-bottom: 4px; }
 
 /* ================= 内核提问应答弹窗 ================= */
 .ask-q { margin-bottom: 12px; }

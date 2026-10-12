@@ -392,8 +392,11 @@ export function ChatView(p: Props) {
   // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
   const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
   const diffsBusy = useRef<Set<string>>(new Set())
-  // 本会话由 AI 启动的常驻服务（对话末尾进程卡展示/停止；登记与对账在主进程 procstore）
+  // 本会话由 AI 启动的常驻服务（底部工具行入口展示/停止；登记与对账在主进程 procstore）
   const [svcProcs, setSvcProcs] = useState<QnProc[]>([])
+  // 底部工具行「服务进程」入口的展开面板：点图标开合，点外面收起
+  const [svcOpen, setSvcOpen] = useState(false)
+  const svcWrapRef = useRef<HTMLDivElement>(null)
   // 已解析登记过 QN_SERVICE_PID 的工具 part：part.updated 对同一 part 可能多次推送，防重复登记
   const svcParsed = useRef<Set<string>>(new Set())
   // 已注入过「服务进程约定」的会话：每会话只注一次（新会话/老会话首轮都会走到）
@@ -1038,6 +1041,16 @@ export function ChatView(p: Props) {
       askAlive = false
     }
   }, [p.sessionId, p.project?.path])
+
+  // 面板开着时点外面（面板与触发图标以外）收起：与 ProjectPicker/AccessPicker 同一套交互
+  useEffect(() => {
+    if (!svcOpen) return
+    const onDown = (e: MouseEvent): void => {
+      if (!svcWrapRef.current?.contains(e.target as Node)) setSvcOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [svcOpen])
 
   // 本会话服务进程：切换会话即拉取；有进程时每 8 秒轮询——存活对账在主进程
   // procList 里做（外部关掉/重启后已死的会被清掉，这里拿到列表直接渲染即自动消失）
@@ -2215,32 +2228,7 @@ export function ChatView(p: Props) {
             />
           )}
           {todos.length > 0 && <TodoCard todos={todos} live={busy} />}
-          {/*
-            本会话服务进程卡：AI 按约定启动的常驻服务（回显 QN_SERVICE_PID 登记）。
-            每行：命令摘要 + 端口 + PID + 停止按钮；进程在外部被关掉后由轮询自动消失。
-          */}
-          {svcProcs.length > 0 && (
-            <div className="amsg svc-card">
-              <div className="svc-head">
-                <Terminal size={13} />
-                <span>{t('本会话服务进程')}</span>
-                <span className="svc-count">{svcProcs.length}</span>
-              </div>
-              {svcProcs.map((proc) => (
-                <div className="svc-item" key={proc.pid}>
-                  <span className="svc-dot" />
-                  <span className="svc-cmd" title={proc.cmd}>
-                    {proc.cmd}
-                  </span>
-                  {proc.port != null && <span className="svc-port">:{proc.port}</span>}
-                  <span className="svc-pid">PID {proc.pid}</span>
-                  <button className="icon-btn" title={t('停止进程（含子进程）')} onClick={() => stopProc(proc.pid)}>
-                    <Square size={12} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+          {/* 服务进程卡已移入底部工具行（完全控制后面的图标入口，带数量角标，点击展开清单） */}
           {busy && (
             <div className="amsg busyline">
               {terminalBlocked ? (
@@ -2440,6 +2428,45 @@ export function ChatView(p: Props) {
                 />
                 <AccessPicker access={p.access} onChange={p.onAccess} />
               </>
+            )}
+            {/* 本会话服务进程入口（2026-10-12 从对话流进程卡迁来）：排在「完全控制」后面，
+                图标右上角数量角标，点击向上展开进程清单；无进程时整个入口不显示 */}
+            {svcProcs.length > 0 && (
+              <div className="menu-wrap svc" ref={svcWrapRef}>
+                <button
+                  type="button"
+                  className={'crow-term svc-trigger' + (svcOpen ? ' on' : '')}
+                  title={t('本会话服务进程')}
+                  onClick={() => setSvcOpen((v) => !v)}
+                >
+                  <span className="svc-badge-wrap">
+                    <Terminal size={13} />
+                    <span className="svc-badge">{svcProcs.length}</span>
+                  </span>
+                </button>
+                {svcOpen && (
+                  <div className="menu-panel svc up">
+                    <div className="svc-head">
+                      <Terminal size={13} />
+                      <span>{t('本会话服务进程')}</span>
+                      <span className="svc-count">{svcProcs.length}</span>
+                    </div>
+                    {svcProcs.map((proc) => (
+                      <div className="svc-item" key={proc.pid}>
+                        <span className="svc-dot" />
+                        <span className="svc-cmd" title={proc.cmd}>
+                          {proc.cmd}
+                        </span>
+                        {proc.port != null && <span className="svc-port">:{proc.port}</span>}
+                        <span className="svc-pid">PID {proc.pid}</span>
+                        <button className="icon-btn" title={t('停止进程（含子进程）')} onClick={() => stopProc(proc.pid)}>
+                          <Square size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             {terms.some((x) => x.status === 'running') && (
               <button className="crow-term" title={t('运行中的终端')} onClick={() => setShowTerms(true)}>
