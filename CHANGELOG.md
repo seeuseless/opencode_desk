@@ -3,6 +3,19 @@
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。版本号以 git tag 为准，
 每次发版同时改 `package.json` 的 `version` 与这里的条目。
 
+## v1.7.20 — 2026-10-12
+
+手机发消息后，桌面端即时显示「处理中」，不再等内核出 delta。
+
+### 修复
+
+- **手机发起回合桌面即时「处理中」**：此前桌面端 busy（处理中）全部靠内核 `message.part.delta` 事后反推、从不消费 `session.busy`，而 relay 的 busy 只推给平台手机侧——H5 一发消息，若内核 delta 来得慢/缺失（部分 provider 只发 heartbeat），桌面有消息内容却无处理中效果。现在 relay 对手机发起回合（`session.send`/`session.stop`）把 busy 事实经 `onBusy` 注入事件桥，桌面侧栏任务行与当前会话即时点亮「处理中」/停止按钮（与桌面自己发消息的乐观处理对称）。刻意只在手机发起回合注入，避免把桌面自己的会话误标为外部而跳过自动停止。
+
+### 说明
+
+- 桌面客户端改动，需重启桌面端生效。
+- `client/resources/update.json` 已用 `client/scripts/gen-update-meta.mjs` 同步到 1.7.20。
+
 ## v1.7.19 — 2026-10-12
 
 工作区「更新」入口精简为内联文字、确认后直接升级；未展开文件夹的任务列表也能双向同步；安装包描述改英文修复 Linux 安装问题。
