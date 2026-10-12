@@ -383,17 +383,14 @@ html[data-bg-content='on'] .cbox {
 .workspace-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .workspace-actions .icon-btn { width: 28px; height: 28px; }
 
-/* 工作区下的「更新」条（新版本/下载中/已就绪三态）：绿色醒目，整条可点进设置-关于更新。
-   统一浅绿底 + 绿字（--on-ok 未定义，不实底多色，低调但一眼可辨） */
-.upd-banner {
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  width: 100%; height: 30px; margin: 6px 0; padding: 0 8px;
-  background: color-mix(in srgb, var(--ok) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
-  color: var(--ok); font-size: 12.5px; font-weight: 600; cursor: pointer;
+/* 「工作区」标题旁的内联「更新」入口（新版本/下载中/已就绪三态）：
+   不单独占一行、就贴在工作区名字后面；绿字小一号，悬停下划线提示可点。 */
+.upd-inline {
+  margin-left: 8px; padding: 0 2px;
+  background: none; border: none; cursor: pointer;
+  color: var(--ok); font-size: 12px; font-weight: 700;
 }
-.upd-banner:hover { background: color-mix(in srgb, var(--ok) 30%, transparent); }
-.upd-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upd-inline:hover { text-decoration: underline; }
 
 .projlist { flex: 1; overflow-y: auto; }
 

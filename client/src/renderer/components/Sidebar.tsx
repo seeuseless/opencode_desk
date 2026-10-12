@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  ArrowUpCircle,
   BarChart3,
   Check,
   ChevronDown,
@@ -20,7 +19,6 @@ import {
   MessageSquarePlus,
   Palette,
   RefreshCw,
-  Rocket,
   Settings,
   Smartphone,
   Timer,
@@ -110,10 +108,10 @@ interface Props {
   onOpenSettings: () => void
   /** 在系统文件管理器里打开项目目录（右键菜单第一项，为了快速定位项目文件夹） */
   onOpenFolder: (proj: Project) => void
-  /** 应用更新状态（主进程自动检查并推送）：有新版本/下载中/已就绪时，头部出现「更新」入口 */
+  /** 应用更新状态（主进程自动检查并推送）：有新版本/下载中/已就绪时，「工作区」旁出现内联「更新」入口 */
   update: UpdateState | null
-  /** 点击「更新」入口 → 打开设置-关于页，在那里完成下载与安装 */
-  onOpenUpdate: () => void
+  /** 点击「更新」→ 打开升级确认弹窗，直接下载 + 安装（不再跳设置-关于页） */
+  onUpdate: () => void
   projectSortMode: ProjectSortMode
   onReorderProjects: (from: number, to: number) => void
   /** 移动端接入状态；null = 还没问过主进程 */
@@ -371,34 +369,40 @@ export function Sidebar(p: Props) {
         : t('移动端：未放行')
 
   /**
-   * 头部「更新」入口：只在「有新版本 / 正在下载 / 已可安装」三态出现——
+   * 头部「更新」入口（内联在「工作区」后面，不单独占一行）：只在「有新版本 / 正在下载 / 已可安装」三态出现——
    * 常态不占位，无新版或检查失败一律安静（失败想重试走 设置→关于）。
-   * 点击进设置-关于页，下载与安装都在那里完成。
+   * 文字固定两字「更新」，具体状态写进 tooltip；点击打开升级确认弹窗、直接下载 + 安装。
    */
   const upd = p.update
   const updPct =
     upd?.progress && upd.progress.total > 0
       ? Math.min(100, Math.round((upd.progress.received / upd.progress.total) * 100))
       : null
-  const updBtn = upd?.canInstall
-    ? { hot: false, title: t('更新已就绪，点击安装'), icon: <Rocket size={15} /> }
+  const showUpd = !!(upd?.latest || upd?.progress || upd?.canInstall)
+  const updTitle = upd?.canInstall
+    ? t('更新已就绪，点击安装')
     : upd?.progress
-      ? {
-          hot: false,
-          title: updPct !== null ? `${t('正在下载更新…')} ${updPct}%` : t('正在下载更新…'),
-          icon: <LoaderCircle size={15} className="spin" />
-        }
+      ? updPct !== null
+        ? `${t('正在下载更新…')} ${updPct}%`
+        : t('正在下载更新…')
       : upd?.latest
-        ? { hot: true, title: t('发现新版本 {v}，点击更新', { v: upd.latest.version }), icon: <ArrowUpCircle size={15} /> }
-        : null
+        ? t('发现新版本 {v}', { v: upd.latest.version })
+        : ''
 
   return (
     <>
       <aside className="side" style={{ width: p.width, minWidth: p.width }}>
-        {/* 顶部工作区栏：名称固定，右侧动作依次是「打开文件夹」「添加任务」。
-            新版本/下载中/已就绪时下方出现一条绿色「更新」条（整条可点，进设置-关于更新）。 */}
+        {/* 顶部工作区栏：名称固定（有更新时其后内联「更新」入口），右侧动作依次是「打开文件夹」「添加任务」。
+            点「更新」弹升级确认弹窗直接下载 + 安装（不再进设置-关于页）。 */}
         <div className="side-workspace-head">
-          <span>{t('工作区')}</span>
+          <span>
+            {t('工作区')}
+            {showUpd && (
+              <button className="upd-inline" title={updTitle} onClick={p.onUpdate}>
+                {t('更新')}
+              </button>
+            )}
+          </span>
           <div className="workspace-actions">
             <button className="icon-btn" title={t('打开文件夹')} onClick={p.onAddProject}>
               <FolderOpen size={15} />
@@ -408,12 +412,6 @@ export function Sidebar(p: Props) {
             </button>
           </div>
         </div>
-        {updBtn && (
-          <button className={'upd-banner' + (updBtn.hot ? ' hot' : '')} title={updBtn.title} onClick={p.onOpenUpdate}>
-            {updBtn.icon}
-            <span>{updBtn.title}</span>
-          </button>
-        )}
         <div className="projlist">
           {p.projects.length === 0 && (
             <div className="proj-empty">

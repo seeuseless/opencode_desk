@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import { AlertCircle, ArrowUpCircle, Check, Download, ExternalLink, FileText, Globe, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
+import { AlertCircle, ArrowUpCircle, Check, Download, FileText, Globe, LoaderCircle, RefreshCw, Rocket, X } from 'lucide-react'
 import { Modal } from './Modal'
 import { t } from '../i18n'
 import { LICENSE_SECTIONS, LICENSE_TITLE } from '../lib/license'
@@ -150,10 +150,9 @@ export function UpdatePanel({ baseUrl, onSetBaseUrl }: { baseUrl: string; onSetB
         )}
       </div>
 
-      {/* 检查失败：只如实说原因（如 GitHub 接口限流），**不给"打开发布页"的出口**——
+      {/* 检查失败：只如实说原因（如 GitHub 接口限流），不给打开发布页的出口——
           那是把排查责任推给用户：他知道有新版、却打不开、还得自己去翻仓库，
-          不如直接告诉他"稍后再试"，重试的成本比他手动去发布页低得多。
-          真要发布页，应用内本就有正式入口（「查看发布页」只在新版本区块里出现） */}
+          不如直接告诉他"稍后再试"，重试的成本比他手动去发布页低得多。 */}
       {st.error && (
         <div className="ud-note err">
           <AlertCircle size={14} />
@@ -169,21 +168,14 @@ export function UpdatePanel({ baseUrl, onSetBaseUrl }: { baseUrl: string; onSetB
         </div>
       )}
 
-      {/* 有新版本：只在这一块里给「查看发布页」——其他时候不暴露仓库地址，
+      {/* 有新版本：只给「发现新版本 + 下载/安装」——不暴露发布页、release 说明、附件文件名，
           用户不需要知道包从哪来，知道"能升级"就够了 */}
       {latest && (
         <div className="ud-upd">
           <div className="ud-upd-head">
             <ArrowUpCircle size={15} />
             <b>{t('发现新版本 {v}', { v: latest.version })}</b>
-            {latest.publishedAt && <span className="ud-time">{new Date(latest.publishedAt).toLocaleString('zh-CN', { hour12: false })}</span>}
-            <span className="spacer" />
-            <button className="ghost sm" onClick={() => void window.qingniao.openRelease(latest.tag)}>
-              <ExternalLink size={13} /> {t('查看发布页')}
-            </button>
           </div>
-
-          {latest.notes.trim() && <pre className="ud-notes">{latest.notes.trim().slice(0, 4000)}</pre>}
 
           {/* 下载进度条：只有拿到总长度才算百分比，否则退化成"已下载 xx MB" */}
           {downloading && (
@@ -243,10 +235,6 @@ export function UpdatePanel({ baseUrl, onSetBaseUrl }: { baseUrl: string; onSetB
                 >
                   <Download size={14} /> {t('下载更新')}
                 </button>
-                <span className="ud-hint">
-                  {latest.downloadName || t('安装包')}
-                  {latest.size > 0 ? ` · ${fmtSize(latest.size)}` : ''}
-                </span>
               </>
             )}
           </div>

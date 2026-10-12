@@ -652,12 +652,10 @@ const TW_PANELS: Record<string, string> = {
   '检查中…': '檢查中…',
   检查更新: '檢查更新',
   '发现新版本 {v}': '發現新版本 {v}',
-  查看发布页: '查看發布頁',
   '已下载 {v}': '已下載 {v}',
   启动安装程序失败: '啟動安裝程式失敗',
   '安装包已打开，请按提示把青鸟拖到「应用程序」完成替换。': '安裝包已開啟，請按提示把青鳥拖到「應用程式」完成替換。',
   立即安装并重启: '立即安裝並重啟',
-  '发现新版本 {v}，点击更新': '發現新版本 {v}，點擊更新',
   '正在下载更新…': '正在下載更新…',
   '更新已就绪，点击安装': '更新已就緒，點擊安裝',
   '安装包已下好（{v}）。': '安裝包已下載完成（{v}）。',
@@ -668,7 +666,11 @@ const TW_PANELS: Record<string, string> = {
   下载更新: '下載更新',
   安装包: '安裝包',
   '使用本软件即表示你已阅读并同意': '使用本軟體即表示你已閱讀並同意',
-  未知大小: '未知大小'
+  未知大小: '未知大小',
+  更新: '更新',
+  升级: '升級',
+  立即升级: '立即升級',
+  '正在安装…': '正在安裝…'
 }
 
 const TW_SIDEBAR: Record<string, string> = {
@@ -1399,12 +1401,10 @@ const EN_PANELS: Record<string, string> = {
   '检查中…': 'Checking…',
   检查更新: 'Check for updates',
   '发现新版本 {v}': 'New version {v} available',
-  查看发布页: 'View release',
   '已下载 {v}': 'Downloaded {v}',
   启动安装程序失败: 'Failed to launch the installer',
   '安装包已打开，请按提示把青鸟拖到「应用程序」完成替换。': 'The installer is open — drag QingNiao into "Applications" as prompted to replace it.',
   立即安装并重启: 'Install & restart',
-  '发现新版本 {v}，点击更新': 'New version {v} — click to update',
   '正在下载更新…': 'Downloading update…',
   '更新已就绪，点击安装': 'Update ready — click to install',
   '安装包已下好（{v}）。': 'The installer is downloaded ({v}).',
@@ -1415,7 +1415,11 @@ const EN_PANELS: Record<string, string> = {
   下载更新: 'Download update',
   安装包: 'Installer',
   '使用本软件即表示你已阅读并同意': 'By using this software you agree to the ',
-  未知大小: 'Unknown size'
+  未知大小: 'Unknown size',
+  更新: 'Update',
+  升级: 'Upgrade',
+  立即升级: 'Upgrade now',
+  '正在安装…': 'Installing…'
 }
 
 const EN_SIDEBAR: Record<string, string> = {
