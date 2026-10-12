@@ -67,6 +67,12 @@ class Relay {
    */
   onChange: (() => void) | null = null
 
+  /**
+   * Busy 状态上送回调：桌面子进程改「手机发来的回合」——手机一发消息，内核还没出 delta 时
+   * 桌面就该亮「处理中」。主进程接它把 {type:'session.busy'} 塞进 opencode:event 桥喂给渲染层。
+   */
+  onBusy: ((sid: string, on: boolean) => void) | null = null
+
   status(s: Settings = loadSettings()): DeskStatus {
     const device = s.platform.device
     const url = device?.url ?? ''
@@ -279,12 +285,16 @@ class Relay {
     }
   }
 
-  private markBusy(sid: string, on: boolean): void {
+  private markBusy(sid: string, on: boolean, external = false): void {
     if (this.busy[sid] === on) return
     if (on) this.busy[sid] = true
     else delete this.busy[sid]
     // 手机按钮状态跟着它走：电脑上点了停止，手机上也会亮回「发送」
     this.push({ type: 'session.busy', payload: { sessionID: sid, busy: on } })
+    // 只把「外部（手机）发起」的 busy 变化注入桌面渲染层——手机发消息的瞬间就亮「处理中」。
+    // 桌面自己发起的回合它已通过内核 delta/session.idle 知道，再注入会把本端会话误标成
+    // external/foreign（那会像“手机发起的回合不自动停”一样跳过桌面自己的自动停止）。
+    if (external) this.onBusy?.(sid, on)
   }
 
   /**
@@ -467,7 +477,7 @@ class Relay {
           parts: [{ type: 'text', text: p.text }],
           ...(p.model ? { model: p.model } : {})
         }
-        this.markBusy(sid, true)
+        this.markBusy(sid, true, true)
         // 关键：**不能 await**。内核这个接口要等整轮跑完才返回，await 会把认领循环堵死，
         // 手机点「停止」就再也送不进来了。这里放它自己跑，结果全靠事件流回传。
         void this.req<KernelMessage>(`/session/${sid}/message${dirQ(dir)}`, 'POST', body)
@@ -476,12 +486,12 @@ class Relay {
             // 内核的 session.updated 事件要等 AI 跑完才来，那样手机上就得等到
             // AI 出结果才看到自己的任务冒到最上面；这里在受理的瞬间就报一声。
             this.push({ type: 'sessions.changed', payload: { sessionID: sid, directory: dir ?? '' } })
-            this.markBusy(sid, false)
+            this.markBusy(sid, false, true)
           })
           .catch((e) => {
             this.lastError = errText(e)
             this.push({ type: 'session.error', payload: { sessionID: sid, message: errText(e) } })
-            this.markBusy(sid, false)
+            this.markBusy(sid, false, true)
           })
 
         return { started: true }
@@ -490,7 +500,7 @@ class Relay {
       case 'session.stop': {
         if (!p.sessionId) throw new Error('缺少任务 id')
         await this.req(`/session/${p.sessionId}/abort${dirQ(dir)}`, 'POST')
-        this.markBusy(p.sessionId, false)
+        this.markBusy(p.sessionId, false, true)
 
         return { ok: true }
       }

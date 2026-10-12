@@ -1542,6 +1542,12 @@ app.whenReady().then(async () => {
     if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('mobile:changed', relay.status())
   }
 
+  // 手机发来的回合：把 busy 事实注入事件桥，桌面渲染层据此即时亮「处理中」
+  // （内核出 delta 前就点亮，与桌面自己发消息的乐观处理对称）。
+  relay.onBusy = (sid, on) => {
+    if (mainWin && !mainWin.isDestroyed()) mainWin.webContents.send('opencode:event', { type: 'session.busy', properties: { sessionID: sid, busy: on } })
+  }
+
   // 移动端中转通道：登录了就注册设备（二维码随即可用），开关开着才真的开始认领指令。
   // 服务端可用性探测已提前到写内核配置之前（见上方 server.ensure()）。
   relay.apply()

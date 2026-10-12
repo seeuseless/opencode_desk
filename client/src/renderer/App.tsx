@@ -377,7 +377,20 @@ export default function App() {
   useEffect(() => {
     const off = window.qingniao.onEvent((raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
-      if (e.type === 'message.part.delta') {
+      if (e.type === 'session.busy') {
+        // 手机发来的回合：busy 事实由 relay 的 markBusy 注入事件桥，这里直接跟。
+        // busy=true 亮「处理中」，false 熄灭——与 message.part.delta/session.idle 同源、幂等。
+        const pr = e.properties as { sessionID?: string; busy?: boolean }
+        const sid = pr.sessionID
+        if (!sid) return
+        if (pr.busy) setBusyIds((m) => (m[sid] ? m : { ...m, [sid]: true }))
+        else
+          setBusyIds((m) => {
+            if (!(sid in m)) return m
+            const { [sid]: _drop, ...rest } = m
+            return rest
+          })
+      } else if (e.type === 'message.part.delta') {
         // 任务在跑：任何 delta 都说明对应会话正在处理
         const pr = e.properties as { sessionID?: string }
         if (pr.sessionID) setBusyIds((m) => (m[pr.sessionID!] ? m : { ...m, [pr.sessionID!]: true }))

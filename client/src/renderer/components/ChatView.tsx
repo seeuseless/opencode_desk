@@ -1074,7 +1074,14 @@ export function ChatView(p: Props) {
   useEffect(() => {
     const off = window.qingniao.onEvent(async (raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
-      if (e.type === 'message.updated') {
+      if (e.type === 'session.busy') {
+        // 手机发来的回合：busy 事实由 relay.markBusy 注入事件桥，这里立即认领/释放——
+        // 不等内核出 delta（部分 provider 只发 heartbeat），让「处理中」/停止按钮即时亮起。
+        const pr = e.properties as { sessionID?: string; busy?: boolean }
+        const sid = pr.sessionID
+        if (!sid) return
+        markBusy(sid, pr.busy === true, undefined, true)
+      } else if (e.type === 'message.updated') {
         const info = e.properties.info as MessageView['info'] | undefined
         if (!info) return
         roles.current.set(info.id, info.role)
