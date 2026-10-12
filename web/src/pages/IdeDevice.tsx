@@ -21,6 +21,14 @@ import remarkGfm from 'remark-gfm'
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 时长口径与桌面一致：45秒 / 3分钟 / 2分10秒 */
+function fmtElapsed(s: number): string {
+    if (s < 60) return `${s}秒`
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return r === 0 ? `${m}分钟` : `${m}分${r}秒`
+}
+
 /** 读展开状态等小存档；坏了就落默认值，绝不让它把整个页面带崩 */
 function readStore<T>(key: string, fallback: T): T {
     try {
@@ -86,6 +94,25 @@ export default function IdeDevice() {
     /** 每个项目当前露出多少条任务：点一次「加载更多」加 5 条（任务按最近更新排前，先看到的永远是最新的） */
     const [shownTasks, setShownTasks] = useState<Record<string, number>>(() => readStore('qn.shownTasks', {}))
     const [busyMap, setBusyMap] = useState<Record<string, boolean>>({})
+    /** 各会话本轮 busy 的起点（epoch ms）：busy 亮起记、灭掉清，驱动「处理中」的走秒 */
+    const [busySince, setBusySince] = useState<Record<string, number>>({})
+    /**
+     * 每轮耗时（秒）：会话 id → 轮序号（第几条用户消息）→ 秒数。
+     * 轮结束后在轮首挂灰字「已工作」徽标（与桌面同一口径）；持久化 localStorage，
+     * 重进页面历史轮照常显示。读入时清洗脏值，别让「已工作」显示天文数字。
+     */
+    const [turnSpent, setTurnSpent] = useState<Record<string, Record<string, number>>>(() => {
+        const clean: Record<string, Record<string, number>> = {}
+        for (const [sid, table] of Object.entries(readStore<Record<string, Record<string, number>>>('qn.turnSpent', {}))) {
+            const t: Record<string, number> = {}
+            for (const [k, v] of Object.entries(table)) if (v > 0 && v <= 86400) t[k] = v
+            if (Object.keys(t).length) clean[sid] = t
+        }
+        return clean
+    })
+    useEffect(() => writeStore('qn.turnSpent', turnSpent), [turnSpent])
+    /** 秒级心跳：任何会话在跑时每秒 +1，处理中/耗时的实时显示才走秒 */
+    const [, setTick] = useState(0)
 
     const [cur, setCur] = useState<{ path: string; name: string; id: string; title: string } | null>(null)
     const [msgs, setMsgs] = useState<Msg[]>([])
@@ -94,6 +121,9 @@ export default function IdeDevice() {
     const [model, setModel] = useState('')
     const [pickModel, setPickModel] = useState(false)
     const [sending, setSending] = useState(false)
+    /** busy 起点与轮数的 ref 镜像：事件回调只注册一次，闭包里读不到新 state */
+    const busySinceRef = useRef<Record<string, number>>({})
+    const turnCountRef = useRef<Record<string, number>>({})
     const [loadingMsgs, setLoadingMsgs] = useState(false)
     const [tip, setTip] = useState('')
 
@@ -152,6 +182,14 @@ export default function IdeDevice() {
             document.documentElement.style.removeProperty('--qn-vvh')
         }
     }, [])
+
+    // 有会话在跑时开秒级心跳：任务行的「处理中 Xs」、聊天页的实时耗时才会走秒
+    const anyBusy = sending || Object.values(busyMap).some(Boolean)
+    useEffect(() => {
+        if (!anyBusy) return
+        const t = setInterval(() => setTick((v) => v + 1), 1000)
+        return () => clearInterval(t)
+    }, [anyBusy])
 
     /* ---------------- 通信：指令走 rpc，实时走 events ---------------- */
 
@@ -264,6 +302,25 @@ export default function IdeDevice() {
             if (e.type === 'session.busy' && sid) {
                 const on = e.payload.busy === true
                 setBusyMap((m) => ({ ...m, [sid]: on }))
+                if (on) {
+                    // 新一轮开始：记起点（send() 已预记过就不覆盖，耗时从按下发送算起）、轮数 +1
+                    if (!busySinceRef.current[sid]) busySinceRef.current[sid] = Date.now()
+                    turnCountRef.current[sid] = (turnCountRef.current[sid] ?? 0) + 1
+                    setBusySince({ ...busySinceRef.current })
+                } else {
+                    // 一轮结束：起算点清掉，耗时落表（挂到本轮轮序上，轮首「已工作」读它）
+                    const start = busySinceRef.current[sid]
+                    delete busySinceRef.current[sid]
+                    setBusySince({ ...busySinceRef.current })
+                    if (start) {
+                        const sec = Math.round((Date.now() - start) / 1000)
+                        // 一轮工作不该超过一天：超限（起算点丢失等异常）宁可不记
+                        if (sec > 0 && sec <= 86400) {
+                            const no = turnCountRef.current[sid] ?? 0
+                            setTurnSpent((s) => ({ ...s, [sid]: { ...(s[sid] ?? {}), [no]: sec } }))
+                        }
+                    }
+                }
                 if (curRef.current?.id === sid) {
                     setSending(on)
                     // 状态一变就对齐一次：busy 亮起来要把电脑上刚发的那句话也带下来，
@@ -373,6 +430,21 @@ export default function IdeDevice() {
                 for (const t of list) next[t.id] = t.busy
                 return next
             })
+            // busy 起点跟着对账：列表里新冒出来的在跑任务记起点（进页面前就在跑的，拿当下兜底），
+            // 已经结束的清掉——正常时序下 busy:false 事件先到（同批事件同步处理），这里只是兜漏
+            {
+                let changed = false
+                for (const t of list) {
+                    if (t.busy && !busySinceRef.current[t.id]) {
+                        busySinceRef.current[t.id] = Date.now()
+                        changed = true
+                    } else if (!t.busy && busySinceRef.current[t.id]) {
+                        delete busySinceRef.current[t.id]
+                        changed = true
+                    }
+                }
+                if (changed) setBusySince({ ...busySinceRef.current })
+            }
             // 电脑上改了任务名：聊天页顶部那行标题也跟着走，别停在旧名字上
             setCur((c) => {
                 if (!c || c.path !== path || !c.id) return c
@@ -407,10 +479,21 @@ export default function IdeDevice() {
         setMsgs([])
         setLoadingMsgs(true)
         setSending(!!busyMap[t.id])
+        // 正在跑的任务起点无从得知（事件早于进页面）：拿进页面那一刻兜底，至少走秒是准的
+        if ((busyMap[t.id] || t.busy) && !busySinceRef.current[t.id]) {
+            busySinceRef.current[t.id] = Date.now()
+            setBusySince({ ...busySinceRef.current })
+        }
         setView('chat')
         try {
             const r = await rpc<{ messages: Msg[] }>('session.messages', { path: p.path, sessionId: t.id })
-            setMsgs(r.messages || [])
+            const list = r.messages || []
+            setMsgs(list)
+            // 轮数从历史对齐（「已工作」按轮序挂徽标，新轮的序号要接得上历史）
+            turnCountRef.current[t.id] = Math.max(
+                turnCountRef.current[t.id] ?? 0,
+                list.filter((m) => m.role === 'user').length,
+            )
         } catch (e) {
             setTip((e as Error).message)
         } finally {
@@ -463,6 +546,9 @@ export default function IdeDevice() {
                 setCur((c) => (c ? { ...c, id: sid, title: created.task.title } : c))
             }
             const sel = models.find((x) => x.key === model)
+            // 起算点预记：busy 事件要等电脑认领（最多 1.2s）才回来，按下发送那一刻就该开始计时
+            if (!busySinceRef.current[sid]) busySinceRef.current[sid] = Date.now()
+            setBusySince({ ...busySinceRef.current })
             await rpc('session.send', {
                 path: cur.path,
                 sessionId: sid,
@@ -486,6 +572,17 @@ export default function IdeDevice() {
         } finally {
             setSending(false)
             setBusyMap((m) => ({ ...m, [cur.id]: false }))
+            // 手动停止也算一轮：耗时落表、起点清掉（随后 busy:false 事件会因起点已清而不再重记）
+            const start = busySinceRef.current[cur.id]
+            delete busySinceRef.current[cur.id]
+            setBusySince({ ...busySinceRef.current })
+            if (start) {
+                const sec = Math.round((Date.now() - start) / 1000)
+                if (sec > 0 && sec <= 86400) {
+                    const no = turnCountRef.current[cur.id] ?? 0
+                    setTurnSpent((s) => ({ ...s, [cur.id]: { ...(s[cur.id] ?? {}), [no]: sec } }))
+                }
+            }
         }
     }
 
@@ -540,30 +637,55 @@ export default function IdeDevice() {
                     )}
                     {/* 按 part 渲染，与桌面同构：正文走 markdown，思考是折叠块，工具是步骤行。
                         助手消息整条不套气泡底色——工具/思考是过程，正文才是答复，
-                        套一整块底色会让人以为整条都是回复（同桌面的排版口径）。 */}
-                    {msgs.filter((m) => m.parts.length > 0).map((m, i) =>
-                        m.role === 'user' ? (
-                            <div key={i} className="flex justify-end">
-                                <div className="max-w-[85%] rounded-2xl bg-primary px-3 py-2 text-sm leading-relaxed text-primary-foreground">
-                                    {m.parts.map((pt, k) =>
-                                        pt.type === 'text' ? (
-                                            // 用户自己发的是纯文本，按原样显示（走 markdown 反而会吃掉
-                                            // 「*」「_」这类字符，聊天里打星号很常见）
-                                            <span key={k} className="whitespace-pre-wrap break-words">{pt.text}</span>
-                                        ) : null,
-                                    )}
+                        套一整块底色会让人以为整条都是回复（同桌面的排版口径）。
+                        turnStart[i]：第 i 条（过滤后）助手消息是不是「轮首」——
+                        轮结束后「已工作」徽标只挂轮首（桌面同款，灰字挂轮首上方）。 */}
+                    {(() => {
+                        const shown = msgs.filter((m) => m.parts.length > 0)
+                        const turnStart: (number | null)[] = []
+                        let turnNo = 0
+                        let prevRole = ''
+                        shown.forEach((m, idx) => {
+                            if (m.role === 'user') {
+                                turnNo += 1
+                                prevRole = 'user'
+                            } else {
+                                turnStart[idx] = prevRole === 'user' ? turnNo : null
+                                prevRole = 'assistant'
+                            }
+                        })
+                        return shown.map((m, i) =>
+                            m.role === 'user' ? (
+                                <div key={i} className="flex justify-end">
+                                    <div className="max-w-[85%] rounded-2xl bg-primary px-3 py-2 text-sm leading-relaxed text-primary-foreground">
+                                        {m.parts.map((pt, k) =>
+                                            pt.type === 'text' ? (
+                                                // 用户自己发的是纯文本，按原样显示（走 markdown 反而会吃掉
+                                                // 「*」「_」这类字符，聊天里打星号很常见）
+                                                <span key={k} className="whitespace-pre-wrap break-words">{pt.text}</span>
+                                            ) : null,
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        ) : (
-                            <div key={i} className="flex flex-col gap-1.5">
-                                {m.parts.map((pt, k) => (
-                                    <PartView key={pt.id || k} part={pt} />
-                                ))}
-                            </div>
-                        ),
-                    )}
-                    {sending && msgs[msgs.length - 1]?.parts.length === 0 && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3.5 animate-spin" />电脑正在处理…</div>
+                            ) : (
+                                <div key={i} className="flex flex-col gap-1.5">
+                                    {turnStart[i] != null && turnSpent[cur.id]?.[turnStart[i]!] != null && (
+                                        <div className="text-[11.5px] leading-tight text-muted-foreground">
+                                            已工作 {fmtElapsed(turnSpent[cur.id][turnStart[i]!])}
+                                        </div>
+                                    )}
+                                    {m.parts.map((pt, k) => (
+                                        <PartView key={pt.id || k} part={pt} />
+                                    ))}
+                                </div>
+                            ),
+                        )
+                    })()}
+                    {sending && (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Loader2 className="size-3.5 animate-spin" />
+                            电脑正在处理{busySince[cur.id] ? ` · ${fmtElapsed(Math.floor((Date.now() - busySince[cur.id]) / 1000))}` : ''}…
+                        </div>
                     )}
                 </div>
 
@@ -709,7 +831,8 @@ export default function IdeDevice() {
                                                     <span className="min-w-0 flex-1 truncate">{t.title}</span>
                                                     {(busyMap[t.id] || t.busy) && (
                                                         <span className="flex shrink-0 items-center gap-1 text-xs text-primary">
-                                                            <Loader2 className="size-3.5 animate-spin" />处理中
+                                                            <Loader2 className="size-3.5 animate-spin" />
+                                                            处理中{busySince[t.id] ? ` ${fmtElapsed(Math.floor((Date.now() - busySince[t.id]) / 1000))}` : ''}
                                                         </span>
                                                     )}
                                                 </button>
