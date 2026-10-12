@@ -99,6 +99,15 @@
     }
 }
 
+/* H5 禁手势缩放（三层，互不干扰滚动/平移）：
+   ① index.html 的 meta maximum-scale=1 user-scalable=no（浏览器层）
+   ② 这里：pan-x pan-y 允许平移（滚动）、禁掉 CSS 层的捏合与双击放大——
+      个别忽略 meta 的 WebView 容器也能兜住
+   ③ main.tsx：iOS Safari 的 gesturestart preventDefault（双保险） */
+html {
+    touch-action: pan-x pan-y;
+}
+
 /* 兼容第三方 Tailwind SDK 注入：外部包会把整套 utilities 追加到全局层末尾，
    同优先级下后写规则覆盖本项目的响应式规则（如聊天插件的 .fixed 压掉侧栏 lg:static）。
    这里用无层规则兜住后台布局关键定位，确保 ≥1024px 时侧栏始终在文档流内。 */

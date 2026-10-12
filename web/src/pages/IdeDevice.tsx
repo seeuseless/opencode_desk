@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react'
 import { useParams } from 'react-router-dom'
 import { ArrowLeft, Brain, ChevronDown, ChevronRight, Loader2, MessageSquarePlus, RefreshCw, Send, Square, WifiOff } from 'lucide-react'
-import Markdown from 'react-markdown'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 /**
@@ -757,6 +757,17 @@ function toolName(tool: string): string {
     return TOOL_NAMES[tool.toLowerCase()] ?? (tool || '工具')
 }
 
+/** 聊天里的链接一律新窗口打开：裸 <a> 是同页跳转——点一下这个 H5 就被目标页替换掉
+    （在微信等容器里还会落进容器内置浏览器），再也回不到正在盯的任务。
+    target=_blank 后在新标签页/新窗口打开，当前任务页原样保留。 */
+const MARKDOWN_LINKS: Partial<Components> = {
+    a: ({ node, children, ...rest }: ComponentProps<'a'> & { node?: unknown }) => (
+        <a {...rest} target="_blank" rel="noopener noreferrer">
+            {children}
+        </a>
+    ),
+}
+
 /**
  * 一个 part 的手机端呈现。
  *
@@ -814,7 +825,7 @@ function PartView({ part }: { part: Part }) {
     // 宽度占满消息列——套灰气泡会让人误以为这是引用/备注，也和桌面看起来不一样。
     return (
         <div className="qn-md w-full break-words text-sm leading-relaxed">
-            <Markdown remarkPlugins={[remarkGfm]}>{part.text ?? ''}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN_LINKS}>{part.text ?? ''}</Markdown>
         </div>
     )
 }
