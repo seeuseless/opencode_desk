@@ -167,6 +167,11 @@ export default function App() {
   /** sessionsMap 的最新镜像：App 级 SSE 监听（只注册一次）里查"某 busy 会话属于哪个目录"用，避免闭包拿到旧值 */
   const sessionsMapRef = useRef(sessionsMap)
   sessionsMapRef.current = sessionsMap
+  /** projects 的最新镜像：session.* 事件重拉任务列表时要按 path 找项目，避免闭包拿到旧清单 */
+  const projectsRef = useRef(projects)
+  projectsRef.current = projects
+  /** 目录 → 重拉防抖定时器：session.* 事件密集时合并成一次 oc.sessions 拉取，别逐条打内核 */
+  const sessionSyncTimer = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   /** 正在拉取历史的会话 id：点击当帧就标记，会话行高亮不必等数据回来 */
   const [loadingSids, setLoadingSids] = useState<Record<string, boolean>>({})
   /** 移动端接入服务状态（开关/局域网地址/二维码/已配对设备），由主进程持有，左栏手机面板展示 */
@@ -384,6 +389,44 @@ export default function App() {
           // 一轮对话正常结束：自动把要点追加到项目当日记忆文件（实现「自动记忆」）
           if (e.type === 'session.idle') void autoLogMemory(pr.sessionID)
         }
+      } else if (e.type === 'session.created' || e.type === 'session.updated' || e.type === 'session.deleted') {
+        // 双向同步：经手机 RPC 建/改/删的任务，内核同样会抛 session.* 事件。
+        // 若该目录任务列表已在侧栏（项目已展开）就跟着同步——
+        // 否则手机新建的任务，桌面任务列表要等重启或重新展开项目才看得到。
+        const pr = e.properties as { sessionID?: string; directory?: string; info?: { id?: string; directory?: string } }
+        const sid = pr.sessionID ?? pr.info?.id ?? ''
+        const dir = pr.directory ?? pr.info?.directory ?? ''
+        const target = dir || Object.keys(sessionsMapRef.current).find((p) => sessionsMapRef.current[p].some((s) => s.id === sid))
+        // 只处理已在侧栏的目录：不给未展开项目预建任务列表（避免 sessionsMap 无谓膨胀），
+        // 未展开的项目在展开那一刻仍走全量拉取，不受影响。
+        if (!target || !(target in sessionsMapRef.current)) return
+        if (e.type === 'session.deleted') {
+          if (sid) setSessionsMap((m) => ({ ...m, [target]: (m[target] ?? []).filter((s) => s.id !== sid) }))
+          return
+        }
+        // created / updated：防抖重拉（500ms 合并，流式期间不逐条打内核）；
+        // 用「只补/改、不删」合并，内核偶发漏返回时不会把用户正看的任务行清掉
+        if (sessionSyncTimer.current[target]) clearTimeout(sessionSyncTimer.current[target])
+        sessionSyncTimer.current[target] = setTimeout(() => {
+          delete sessionSyncTimer.current[target]
+          const proj = projectsRef.current.find((p) => p.path === target)
+          if (!proj) return
+          oc.sessions(target)
+            .then((raw) => {
+              const list = sortSessions(raw)
+              setSessionsMap((m) => {
+                const merged = [...(m[target] ?? [])]
+                for (const s of list) {
+                  const i = merged.findIndex((x) => x.id === s.id)
+                  if (i >= 0) merged[i] = s
+                  else merged.push(s)
+                }
+                return { ...m, [target]: sortSessions(merged) }
+              })
+              touchActive(proj, list)
+            })
+            .catch(() => {})
+        }, 500)
       } else if (e.type === 'qingniao.sse.reconnected') {
         // SSE 断线重连：断开期间可能漏掉 session.idle，对仍标记 busy 的会话做一次轻量重同步
         // ——仅清"已确实完成"的（最后一条助手消息已有完整文本），绝不凭数据补记 busy。
