@@ -672,6 +672,13 @@ export default function IdeDevice() {
                                     <div className="flex w-full cursor-pointer items-center gap-2 px-3 py-3 text-left active:bg-accent" onClick={() => void toggleProject(p)}>
                                         {open ? <ChevronDown className="size-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
                                         <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.name}</span>
+                                        {/* 任务数角标：数据层已按 sessions.changed 实时写进 tasks[path]（含未展开的文件夹），
+                                            这里把数量露出来——收着的文件夹有新任务也能一眼看到，展开即最新 */}
+                                        {tasks[p.path] && (
+                                            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                                                {tasks[p.path].length}
+                                            </span>
+                                        )}
                                         {/* 新建任务放在项目行最右，且只在展开时出现：收着时点它等于「先展开再新建」，一步变两步 */}
                                         {open && (
                                             <button

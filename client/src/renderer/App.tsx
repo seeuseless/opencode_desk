@@ -8,6 +8,7 @@ import { SchedulesView } from './components/SchedulesView'
 import { SettingsView } from './components/SettingsView'
 import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
+import { UpgradeDialog } from './components/UpgradeDialog'
 import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import type { UpdateState } from '../../electron/main/types'
 import { getLang, setLang, t, type Lang } from './i18n'
@@ -156,8 +157,10 @@ export default function App() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('general')
   /** 外部请求的定位（带自增 tick，重复点同一个入口也能重新跳） */
   const [settingsReq, setSettingsReq] = useState<SettingsReq | null>(null)
-  /** 应用更新状态：主进程启动后自动检查 + 定期轮查，有新版时侧栏「工作区」右侧点亮更新入口 */
+  /** 应用更新状态：主进程启动后自动检查 + 定期轮查，有新版时侧栏「工作区」旁点亮「更新」入口 */
   const [updateSt, setUpdateSt] = useState<UpdateState | null>(null)
+  /** 升级确认弹窗：点「工作区」旁的「更新」入口弹出，确认后直接下载 + 安装 */
+  const [showUpgrade, setShowUpgrade] = useState(false)
   /** 平台登录态：左下角账号入口与账号页共用一份，登录/退出后由主进程推更新 */
   const [platformSt, setPlatformSt] = useState<PlatformStatus | null>(null)
   /** 登录/退出进行中（按钮转圈，避免重复点） */
@@ -390,18 +393,19 @@ export default function App() {
           if (e.type === 'session.idle') void autoLogMemory(pr.sessionID)
         }
       } else if (e.type === 'session.created' || e.type === 'session.updated' || e.type === 'session.deleted') {
-        // 双向同步：经手机 RPC 建/改/删的任务，内核同样会抛 session.* 事件。
-        // 若该目录任务列表已在侧栏（项目已展开）就跟着同步——
-        // 否则手机新建的任务，桌面任务列表要等重启或重新展开项目才看得到。
+        // 双向同步：经手机 RPC 建/改/删的任务，内核同样会抛 session.* 事件（payload 的 info 必带 directory）。
+        // 关键：**未展开的项目也同步**——早先「不在侧栏就丢弃」会让手机在用户文件夹下建的任务，
+        // 桌面侧栏一直看不到，要手动展开才全量拉一次（内置「任务」恒展开才显得"只有它正常"）。
+        // 现在识别出目录就重拉并写进 sessionsMap 缓存，展开那一刻即是最新。
         const pr = e.properties as { sessionID?: string; directory?: string; info?: { id?: string; directory?: string } }
         const sid = pr.sessionID ?? pr.info?.id ?? ''
         const dir = pr.directory ?? pr.info?.directory ?? ''
-        const target = dir || Object.keys(sessionsMapRef.current).find((p) => sessionsMapRef.current[p].some((s) => s.id === sid))
-        // 只处理已在侧栏的目录：不给未展开项目预建任务列表（避免 sessionsMap 无谓膨胀），
-        // 未展开的项目在展开那一刻仍走全量拉取，不受影响。
-        if (!target || !(target in sessionsMapRef.current)) return
+        const target = dir || Object.keys(sessionsMapRef.current).find((p) => sessionsMapRef.current[p].some((s) => s.id === sid)) || ''
+        // 只处理已知项目目录：非项目/子代理目录不进 sessionsMap
+        if (!target || !projectsRef.current.some((p) => p.path === target)) return
         if (e.type === 'session.deleted') {
-          if (sid) setSessionsMap((m) => ({ ...m, [target]: (m[target] ?? []).filter((s) => s.id !== sid) }))
+          // 删除：从该目录列表精确移除（目录尚未缓存过就没有可删的）
+          if (sid) setSessionsMap((m) => (m[target] ? { ...m, [target]: m[target].filter((s) => s.id !== sid) } : m))
           return
         }
         // created / updated：防抖重拉（500ms 合并，流式期间不逐条打内核）；
@@ -1042,7 +1046,7 @@ export default function App() {
           onOpenSettings={() => openSettingsAt('general')}
           onOpenFolder={openFolder}
           update={updateSt}
-          onOpenUpdate={() => openSettingsAt('about')}
+          onUpdate={() => setShowUpgrade(true)}
           projectSortMode={projectSortMode}
           onReorderProjects={reorderProjects}
           mobile={mobile}
@@ -1271,6 +1275,9 @@ export default function App() {
           </div>
         </Modal>
       )}
+
+      {/* 升级确认弹窗：「工作区」旁的「更新」入口触发，确认后直接下载 + 安装 */}
+      {showUpgrade && <UpgradeDialog updateSt={updateSt} onClose={() => setShowUpgrade(false)} />}
     </div>
   )
 }
