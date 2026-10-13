@@ -21,12 +21,20 @@ export const THEMES: ThemeMeta[] = [
   { id: 'hermes', name: '爱马仕橙', dark: false, swatches: ['#f37021', '#e8611a', '#fff8f1'] },
   { id: 'lapis', name: '青金石', dark: false, swatches: ['#4a2f9c', '#6c3fd8', '#f5f2fc'] },
   { id: 'malachite', name: '孔雀绿', dark: false, swatches: ['#0d8a64', '#0fa37a', '#f1fbf6'] },
+  /* 下面六套自 OmniAgnes 移植：整窗同色系浅染（侧栏着色、内容近白），
+     与上面「深色色块 + 白内容」那一路是两种观感。值取自它的 oklch 公式，见 index.css */
+  { id: 'violet', name: '紫罗兰', dark: false, swatches: ['#e9e2ff', '#743ed8', '#fdfdfd'] },
+  { id: 'blue', name: '海洋', dark: false, swatches: ['#d2eaff', '#0063d7', '#fdfdfd'] },
+  { id: 'lime', name: '青柠', dark: false, swatches: ['#e5ecce', '#627300', '#fdfdfd'] },
+  { id: 'emerald', name: '翡翠', dark: false, swatches: ['#d4f0e1', '#00804f', '#fdfdfd'] },
+  { id: 'amber', name: '琥珀', dark: false, swatches: ['#f8e5cb', '#9c5600', '#fdfdfd'] },
+  { id: 'rose', name: '玫瑰', dark: false, swatches: ['#ffdbdc', '#c1123d', '#fdfdfd'] },
 ]
 export const CUSTOM_ID = 'custom'
 export const CUSTOM_THEME: ThemeMeta = {
   id: CUSTOM_ID, name: '自定义', dark: false, swatches: ['#3b6ef5', '#f5f5f5', '#ececec'],
 }
-/** 主题选择列表：12 个内置 + 自定义 */
+/** 主题选择列表：20 个内置（14 套色块 + 6 套 OmniAgnes 浅着色）+ 自定义 */
 export const getThemeList = (): ThemeMeta[] => [...THEMES, CUSTOM_THEME]
 
 /* ================= 主题背景图（设置 → 主题 → 主题背景图） =================

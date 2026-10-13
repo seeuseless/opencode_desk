@@ -156,6 +156,71 @@
   --ok: #178a5a; --err: #d64550; --run: #10b388; --shadow: rgba(20, 90, 70, 0.15);
   --content: #f1fbf6; --on-user: #0f3328;
 }
+/* ===== 以下六套自 OmniAgnes 内置配色移植（2026-10-13）=====
+   它的彩色主题不是「深色块 + 白内容」那一路，而是**整窗同色系浅染**：侧栏明显着色、
+   主区近白微着色、卡片靠对比显层次。原式是 oklch(明度 饱和度 色相) 按 --t-h/--t-c 派生，
+   下面这些 hex 就是把每套的 hue/chroma 代进原公式算出来的实测值，不是手挑的颜色。
+   观感上它们比上面几套淡得多，摆在一起正好补上「轻着色」这一档。 */
+/* 紫罗兰 hue 293 / chroma 0.22 */
+:root[data-theme='violet'] {
+  --side-bg: #e9e2ff; --side-fg: #0a0a0a; --side-fg2: rgba(64, 38, 119, 0.92);
+  --side-hover: #ddd5ff; --side-solid: #fcfaff; --side-line: #d8d4eb;
+  --side-logo: #743ed8;
+  --bg: #f7f6fe; --bg2: #fdfdfd; --bg3: #f0eefe; --line: #e8e6f4;
+  --fg: #0a0a0a; --fg2: #555363; --accent: #743ed8; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #8763e3; --shadow: rgba(116, 62, 216, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
+/* 海洋 hue 255 / chroma 0.2 */
+:root[data-theme='blue'] {
+  --side-bg: #d2eaff; --side-fg: #0a0a0a; --side-fg2: rgba(0, 57, 119, 0.92);
+  --side-hover: #c2dfff; --side-solid: #f7fcff; --side-line: #cbd9ea;
+  --side-logo: #0063d7;
+  --bg: #f3f8fe; --bg2: #fdfdfd; --bg3: #e7f1fe; --line: #e0e9f4;
+  --fg: #0a0a0a; --fg2: #4c5663; --accent: #0063d7; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #2a80e2; --shadow: rgba(0, 99, 215, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
+/* 青柠 hue 118 / chroma 0.16 */
+:root[data-theme='lime'] {
+  --side-bg: #e5ecce; --side-fg: #0a0a0a; --side-fg2: rgba(55, 64, 0, 0.92);
+  --side-hover: #d9e1be; --side-solid: #fbfdf6; --side-line: #d6dac9;
+  --side-logo: #627300;
+  --bg: #f7f8f2; --bg2: #fdfdfd; --bg3: #eff2e6; --line: #e7e9df;
+  --fg: #0a0a0a; --fg2: #54574b; --accent: #627300; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #7a8a0d; --shadow: rgba(98, 115, 0, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
+/* 翡翠 hue 162 / chroma 0.14 */
+:root[data-theme='emerald'] {
+  --side-bg: #d4f0e1; --side-fg: #0a0a0a; --side-fg2: rgba(0, 71, 45, 0.92);
+  --side-hover: #c5e6d4; --side-solid: #f7fefa; --side-line: #cddcd3;
+  --side-logo: #00804f;
+  --bg: #f4f9f6; --bg2: #fdfdfd; --bg3: #e8f3ed; --line: #e1ebe5;
+  --fg: #0a0a0a; --fg2: #4d5852; --accent: #00804f; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #26966a; --shadow: rgba(0, 128, 79, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
+/* 琥珀 hue 75 / chroma 0.16 */
+:root[data-theme='amber'] {
+  --side-bg: #f8e5cb; --side-fg: #0a0a0a; --side-fg2: rgba(87, 49, 0, 0.92);
+  --side-hover: #f0d9ba; --side-solid: #fffbf5; --side-line: #e0d6c8;
+  --side-logo: #9c5600;
+  --bg: #fbf7f2; --bg2: #fdfdfd; --bg3: #f7efe5; --line: #eee7de;
+  --fg: #0a0a0a; --fg2: #5c544a; --accent: #9c5600; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #af7200; --shadow: rgba(156, 86, 0, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
+/* 玫瑰 hue 17 / chroma 0.2 */
+:root[data-theme='rose'] {
+  --side-bg: #ffdbdc; --side-fg: #0a0a0a; --side-fg2: rgba(107, 20, 35, 0.92);
+  --side-hover: #ffcdce; --side-solid: #fff9f9; --side-line: #ead1d1;
+  --side-logo: #c1123d;
+  --bg: #fef5f5; --bg2: #fdfdfd; --bg3: #fdebeb; --line: #f4e3e3;
+  --fg: #0a0a0a; --fg2: #625050; --accent: #c1123d; --on-accent: #fafafa;
+  --ok: #178a5a; --err: #d64550; --run: #d24b5b; --shadow: rgba(193, 18, 61, 0.16);
+  --content: #fdfdfd; --on-user: #0a0a0a;
+}
 
 /* ================= 主题派生 ================= */
 /* 用户气泡统一用白色底 + 深色字（含彩色主题：accent 染色的气泡在浅色聊天区里看着发黑，阅读感差）。
@@ -1450,7 +1515,9 @@ html[data-bg-content='on'] .cbox {
 .set-layout { flex: 1; display: flex; min-height: 0; }
 /* 左侧导航：主题 / 模型 / MCP */
 .set-menu {
-  width: 200px; flex-shrink: 0; padding: 26px 12px;
+  /* 上边距只留 14px：原来 26px 让第一个菜单项离窗口标题栏太远，
+     整页视觉重心被压下去，反而不如右侧内容（.setbody 上 30px）来得贴顶 */
+  width: 200px; flex-shrink: 0; padding: 14px 12px 26px;
   border-right: 1px solid var(--line); overflow-y: auto;
   /* 项与项留出缝隙：hover 高亮块与相邻选中块连成一片时视觉太挤 */
   display: flex; flex-direction: column; gap: 3px;
@@ -2209,7 +2276,9 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 /* ================= 设置 · 自动获取模型的勾选窗 ================= */
 .mpick-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .mpick-q {
-  flex: 1; min-width: 0;
+  /* width/margin 要显式覆盖：.mbody input 给了 width:100% + margin-top，
+     搜索框和右侧按钮同排，100% 宽会把按钮挤下去 */
+  flex: 1; min-width: 0; width: auto; margin: 0;
   background: var(--field-bg); color: var(--fg);
   border: 1px solid var(--field-line); border-radius: 9px;
   padding: 8px 11px; font-size: 13px; outline: none;
@@ -2221,13 +2290,22 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
   border: 1px solid var(--field-line); border-radius: 10px;
   padding: 6px; background: var(--bg3);
 }
-.mpick-item {
+/* 选择器要带 .mpick-list 前缀：`.mbody label { display:block; margin-bottom:12px }` 的权重
+   （类+标签）高于单类的 `.mpick-item`，光写 display:flex 会被它压回块级，
+   checkbox 与模型名就各占一行——这正是这版之前那个样式 bug 的根因。 */
+.mpick-list .mpick-item {
   display: flex; align-items: center; gap: 9px;
-  padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  margin: 0; color: inherit; font-size: 13px;
+  padding: 7px 9px; border-radius: 8px; cursor: pointer;
 }
-.mpick-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.mpick-item input[type='checkbox'] { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
-.mpick-id { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+.mpick-list .mpick-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* 勾选框要留在行内：.mbody input 把弹窗里的控件统一撑成整行块（width:100% + 9px 内边距 + 5px 上边距），
+   那些值套到 15px 的 checkbox 上会把方框本身吃干净。 */
+.mpick-item input[type='checkbox'] {
+  flex: 0 0 15px; width: 15px; height: 15px; margin: 0; padding: 0; border: 0; border-radius: 4px;
+  background: var(--field-bg); accent-color: var(--accent);
+}
+.mpick-id { flex: 1; min-width: 0; font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; word-break: break-all; }
 .mpick-item.added { color: var(--fg2); }
 .mpick-item.added svg { color: var(--ok); flex-shrink: 0; }
 .mpick-sub { font-size: 11.5px; color: var(--fg2); margin: 10px 9px 4px; }

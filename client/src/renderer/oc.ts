@@ -23,14 +23,32 @@ export const ZEN_PROVIDER_ID = 'qnx-free'
  *   builtin —— 后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
  *              它们不属于「内置」，混进来会让人以为模型比实际多。
  *
- * Zen 那组只看有没有清单（s.zen.models），不依赖登录态与 remote 开关——
- * 它压根不走平台，也不发任何平台请求。
+ * Zen 那组要两个条件同时成立：内核给过免费清单（s.zen.models 非空）**且**用户在 设置 → 模型
+ * 里配过 OpenCode 的端点（Zen / Go 任一，见 opencodeConfigured）。它不依赖登录态与 remote 开关——
+ * 压根不走平台，也不发任何平台请求。
  *
  * 设置页绝不能吃这份列表——它保存时会把 providers 整体写回磁盘，
  * 而前面两组都是虚拟出来的（登录态 / 内核清单），混进去会被落成一份假配置。
  */
+/**
+ * OpenCode 官方的两个端点：Zen（免费池，免 KEY）与 Go（$10/月订阅）。
+ * 「opencode限免」这组要不要出现在聊天模型选择器里，就看用户有没有配过这两个地址之一。
+ */
+const OPENCODE_URLS = ['https://opencode.ai/zen/v1', 'https://opencode.ai/zen/go/v1']
+
+/**
+ * 用户是否自己在 设置 → 模型 里接了 OpenCode（Zen 或 Go 任一）。
+ *
+ * 认 baseURL 而不是认提供商 id：用户可能改名、可能从模板之外自己填，但地址是他真实在用 OpenCode 的证据。
+ * 限免清单本身是内核给的（不看用户配置），所以没接过 OpenCode 的人也会被塞进一组他压根没打算用的模型——
+ * 现在按这个判定收起整组，功能与设置页那块的「刷新」都原样保留。
+ */
+export function opencodeConfigured(list: ProviderCfg[]): boolean {
+  return list.some((p) => p.enabled && OPENCODE_URLS.includes(p.baseURL.replace(/\/+$/, '')))
+}
+
 export function chatProviders(s: SettingsCfg): ProviderCfg[] {
-  const zen = (s.zen?.models ?? []).length
+  const zen = (s.zen?.models ?? []).length && opencodeConfigured(s.providers)
     ? [
         {
           id: ZEN_PROVIDER_ID,

@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, opencodeConfigured, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -992,6 +992,8 @@ export function ChatView(p: Props) {
    * 没同步到（内核没起 / 官方当前没有免费模型）时分组不显示，符合「没有就不显示」。
    */
   const syncZen = useCallback(async () => {
+    // 没配过 OpenCode（Zen / Go 任一）就不用去问这份清单：分组本来就不显示，白等一次内核往返
+    if (!opencodeConfigured(p.settings)) return
     try {
       const s = await window.qingniao.zenRefresh()
       // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
@@ -999,7 +1001,7 @@ export function ChatView(p: Props) {
     } catch {
       /* 内核不可达：限免分组不显示，不打扰用户 */
     }
-  }, [p.onSettings])
+  }, [p.onSettings, p.settings])
 
   // 空值 = 「自动」档，是**合法选择**，绝不能被校正掉（它也是新装用户的默认档位）。
   // 只有存档值确实失效（提供商被停用/删除、模型改名）才回落，且回落到「自动」而不是某个具体模型——

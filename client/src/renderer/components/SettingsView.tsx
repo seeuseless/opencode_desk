@@ -323,6 +323,33 @@ const PROVIDER_PRESETS: {
     gen: { 'mimo-v2.5-tts': 'tts' }
   },
   {
+    /**
+     * OpenCode Zen（官方免费池）。id 刻意不叫 `opencode`——那是内核内置 provider 的保留名，
+     * 同名会在 opencode.json 里整个覆盖掉内核自带的定义（连带那批模型的能力元数据），见 AGENTS.md 与
+     * docs/内核Zen免费模型机制.md。
+     *
+     * 免 KEY：主进程给每个 provider 写的都是 `apiKey: '{env:QN_KEY_<ID>}'`，这里不注入那个变量，
+     * 内核就落到匿名通道（Zen 那批免费模型实测可通）。
+     * 只列带 free 的那几个：付费模型走同一个端点会 401，摆进清单等于给用户挖坑。
+     */
+    id: 'qn-zen',
+    name: 'opencode zen',
+    baseURL: 'https://opencode.ai/zen/v1',
+    models: ['big-pickle', 'space-bunny-free', 'ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'step-5-preview-free'],
+    // space-bunny-free 的模态是内核元数据给的（text/image/video 全进、1M 上下文），顺带能当代看的眼睛
+    input: { 'space-bunny-free': ['text', 'image', 'video', 'vision'] }
+  },
+  {
+    /**
+     * OpenCode Go（$10/月订阅，端点与 Zen 不同）。id 不叫 `opencode-go`：内核自带同名 provider，
+     * 覆盖了会丢掉它那份模型元数据。要 KEY——在 opencode.ai/go 订阅后把 Key 填进下面的 API Key。
+     */
+    id: 'qn-go',
+    name: 'opencode go',
+    baseURL: 'https://opencode.ai/zen/go/v1',
+    models: ['deepseek-v4-flash', 'glm-5.3', 'kimi-k3', 'mimo-v2.5', 'qwen3.8-max']
+  },
+  {
     id: 'stepfun',
     name: 'stepfun',
     baseURL: 'https://api.stepfun.com/v1',
