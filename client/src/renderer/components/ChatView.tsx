@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
@@ -3438,6 +3438,8 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   tts_generate_speech: { name: '配音', icon: <Music size={13} /> },
   asr_transcribe_audio: { name: '听写', icon: <Music size={13} /> },
   vision_describe_image: { name: '识图', icon: <Search size={13} /> },
+  data_json_query: { name: 'JSON 取值', icon: <Braces size={13} /> },
+  data_regex_find: { name: '正则提取', icon: <Regex size={13} /> },
   panel_navigate: { name: '浏览器导航', icon: <Globe size={13} /> },
   panel_snapshot: { name: '页面快照', icon: <Globe size={13} /> },
   panel_click: { name: '点击元素', icon: <MousePointerClick size={13} /> },

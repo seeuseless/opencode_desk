@@ -502,6 +502,11 @@ let memoryMcp: { path: string } | undefined
 export function setMemoryMcp(v: { path: string }): void {
   memoryMcp = v
 }
+/** 数据处理 MCP（json_query / regex_find：JSON 接口一步取值、正则批量提取）脚本路径 */
+let dataMcp: { path: string } | undefined
+export function setDataMcp(v: { path: string }): void {
+  dataMcp = v
+}
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
@@ -676,6 +681,19 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   }
+  // 数据处理 MCP：json_query（JSON 接口/文件按路径取值）与 regex_find（正则批量提取）。
+  // 纯本地计算 + 自带网络请求，不调模型、不用注册表依赖；webfetch 回来的大 JSON
+  // 靠模型 grep 啃会反复重试（2026-10-13 实测），这个工具一步取准还省上下文。
+  if (dataMcp) {
+    mcp.data = {
+      type: 'local',
+      command: [...nodeExec(), dataMcp.path],
+      environment: nodeEnv(),
+      // 内部有网络请求（慢接口可能十几秒），默认超时太紧
+      timeout: 60000,
+      enabled: true
+    }
+  }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
   // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
   //
@@ -815,6 +833,12 @@ export function writeOpencodeConfig(s: Settings): void {
       '- **执行命令一律用 bash（Git Bash）语法**：路径用正斜杠、环境变量用 `export`/`$VAR`。' +
       '**严禁调用 powershell / pwsh / powershell.exe / pwsh.exe（含 `cmd /c` 转调），严禁写 PowerShell 语法' +
       '（`$env:`、`Get-Content`、`Write-Host`、`-ErrorAction` 之类）**——那会在用户桌面上弹出 PowerShell 窗口，明确违反用户要求。\n' +
+      // 数据处理（2026-10-13 用户实测事故：查框架版本时 webfetch 拉回单行大 JSON 后用 grep 反复截取，
+      // 每轮都是几秒的模型往返）。json_query 支持 url 直连，一步取值连 webfetch 都省。
+      '- **处理 JSON 一律优先用 `data_json_query`**：能拼出接口地址时直接 `data_json_query({ url, path })` 一步取值' +
+      '（path 如 `$.packages["pkg/name"][0].version`，`[*]` 可对数组逐项取值），**不必先 webfetch 再解析**；' +
+      'webfetch 拿到 JSON 后也用它按路径取，**严禁用 bash grep/sed 去啃压缩成单行的 JSON**——截不准、多轮重试更慢。' +
+      '从普通文本批量提取内容用 `data_regex_find`（返回全部匹配与分组，比 grep -o 稳）。\n' +
         // 全局记忆（设置 → 记忆）：只给追加口，删与改留给用户在界面上做（见 appendGlobalMemory）
         '- **全局记忆**：用户明确说「记住…」「以后都…」「写进全局记忆」时，调 `memory_append` 追加**一条**；' +
         '写成**规则本身**（如「包管理统一用 pnpm」），不要写成「用户希望…」的转述，也不要一次塞多条内容。' +
