@@ -149,3 +149,72 @@ POST 同一端点   model=big-pickle（免费）, 无 Authorization
 
 - 官方文档 <https://opencode.ai/docs/zen/>（免费模型是"限时免费"，明确写了可能随时下线）
 - 定价页列了每个模型的免费状态，本文档的模型清单与之核对过
+---
+
+## Zen 与 Go 是两个池子，清单绝不能交叉（2026-10-13 修的真 bug）
+
+### 症状
+
+选了 `opencodeGo` 分组里的模型，界面一直转圈一分多钟才报：
+
+```
+AI_APICallError: Upstream request failed: Model is unavailable.
+```
+
+### 病因
+
+`types.ts` 的 `OPENCODE_ENDPOINTS` 把两个端点并列：
+
+```ts
+export const OPENCODE_ENDPOINTS = ['https://opencode.ai/zen/v1', 'https://opencode.ai/zen/go/v1']
+```
+
+而 `mergeFreeModels()` 对 `isOpencodeEndpoint()` 为真的**两个都**并入 `settings.zen.models`——
+那份清单是内核内置 `opencode` provider 的 **Zen** 免费池。于是 Zen 的模型 id 被塞进 Go 分组。
+
+两个池子的 id 大量同名不同后缀，交叉后必然产生无效组合（实测 2026-10-13）：
+
+| Zen 清单里的 id | Go 端点实际叫法 | Go 的 /models 里有吗 |
+|---|---|---|
+| `space-bunny-free` | `space-bunny` | ❌ |
+| `mimo-v2.6-flash-free` | `mimo-v2.6-flash` | ❌ |
+| `nemotron-3-ultra-free` | （无） | ❌ |
+| `big-pickle` | （无） | ❌ |
+| `longcat-2.5-preview-free` | 同名 | ✅ |
+| `step-5-preview-free` | 同名 | ✅ |
+| `cat-jam-free` | 同名 | ✅ |
+
+**11 个里 8 个（73%）在 Go 端点根本不存在**——一选就报 `Model is unavailable.`。
+用户看到的分组名还是「opencodeGo」，完全猜不到是自己订阅端点缺模型还是 App 配错了。
+
+### 定版
+
+- `mergeFreeModels()` 里 **只有 `isZenEndpoint()`（精确等于 `https://opencode.ai/zen/v1`）才并入 Zen 快照**，
+  Go 端点一律不并入任何快照。
+- `isOpencodeEndpoint()` 保留原语义（Zen / Go 任一），但**只用于展示排序**（排最后），不再用于清单归属。
+- Go 分组额外打 `hideFreeTag`：走订阅额度不是「限免」，选择器里不打标签（用户定版）。
+- Go 自己那批免费模型（`longcat-2.5-preview-free` / `step-5-preview-free` / `cat-jam-free`，
+  额度用完后仍可用）由用户在设置里按需手填，不走自动并入。
+
+### 附带查清的两件事
+
+1. **Go 必须填 Key**（`$10/月`订阅，官方文档 <https://opencode.ai/docs/go/> 明确要订阅后从 Console 拿）。
+   没填的症状是 `Upstream request failed: Go requires a credential`——
+   **与 `Model is unavailable.` 是两种错**：前者缺凭据，后者缺模型 id。别混着查。
+
+2. **Zen 填了 Key 会怎样**：免费模型**照样免费**（官方定价页这几项 input/output/cache 四项都是 Free），
+   变的只是配额归属——匿名走的是**全站共享的 anon 免费池**（限流紧，会报
+   `Rate limit exceeded. Please try again later.`），带 Key 走自己的额度。
+   主进程 `providerEnv()` 目前**刻意不给 `qn-zen` 注入 `QN_KEY_QN_ZEN`**，要换成自带配额得用户自己在设置里填 Key。
+
+### 诊断口径（下次遇到照这个查）
+
+```bash
+curl -s https://opencode.ai/zen/go/v1/models          # 看清单里到底有没有这个 id
+curl -s -X POST https://opencode.ai/zen/go/v1/chat/completions \
+  -H 'x-opencode-session: diag-test-123' \
+  -d '{"model":"<id>","messages":[{"role":"user","content":"hi"}],"max_tokens":8}'
+```
+
+**`x-opencode-session` 头必须带**（官方对客户端的要求），不带一律返回 `MissingSessionID`，
+会让人误判成 Key 失效。带上之后错误才显形为真实原因。

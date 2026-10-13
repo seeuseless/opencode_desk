@@ -13,6 +13,7 @@ import {
   settingsPath,
   writeOpencodeConfig
 } from './config.ts'
+import { KernelLogTail } from './logtail.ts'
 
 /** 事件桥遥测：记录 SSE 断连/重连次数，暴露给渲染层排障 */
 const TELEMETRY = 'qn-event-telemetry.json'
@@ -72,6 +73,8 @@ class Adapter {
   private base = ''
   private sseAbort: AbortController | null = null
   private stopping = false
+  /** 内核日志 tail：把自动重试期间的流式失败实时推给渲染层（见 logtail.ts 的必要性说明） */
+  private logTail: KernelLogTail | null = null
   /**
    * 应用退出标记（区别于 stopping）：stop() 在重启流程里也会被调（stop→start 属正常轮换），
    * 但应用退出后 start() **绝不能**再拉起新内核——否则退出落在「stop 完、start 未跑」的重启
@@ -167,6 +170,16 @@ class Adapter {
     })
     await this.waitHealthy()
     this.openEventBridge()
+    // 内核重试期间的失败只有日志里有（不推 session.error、也不立刻写进消息），tail 它推给渲染层。
+    // 每次 start 都重建：内核重启会截断重写日志，tail 的字节偏移得从头核。
+    this.logTail?.stop()
+    this.logTail = new KernelLogTail((info) => {
+      this.safePush({
+        type: 'qingniao.stream.error',
+        properties: { ...info }
+      })
+    })
+    this.logTail.start()
     // 内核（重）启动成功：渲染层据此清理重启前的残留 busy/running 状态（任务为内存态，重启即失效）
     this.safePush({ type: 'qingniao.kernel.started', properties: {} })
   }
@@ -267,6 +280,9 @@ class Adapter {
     this.stopping = true
     this.sseAbort?.abort()
     this.sseAbort = null
+    // 日志 tail 也要停：否则定时器还活着、内核都退了还在读文件（且 stop→start 轮换时会积出多个 tail）
+    this.logTail?.stop()
+    this.logTail = null
     const p = this.proc
     this.proc = null
     if (!p) return

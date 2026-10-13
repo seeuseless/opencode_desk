@@ -7,11 +7,12 @@ import {
   Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isGoEndpoint, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
+import { Toasts, type ToastItem } from './Toasts'
 import { AccessPicker, ProjectPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
@@ -215,12 +216,23 @@ interface TodoItem {
  */
 function humanizeError(raw: string): string {
   if (!raw) return ''
+  // 凭据类放最前：实测同一个「没填 Key」的 Go 端点会随机回两种文案——
+  // 带凭据要求时是 `Go requires a credential`，无凭据直接打某些模型时又回 `Model is unavailable.`
+  // （官方 Go 文档说「额度用完仍可用那几个免费模型」，但匿名调一律要 credential）。
+  // 两种文案根因都是同一个：**这个端点要先填 Key**。所以先把两者都收拢到这一条，
+  // 否则用户会照着「换个模型」去反复换，而真正该做的是填 Key。
+  if (/requires a credential|missing api key|credential|model is unavailable/i.test(raw))
+    return t('该提供商需要先在 设置 → 模型 里填写 API Key 才能用（此端点不支持免 Key 调用）。')
   if (/insufficient[_ ]credit|quota|balance|arrears|exceeded your current/i.test(raw)) return t('账户额度不足或已欠费，请检查该提供商的余额。')
   if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return t('API Key 无效或未通过认证，请到设置里检查该提供商的密钥。')
-  if (/rate[_ ]?limit|too many requests|429/i.test(raw)) return t('请求过于频繁，已被限流，请稍候片刻再试。')
+  if (/rate[_ ]?limit|too many requests|429|速率限制|rate limit/i.test(raw)) return t('请求过于频繁，已被限流，请稍候片刻再试。')
   if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return t('请求的模型在该端点不存在或不可用，请更换模型。')
-  // 图生图/文生图模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-image-* 提示走 /v1/images/generations）
-  if (/images\/generations|是\s*image\s*模型|image (?:generation )?model/i.test(raw)) return t('该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。')
+  // Bad Request：端点认为请求本身不合法（参数/模态不符），重试无用，提示换个模型或检查配置
+  if (/bad request/i.test(raw)) return t('模型端点拒绝了这次请求（Bad Request），通常是模型与任务类型不匹配，请更换模型。')
+  if (/unable to connect|cannot connect to api/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
+  // 视频/图像模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-video-* 提示走 /v1/videos）
+  if (/\/v1\/videos|\/v1\/images|是\s*(video|image)\s*模型|(video|image) (?:generation )?model/i.test(raw))
+    return t('该模型是视频/图像生成模型，不能用于文字对话。请到 设置 → 模型 换用对话模型。')
   if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
   // 实测高频断流根因：上游 TLS 证书校验失败（unknown certificate verification error）。
   // 常见于代理/中间人拦截或系统证书过期，重试无意义，应提示用户更换模型或检查网络代理。
@@ -312,6 +324,24 @@ export function ChatView(p: Props) {
   const [error, setError] = useState('')
   /** 中性提示（非失败）：如「已切到能看图的模型」，同样落在对话流末尾，可手动关掉 */
   const [notice, setNotice] = useState('')
+  /**
+   * 右上角浮层提示（见 components/Toasts）。
+   *
+   * 与对话流里的错误条是**互补**而非重复：
+   *   - 错误条：回合收尾后落在消息流里，用户翻上去能看到、能留存；
+   *   - toast：内核重试期间就弹（内核把失败只写日志，既不推 session.error 也不立刻写进消息，
+   *     实测自动重试 6 次、间隔递增、累计 1 分 39 秒——那段时间对话流里**什么都没有**，
+   *     用户只看到一个转圈，根本不知道出了什么事）。这个窗口只能靠 toast 补。
+   *
+   * 所以失败当下的第一手信息走 toast；回合收尾后错误条照旧补，两处口径一致（都用 humanizeError）。
+   */
+  const [toasts, setToasts] = useState<ToastItem[]>([])
+  const toastSeq = useRef(0)
+  /** 弹一条浮层提示（最多堆 5 条：再多就把最早的一条挤掉，失败风暴下别把屏幕糊满） */
+  function pushToast(kind: ToastItem['kind'], text: string, detail?: string) {
+    const id = ++toastSeq.current
+    setToasts((prev) => [...prev, { id, kind, text, detail }].slice(-5))
+  }
   /** 每个会话独立的任务队列：切走保留、切回还在，只消费当前视图会话的队列 */
   const [queues, setQueues] = useState<Record<string, string[]>>({})
   const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
@@ -969,6 +999,9 @@ export function ChatView(p: Props) {
     .map((c) => ({
       id: c.id,
       label: c.name || c.id,
+      // opencodeGo 是 $10/月订阅池，额度用完还能继续用它自己那几个免费模型——
+      // 但那是订阅额度的一部分，不是「限免」，挂标签会让人以为是白嫖的（2026-10-13 用户定版）。
+      hideFreeTag: isGoEndpoint(c.baseURL),
       models: c.models
         .filter((m) => genRoleOf(m) === 'none' && (m.input ?? MODEL_DEFAULTS.input).includes('text'))
         .map((m) => ({
@@ -984,21 +1017,17 @@ export function ChatView(p: Props) {
     // 组内一个可对话模型都没有的提供商直接不显示，免得点进去是空列
     .filter((g) => g.models.length > 0)
   /**
-   * 「自动」档：model 存空串，请求不带 model，由主进程挑一个可用模型
-   * （adapter.resolveModel → config.defaultModel = 第一个可用提供商里**能对话**的那个模型，
-   * 登录了平台就是平台内置模型里的第一个对话模型）。内核自己不挑：它的默认档依赖 opencode.json 顶层
-   * `model` 字段与内核的 recent 列表，这两样青鸟都没写、也不受控。
+   * **不再注入「自动」虚拟项**（2026-10-13 用户定版）：模型选择器里只列真实模型。
    *
-   * 摆在「内置模型」分组的第一条——与主进程的挑选口径一致，用户点它拿到的就是那个默认模型。
+   * 原先会在「内置模型」分组头部插一条 `{mid:'', name:'自动'}`（model 存空串 = 请求不带 model，
+   * 由主进程 resolveModel 挑第一个能对话的模型）。移除的理由：
+   *   1. 它不是模型，混在模型列表里容易被当成「某个模型」点中，用起来却对不上名字；
+   *   2. 同一套「自动」逻辑在别处还有（见下方 useEffect：存档值失效时回落到空串），
+   *      两条路径会让人搞不清当前到底是哪个在生效。
+   *
+   * 空串在数据层仍是合法的（**存量用户 localStorage 里存的就是空串**），但不再作为可选档位呈现，
+   * 也不该长期停在这个状态——见下面那个 useEffect：现在它会立刻校正成一个真实模型。
    */
-  // 「自动」档只挂在平台「内置模型」分组下（与主进程挑选口径一致的那组）。
-  // **不要兜底挂到 groups[0]**：用户没登录平台时 groups[0] 是他自己的提供商（如 agnes），
-  // 凭空多出的「自动」看起来像该分组自己的模型（2026-10-13 用户反馈）。
-  // 没有平台组就哪都不挂——「自动」档位本身仍生效（value 为空即自动，触发器正常显示）。
-  const home = groups.find((g) => g.id === PLATFORM_PROVIDER_ID)
-  if (home) {
-    home.models = [{ mid: '', name: t('自动') }, ...home.models]
-  }
 
   // 文字聊天模型禁止自动切换（用户约定）：一旦选中，对话就用当前模型，端点拒绝时报错给用户手动处理，
   // 绝不在后台静默换成同提供的其他模型再自动重发「继续」。
@@ -1042,17 +1071,27 @@ export function ChatView(p: Props) {
     }
   }, [p.onSettings, p.settings])
 
-  // 空值 = 「自动」档，是**合法选择**，绝不能被校正掉（它也是新装用户的默认档位）。
-  // 只有存档值确实失效（提供商被停用/删除、模型改名）才回落，且回落到「自动」而不是某个具体模型——
-  // 静默替用户定死一个模型会让他下次看到的选中态莫名其妙。
-  // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
+  // 校正当前选中的模型，**任何情况下都不允许停在空值**。
+  //
+  // 背景（2026-10-13 用户定版）：模型选择器里不再提供「自动」档了，但空串在数据层仍是历史
+  // 遗留——存量用户 localStorage 里存的就是空串（那是旧版「自动」档的值），新装用户也是空串。
+  // 所以这里把空值**主动收敛**到第一个可用模型，而不是继续让它当隐形的「自动」用着：
+  //   - 空值 → 落到 groups 里第一个能对话的模型（与主进程 resolveModel 的挑选口径一致，
+  //     所以界面上看到的与实际发出去的是同一个模型）；
+  //   - 非空但失效（提供商被停用/删除、模型改名）→ 同样回落到第一个可用模型。
+  //
+  // 关键：设置尚未加载完成时绝不能跑（此刻 groups 为空，会把用户的存档值误判失效清掉）。
   useEffect(() => {
-    if (!p.settingsReady || !p.model) return
-    const i = p.model.indexOf('/')
-    const valid =
-      i > 0 && groups.some((g) => g.id === p.model.slice(0, i) && g.models.some((m) => m.mid === p.model.slice(i + 1)))
-    if (!valid) p.onModelChange('')
-  }, [p.model, p.settings, p.settingsReady])  // 切换项目/会话：先清旧内容再拉历史（项目切换瞬间 sessionId 为空）
+    if (!p.settingsReady || !groups.length) return
+    const valid = (() => {
+      const i = p.model.indexOf('/')
+      return i > 0 && groups.some((g) => g.id === p.model.slice(0, i) && g.models.some((m) => m.mid === p.model.slice(i + 1)))
+    })()
+    if (valid) return
+    // 第一个分组的第一条即「默认」：分组顺序是 chatProviders 定的（平台内置在前、官方端点在后）
+    const fallback = groups[0].models[0]
+    if (fallback && fallback.mid) p.onModelChange(`${groups[0].id}/${fallback.mid}`)
+  }, [p.model, p.settings, p.settingsReady, groups.length])  // 切换项目/会话：先清旧内容再拉历史（项目切换瞬间 sessionId 为空）
   useEffect(() => {
     if (justCreated.current && justCreated.current === p.sessionId) {
       justCreated.current = ''
@@ -1142,7 +1181,16 @@ export function ChatView(p: Props) {
   useEffect(() => {
     const off = window.qingniao.onEvent(async (raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
-      if (e.type === 'session.busy') {
+      if (e.type === 'qingniao.stream.error') {
+        // 主进程 tail 内核日志转发的**流式失败**（见 electron/main/logtail.ts）。
+        // 这是内核自动重试期间唯一的信号：它既不推 session.error，也不会立刻把 error 写进
+        // 助手消息（实测重试 6 次、累计 1 分 39 秒才收口）。不弹的话用户只会看着「处理中」干等。
+        const pr = e.properties as { sessionID?: string; message?: string; providerID?: string; modelID?: string }
+        if (!pr.message) return
+        // 用户自己刚点过停止的会话不再提示：停止按钮本身就是反馈，再弹一个报错只会让人困惑
+        if (pr.sessionID && userStopped.current.has(pr.sessionID)) return
+        pushToast('error', humanizeError(pr.message), pr.modelID ? pr.providerID + '/' + pr.modelID : undefined)
+      } else if (e.type === 'session.busy') {
         // 手机发来的回合：busy 事实由 relay.markBusy 注入事件桥，这里立即认领/释放——
         // 不等内核出 delta（部分 provider 只发 heartbeat），让「处理中」/停止按钮即时亮起。
         const pr = e.properties as { sessionID?: string; busy?: boolean }
@@ -1758,9 +1806,15 @@ export function ChatView(p: Props) {
   function resolveChatModel(files: Attachment[], text: string): ModelSel | undefined {
     const i = p.model.indexOf('/')
     /**
-     * 「自动」档遇到图片/视频附件：主进程挑默认模型时不看模态，可能选中一个收不了图的，
-     * 用户看到的就是"发了图，AI 只读到文件路径"。这里本轮临时借一个收得下附件的模型——
-     * 只走 modelOverride，**不改**用户选中的「自动」，下一轮仍是自动。
+     * 空值（p.model 还没有 provider/model）遇图片/视频附件的兜底。
+     *
+     * 2026-10-13 起模型选择器不再提供「自动」档，正常流程下这个分支几乎走不到——
+     * 校正 effect 会先把空值收敛成第一个可用模型。留着是因为存量用户 localStorage 里
+     * 存的就是空串，而发消息可能抢在校正之前发生（切回会话即发）。
+     *
+     * 这时主进程挑默认模型不看模态，可能选中一个收不了图的，用户看到的就是
+     * 「发了图，AI 只读到文件路径」。所以本轮临时借一个收得下附件的模型——
+     * 只走 modelOverride，**不改**用户选中的模型。
      */
     if (i <= 0) {
       const want: Modality[] = []
@@ -2189,6 +2243,9 @@ export function ChatView(p: Props) {
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
+    {/* 浮层提示挂在 chat-row 下（position:fixed，不受对话区滚动影响）：内核重试期间的失败
+        在对话流里还什么都没有，只有这里能让用户第一时间知道「出事了，别干等」。 */}
+    <Toasts items={toasts} onClose={(id) => setToasts((prev) => prev.filter((x) => x.id !== id))} />
     <main
       ref={mainRef}
       className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}

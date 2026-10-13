@@ -273,14 +273,43 @@ export function normBaseURL(u: string): string {
 }
 
 /**
- * OpenCode 官方的两个端点：Zen（免费池，免 KEY）与 Go（$10/月订阅）。
- * 内核自带的免费模型清单（settings.zen）并入**这两个端点**的提供商分组。
+ * OpenCode 官方的两个端点：**Zen**（付费按量 + 一批免 KEY 免费模型）与
+ * **Go**（$10/月订阅，额度用完后仍可用极少数免费模型）。两个池子模型 id 大量同名不同后缀
+ * （Zen 的免费模型带 `-free`，Go 那边多数不带），**清单绝不能交叉**。
  */
 export const OPENCODE_ENDPOINTS = ['https://opencode.ai/zen/v1', 'https://opencode.ai/zen/go/v1']
 
-/** 是不是 OpenCode 官方端点（Zen / Go 任一） */
+/**
+ * Zen 端点（精确地址）。
+ *
+ * 内核免费模型清单（settings.zen）只对这一个端点成立——它是内核内置 `opencode` provider
+ * 指向的那个地址，清单也是从那儿同步来的。Go 是另一个地址、另一套模型 id，
+ * 吃这份清单会造出「界面上能选、点下去必报 `Model is unavailable.`」的死组合
+ * （2026-10-13 实测：`space-bunny-free` 在 Go 的 /models 里根本不存在，Go 那边叫 `space-bunny`）。
+ */
+export const ZEN_ENDPOINT = 'https://opencode.ai/zen/v1'
+
+/** 是不是 OpenCode 官方端点（Zen / Go 任一）。只用于「排最后」这类展示排序，不用于清单归属。 */
 export function isOpencodeEndpoint(baseURL: string): boolean {
   return OPENCODE_ENDPOINTS.includes(normBaseURL(baseURL))
+}
+
+/** 是不是 Zen 端点（精确相等）。**只有它才并入内核免费模型清单** —— 见 ZEN_ENDPOINT 的说明。 */
+export function isZenEndpoint(baseURL: string): boolean {
+  return normBaseURL(baseURL) === ZEN_ENDPOINT
+}
+
+/**
+ * Go 端点（精确地址，$10/月订阅池）。
+ *
+ * 与 Zen 的区别要在**界面上也体现出来**：Go 走订阅额度，不该挂「限免」标签
+ * （额度用完后它仍能继续用自己那几个免费模型，但那是订阅的一部分，不是白嫖）。
+ */
+export const GO_ENDPOINT = 'https://opencode.ai/zen/go/v1'
+
+/** 是不是 Go 端点（精确相等）。选择器靠它给该分组关掉「限免」标签。 */
+export function isGoEndpoint(baseURL: string): boolean {
+  return normBaseURL(baseURL) === GO_ENDPOINT
 }
 
 /**
@@ -339,8 +368,17 @@ function freeModelRank(m: ModelCfg): number {
 
 /**
  * 把免费模型快照并入启用的提供商（**不改用户配置本身**，只在内存里拼出"可调用"的完整清单）：
- *   - OpenCode zen/go 端点的提供商 → 并入内核同步来的 zen 快照；
- *   - openrouter / unorouter 端点的提供商 → 并入 settings.freeModels 里对应 baseURL 的快照。
+ *   - **Zen 端点**（精确等于 https://opencode.ai/zen/v1）→ 并入内核同步来的 zen 快照；
+ *   - openrouter / unorouter 端点 → 并入 settings.freeModels 里对应 baseURL 的快照；
+ *   - **Go 端点（https://opencode.ai/zen/go/v1）一律不并入任何东西**。
+ *
+ * Go 为什么必须排除（2026-10-13 用户实际踩到）：它是 $10/月订阅池，跟 Zen 的免 KEY 免费池
+ * **是两套独立的模型 id**。Zen 清单里的 `space-bunny-free`、`mimo-v2.6-flash-free` 等在
+ * Go 的 /models 里压根不存在（Go 那边叫 `space-bunny`、`mimo-v2.6-flash`，无 `-free` 后缀），
+ * 交叉并入等于往选择器里塞一批一选就报 `Model is unavailable.` 的死条目，
+ * 而用户看到的分组名还是「opencodeGo」，完全猜不到是自己订阅端点缺模型还是 App 配错了。
+ * Go 自己那批免费模型（longcat-2.5-preview-free / step-5-preview-free / cat-jam-free）
+ * 由用户在设置里按需手填，不走这条自动并入。
  *
  * 并入的模型标 `zenFree`（选择器渲染「限免」标签），并按 freeModelRank 排序。
  * id 已存在的不重复加——用户手配过同名模型时以他自己的配置为准（也排最前，不参与排序）。
@@ -355,9 +393,10 @@ export function mergeFreeModels(
   return providers.map((p) => {
     if (!p.enabled) return p
     let extra: ModelCfg[] = []
-    if (isOpencodeEndpoint(p.baseURL)) {
+    if (isZenEndpoint(p.baseURL)) {
       extra = s.zen?.models ?? []
-    } else {
+    } else if (!isOpencodeEndpoint(p.baseURL)) {
+      // Go 端点故意落到这里：不并入任何快照（见上方说明）
       const cached = s.freeModels?.[normBaseURL(p.baseURL)]
       extra = cached?.models ?? []
     }

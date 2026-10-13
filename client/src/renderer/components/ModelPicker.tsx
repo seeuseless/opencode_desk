@@ -31,6 +31,15 @@ export interface ModelGroup {
   id: string
   label: string
   models: ModelGroupModel[]
+  /**
+   * 这个分组**不显示「限免」标签**。
+   *
+   * 只给 opencodeGo（$10/月订阅池）用：它走的是订阅额度而不是免 KEY 免费池，
+   * 挂「限免」会让人以为是白嫖的。真正的限免标签只该出现在 Zen 分组里——
+   * 见 electron/main/types.ts 的 mergeFreeModels（Go 端点根本不并入 Zen 清单）。
+   * 这里再挡一道是防漏：万一某个分支把 zenFree 带进来了，界面上也不该出现限免二字。
+   */
+  hideFreeTag?: boolean
 }
 
 function shortModelName(name: string): string {
@@ -129,9 +138,10 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
         ? codeMode
           ? shortModelName(value)
           : value
-        : // 空值就是「自动」档（不指定模型，交给主进程挑一个可用模型）——它现在也是默认档位，
-          // 所以这里不再是「还没选」的占位语
-          t('自动')
+        : // 空值没有对应模型可选了（2026-10-13 用户定版：选择器不再提供「自动」档）。
+          // ChatView 的校正 effect 会把空值收敛到第一个可用模型，这里只是在校正跑完前的
+          // 那一瞬显示个中性提示——不能叫「自动」，因为那一刻并没有「自动挑选」这回事。
+          t('未选择模型')
   const active = groups.find((g) => g.id === expanded)
   /** 二级列实际渲染的模型：有搜索词时按词过滤（对 id 与展示名都不区分大小写匹配） */
   const q = query.trim().toLowerCase()
@@ -241,7 +251,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                       } else if (e.key === 'Enter') {
                         const hit = filtered[0]
                         if (hit) {
-                          onChange(hit.mid === '' ? '' : `${active.id}/${hit.mid}`)
+                          onChange(`${active.id}/${hit.mid}`)
                           setOpen(false)
                         }
                       }
@@ -250,8 +260,8 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                 </div>
               )}
               {filtered.map((m) => {
-                // mid 为空 = 「自动」这条虚拟项（由 ChatView 注入）：它的值就是 ''，不能拼成 'pid/'
-                const key = m.mid === '' ? '' : `${active.id}/${m.mid}`
+                // 这里只列真实模型（虚拟的「自动」项已于 2026-10-13 移除），mid 恒非空
+                const key = `${active.id}/${m.mid}`
                 const on = key === value
                 return (
                   <button
@@ -265,7 +275,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                   >
                     <span className="mi-check">{on && <Check size={13} />}</span>
                     <span className="mp-name">{shortModelName(m.name || m.mid)}</span>
-                    <Tag m={m} />
+                    <Tag m={m} hide={active.hideFreeTag} />
                     <Rate m={m} />
                   </button>
                 )
@@ -282,11 +292,14 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
 /**
  * 计价标签：限免 / 折扣。
  *
- * `zenFree`（opencode 限免分组）与平台 `free`（限免）都渲染成「限免」——
+ * `zenFree`（opencodeZen 免 KEY 免费模型）与平台 `free`（限免）都渲染成「限免」——
  * 用户视角都是"这段时间不花钱"。但字段仍要分开存：前者不经过平台计费、也没有倍率，
  * 后者要登录且受平台计费口径约束，混成一个字段迟早会在某个分支上判错。
+ *
+ * `hideFreeTag`（opencodeGo 订阅分组）一律不打标签：订阅额度不是"限免"。
  */
-function Tag({ m }: { m: ModelGroupModel }) {
+function Tag({ m, hide }: { m: ModelGroupModel; hide?: boolean }) {
+  if (hide) return null
   if (m.zenFree) return <span className="mp-tag free">{t('限免')}</span>
   if (isFree(m)) return <span className="mp-tag free">{t('限免')}</span>
   if (m.discount) return <span className="mp-tag off">{t('折扣')}</span>

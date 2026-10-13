@@ -51,4 +51,77 @@
   - **POSIX 平台 spawn 内核必须 `detached: true`**（Windows 不加），退出时 `process.kill(-pid, 'SIGTERM')`
     杀整个进程组，否则 MCP/pty 子进程全变孤儿。Windows 仍走 taskkill /T /F。
 
+## 模型 provider 排障（2026-10-13 定版）
+- **「AI 一直没返回」先看 `~/.qingniaoai/data/opencode/log/opencode.log` 尾部的 `stream error`**：
+  内核会**重试 5~6 次、每次间隔递增**（2s→4s→9s→17s→37s，累计 1 分多钟）才最终放弃写 `process ... error=`。
+  所以「界面一直转圈」不是死锁，是重试队列在跑，最终错误一定落在日志里。
+- 三个高频 error 文案 → 病因对照：
+  | 日志文案 | 病因 |
+  |---|---|
+  | `Model is unavailable.` | 模型 id 上游不存在（改名/下线/池子错配） |
+  | `Go requires a credential` | `qn-go` 没填 API Key（Go 是 $10/月订阅制） |
+  | `Rate limit exceeded. Please try again later.` | 免 KEY 免费池限流，等一会即可 |
+- **Zen 与 Go 是两个独立池子，绝不能交叉并入模型清单**（这是 2026-10-13 修掉的真 bug）：
+  `mergeFreeModels()` **只有 `isZenEndpoint()`（精确等于 `https://opencode.ai/zen/v1`）才并入 `settings.zen.models`**；
+  `isOpencodeEndpoint()`（Zen/Go 任一）只用于展示排序「排最后」，不再管清单归属。
+  交叉的代价实测过：Zen 清单 11 个里有 **8 个（73%）在 Go 的 /models 里根本不存在**（`space-bunny-free` 在 Go 叫
+  `space-bunny`；`big-pickle` / `nemotron-3-ultra-free` 在 Go 压根没有），一选就报 `Model is unavailable.`。
+  Go 自己的免费模型只有 3 个且同名：`longcat-2.5-preview-free` / `step-5-preview-free` / `cat-jam-free`。
+- **Go（`https://opencode.ai/zen/go/v1`）是 $10/月订阅池，必须填 API Key**，否则每个请求报
+  `Go requires a credential`——**与 `Model is unavailable.` 是两种错**（前者缺凭据，后者缺模型 id），别混着查。
+  Go 分组在选择器里**不打「限免」标签**（`ModelGroup.hideFreeTag`，走订阅额度不是白嫖）。
+- **Zen 填不填 Key，免费模型都免费**（官方定价四项全 Free）。区别只在配额归属：
+  匿名走**全站共享的 anon 免费池**（限流紧，报 `Rate limit exceeded. Please try again later.`），
+  带 Key 走自己的额度。`providerEnv()` 刻意不给 `qn-zen` 注入 `QN_KEY_QN_ZEN`（免 KEY 匿名通道），要自带配额得用户手填。
+- **手写 curl 验 provider 可用性**：必须带 `x-opencode-session: <任意串>` 头，否则一律返回
+  `MissingSessionID`（会误判成 Key 失效）；带上后才显形真实错误。先 `GET {baseURL}/models` 看清单里有没有这个 id。
+## 本机启动桌面（2026-10-13 复盘，定版启动命令）
+- **第一步永远是查环境变量残留**：`echo $ELECTRON_RUN_AS_NODE`。本 shell 长期带 `ELECTRON_RUN_AS_NODE=1`，
+  Electron 被当纯 Node 跑，报 `does not provide an export named 'BrowserWindow'`——
+  **这个报错看起来像构建配置问题，实际是环境问题**（2026-10-12 与 10-13 各踩一次，第二次差点去改 electron.vite.config.ts）。
+- **可用启动命令（已验证）**：
+  ```bash
+  cd client && NODE_OPTIONS= npx electron-vite build
+  env -u ELECTRON_RUN_AS_NODE ./node_modules/electron/dist/electron.exe . --disable-gpu --disable-gpu-compositing --in-process-gpu
+  ```
+  - GPU 必须用**命令行参数**禁用：`index.ts` 里的 `app.disableHardwareAcceleration()` 在 ready 之后才跑，
+    而 `GPU process isn't usable. Goodbye.` 发生在 Chromium 初始化阶段，**那三行来不及生效**。
+  - `npm run dev -- --disable-gpu` **不行**：参数被 electron-vite 的 cac 当成自己的选项拦掉（`CACError: Unknown option --disableGpu`）。
+  - `ELECTRON_DISABLE_GPU` / `ELECTRON_EXTRA_LAUNCH_ARGS` 环境变量 **electron-vite 5 不支持**，别试。
+- **主进程配置没坏就不要动它**：启动失败先排环境（上面两条）与 GPU，`out/` 陈旧产物（safe-delete 拦删除时按 `NODE_OPTIONS= npx electron-vite build` 重跑覆盖）。
+  实在要删构建产物目录，优先加 .gitignore 而不是硬删。
+
+## 模型选择器没有「自动」档（2026-10-13 用户定版）
+- 选择器**只列真实模型**，不注入 `{mid:'', name:'自动'}` 虚拟项。
+- **空串从「合法自动档」改为「必须收敛」**：校正 effect 里空值/失效值一律回落到 `groups[0].models[0]`
+  （顺序 = `chatProviders` 定的，与主进程 `resolveModel` 同口径）。**移除虚拟项时必须同步改这里**——
+  存量用户 localStorage 里存的就是空串，不收敛会卡在「未选择」发不出去。
+- 空值显示文案用 `未选择模型`（不是「自动」——那一刻并没有自动挑选这回事）。
+- `resolveChatModel` 的 `i <= 0` 分支保留兜底：新流程走不到，但「切回会话即发消息」可能抢在校正之前触发。
+
+## 失败提示链路（2026-10-13 定版：重试期间必须让用户看到）
+- **内核失败只写日志**（`opencode.log` 的 `message="stream error"`），**既不推 session.error、也不立刻写进助手消息**，
+  而是自动重试 6 次（间隔 2/4/9/17/37s 递增，**累计 1 分 39 秒**）。这段时间对话流里什么都没有，
+  用户只看到转圈——**轮询兜底救不了**（那 1 分 39 秒消息里确实没有 error）。
+- 方案：`electron/main/logtail.ts` 按字节偏移 tail 日志 → `qingniao.stream.error` 事件 → 渲染层 toast。
+  - **只取 `stream error`、绝不取 `process … error=`**（后者回合对账已兜住，取了会弹两遍）。
+  - 同一回合同一错误**只推一次**（内核重试 6 次不该弹 6 个）。
+  - 内核重启日志**被截断重写** → `size < pos` 归零重来；start() 重建、stop() 关闭（否则 stop→start 轮换会积多个 tail）。
+  - 浮层组件 `components/Toasts.tsx`（右上角 fixed，错误 9s / info 4s / ok 3s，悬停暂停倒计时）。
+- **诊断口诀：三个文案对应三个病因，别混查**
+  | 文案 | 病因 |
+  |---|---|
+  | `Go requires a credential` | Go 端点没填 Key |
+  | `Model is unavailable.`（Go 端点） | **也是没填 Key**——见下 |
+  | `Model is unavailable.`（Zen 端点） | 模型 id 真的不存在 |
+  | `Rate limit exceeded. Please try again later.` | 免 KEY 共享池限流，等一会 |
+- **Go 端点的 `Model is unavailable.` 是个陷阱（实测）**：`step-5-preview-free` /
+  `longcat-2.5-preview-free` / `cat-jam-free` 这三个 id 在 Go 的 /models 里**确实存在**，
+  匿名调却是 `Go requires a credential`；而不存在的 id（如 `space-bunny-free`），无凭据时上游回的却是
+  `Model is unavailable.`。**两者根因同一个：没填 Key**。所以 `humanizeError` 的凭据规则要
+  **同时匹配两者且排在最前**，否则用户会照着「换个模型」反复换，真正该做的却是填 Key。
+- **日志解析的坑**：`error.error="All providers for model \"x\" are busy"` —— 引号值里**含转义引号**。
+  用正则 `"[^"]*"` 会截在第一个转义引号处拿半句垃圾。`logtail.ts` 的 `field()` 逐字符扫 + 识别 `\X` 转义。
+- `server unavailable key=office` 是**无害噪音**，每个 session 都有一条，与任何卡死/报错无关，别顺着它查。
+
 

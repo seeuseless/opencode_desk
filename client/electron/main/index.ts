@@ -630,7 +630,7 @@ ipcMain.handle('platform:refresh', () => platform.refresh())
 // ---------- 免费模型快照（OpenCode Zen 免 KEY + openrouter / unorouter 聚合网关）----------
 // Zen 清单由内核持有（GET /config/providers）；网关清单由 freemodels.ts 向各家公开 API 拉。
 // 拉到的快照都**不以独立分组出现**，由 mergeFreeModels() 并入用户配置的对应端点提供商
-// （OpenCode zen/go、openrouter、unorouter），见 types.ts。
+// （**只有 Zen 端点**吃 Zen 快照，Go 端点与 openrouter / unorouter 各自吃各的快照，见 types.ts）。
 //
 // 同步时机：**每次 App 窗口显示时**（渲染层 App 的 visibilitychange 监听，启动首显 / 最小化恢复 /
 // 托盘唤起都会跑一次）+ 模型选择器点开时（ModelPicker 的 onOpen）。设置页的手动刷新已删。

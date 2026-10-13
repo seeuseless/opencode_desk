@@ -324,12 +324,14 @@ const PROVIDER_PRESETS: {
   },
   {
     /**
-     * OpenCode Zen（官方免费池）。id 刻意不叫 `opencode`——那是内核内置 provider 的保留名，
+     * OpenCode Zen（官方模型网关）。id 刻意不叫 `opencode`——那是内核内置 provider 的保留名，
      * 同名会在 opencode.json 里整个覆盖掉内核自带的定义（连带那批模型的能力元数据），见 AGENTS.md 与
      * docs/内核Zen免费模型机制.md。
      *
      * 免 KEY：主进程给每个 provider 写的都是 `apiKey: '{env:QN_KEY_<ID>}'`，这里不注入那个变量，
-     * 内核就落到匿名通道。
+     * 内核就落到匿名通道。**匿名走的是全站共享的免费配额，限流很紧**（会报
+     * `Rate limit exceeded. Please try again later.`）——想换成自己的配额就在下面填 Key，
+     * 免费模型照样免费（官方标价就是 Free），只是不再跟所有人抢 anon 池。
      * 初始只给 deepseek-v4.1-flash（用户定版）：内核同步来的限免清单会在读取侧并入这个分组，
      * 不需要在这里罗列。
      */
@@ -340,9 +342,17 @@ const PROVIDER_PRESETS: {
   },
   {
     /**
-     * OpenCode Go（$10/月订阅，端点与 Zen 不同）。id 不叫 `opencode-go`：内核自带同名 provider，
-     * 覆盖了会丢掉它那份模型元数据。要 KEY——在 opencode.ai/go 订阅后把 Key 填进下面的 API Key。
-     * 初始只给 deepseek-v4.1-flash（用户定版），其余按需手动补。
+     * OpenCode Go（**$10/月订阅**，端点与 Zen 不同、模型 id 也不同）。id 不叫 `opencode-go`：
+     * 内核自带同名 provider，覆盖了会丢掉它那份模型元数据。
+     *
+     * 必须填 API Key（opencode.ai 订阅 Go/Go Plus 后在 Console 拿），否则每个请求都报
+     * `Go requires a credential`。
+     *
+     * **不会自动并入 Zen 的免费模型清单**（2026-10-13 修）：两个池子的模型 id 大量同名不同后缀
+     * （Zen 的免费模型带 `-free`，Go 那边不带），交叉并入会造出一批一选就报
+     * `Model is unavailable.` 的死条目。Go 自己的免费模型（`longcat-2.5-preview-free` /
+     * `step-5-preview-free` / `cat-jam-free`，额度用完后仍可用）请按需在这里手填。
+     * 判定口径见 electron/main/types.ts 的 mergeFreeModels / isGoEndpoint。
      */
     id: 'qn-go',
     name: 'opencodeGo',
