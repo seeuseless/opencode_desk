@@ -245,6 +245,11 @@ export interface Part {
   url?: string
   /** 内核某些版本把附件挂在 part 顶层而非 state 上，浏览面板提取时两处兼容 */
   attachments?: { type?: string; mime?: string; url: string }[]
+  /**
+   * 生成时间段（text / reasoning part 有）：模型真正在出字的窗口。
+   * 算生成速率用它求和——整回合墙钟时长会把工具执行时间也算进去，速率严重失真。
+   */
+  time?: { start?: number; end?: number }
 }
 
 export interface MessageInfo {
@@ -253,6 +258,10 @@ export interface MessageInfo {
   sessionID: string
   modelID?: string
   providerID?: string
+  /** 内核随消息持久化的 token 统计（assistant 消息）：output 与 reasoning 是分开计的两项 */
+  tokens?: { input?: number; output?: number; reasoning?: number; cache?: { read?: number; write?: number } }
+  /** 消息起止时间戳（assistant 消息）：completed - created 是整回合墙钟时长，含工具执行 */
+  time?: { created?: number; completed?: number }
 }
 
 export interface MessageView {

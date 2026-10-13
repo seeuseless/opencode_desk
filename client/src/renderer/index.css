@@ -727,6 +727,8 @@ html[data-bg-content='on'] .cbox {
 }
 .amsg-model svg { flex-shrink: 0; opacity: 0.8; }
 .amsg-model span { min-width: 0; word-break: break-word; }
+/* 生成速率：比模型名再弱一档（数字用等宽，避免每条消息宽度跳动时对不齐） */
+.amsg-rate { color: var(--fg3, var(--fg2)); opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* 对话流内的中性提示（自动换模型等说明）：与失败反馈同结构，弱化色 + 灰边，不抢注意力 */
 .msgnotice {

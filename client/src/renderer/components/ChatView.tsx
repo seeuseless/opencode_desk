@@ -2217,6 +2217,8 @@ export function ChatView(p: Props) {
                 </div>
               )
             }
+            // 生成速率（见 genRateOf 注释）：拿不到就只显示模型名
+            const rate = genRateOf(m)
             return (
               <div key={m.info.id} className="amsg">
                 {/* 轮首的「已工作」徽标：轮结束后固定显示该轮总耗时（处理中的实时时长看尾部状态条） */}
@@ -2250,11 +2252,19 @@ export function ChatView(p: Props) {
                   </div>
                 )}
                 {/* 本次回复使用的模型：modelID/providerID 是内核持久化在消息里的，
-                    重启后历史消息照样能显示。流式期间不显示（回复还没完），落定后出现。 */}
+                    重启后历史消息照样能显示。流式期间不显示（回复还没完），落定后出现。
+                    后面追加生成速率（如 `· 148 token/s`），算法见 genRateOf。 */}
                 {!busy && m.info.modelID && (
-                  <div className="amsg-model" title={`${m.info.providerID || '?'}/${m.info.modelID}`}>
+                  <div
+                    className="amsg-model"
+                    title={
+                      `${m.info.providerID || '?'}/${m.info.modelID}` +
+                      (rate ? `\n${t('输出速率 = (输出+推理) tokens ÷ 纯生成时长，不含工具执行时间')}` : '')
+                    }
+                  >
                     <Cpu size={12} />
                     <span>{usedModelLabel(groups, m.info)}</span>
+                    {rate && <span className="amsg-rate"> · {rate}</span>}
                   </div>
                 )}
               </div>
@@ -3591,6 +3601,44 @@ function usedModelLabel(groups: ModelGroup[], info: { providerID?: string; model
   const name = short(g?.models.find((x) => x.mid === mid)?.name || mid) || mid
   const label = g?.label || info.providerID || ''
   return label ? `${label} · ${name}` : name
+}
+
+/**
+ * 回复尾部的生成速率：`(输出 + 推理) tokens ÷ 纯生成时长`，如 `148 token/s`。
+ *
+ * 分母**不能用** `time.completed - created`：那是整个回合的墙钟时长，工具执行
+ * （读文件、跑命令动辄几十秒）全算在内，速率会被拉到没法看。真正的生成窗口是
+ * text / reasoning part 各自的 `time.start~end`（模型在出字的时间段），合并重叠后求和。
+ * 分子把 reasoning 算上是因为分母里 reasoning part 的时长也算进去了——两边口径一致；
+ * 内核库里 output 与 reasoning 是分开计的两项（total = 各项之和，实测验证过）。
+ *
+ * 全部数据来自内核持久化的消息，重启后历史消息照样能算。拿不到（中断消息、
+ * 时长 < 400ms 的缓冲抖动）返回空串，尾部就只有模型名。
+ */
+function genRateOf(m: MessageView): string {
+  const out = (m.info.tokens?.output ?? 0) + (m.info.tokens?.reasoning ?? 0)
+  if (out <= 0) return ''
+  const iv = m.parts
+    .filter((x) => x.type === 'text' || x.type === 'reasoning')
+    .map((x) => ({ s: x.time?.start ?? 0, e: x.time?.end ?? 0 }))
+    .filter((x) => x.e > x.s)
+    .sort((a, b) => a.s - b.s)
+  let gen = 0
+  let curS = 0
+  let curE = 0
+  for (const x of iv) {
+    if (curE && x.s <= curE) {
+      curE = Math.max(curE, x.e)
+      continue
+    }
+    gen += curE - curS
+    curS = x.s
+    curE = x.e
+  }
+  gen += curE - curS
+  if (gen < 400) return ''
+  const r = out / (gen / 1000)
+  return t('{n} token/s', { n: r >= 100 ? String(Math.round(r)) : r.toFixed(1) })
 }
 
 /**
