@@ -1299,10 +1299,6 @@ export function SettingsView(p: Props) {
                       {/* 一个模型都没配的（如刚加的 openrouter/unorouter 模板，模型全靠免费清单并入）
                           就别打「0 个模型」的标签了——纯噪音；配了模型的才显示数量 */}
                       {!!c.models.length && <span className="chip">{t('{n} 个模型', { n: c.models.length })}</span>}
-                      {/* ID 不让用户填了，但列在这儿：改名后还能对上号，内核配置与授权记录都按它认 */}
-                      <span className="prow-id" title={t('内部标识：内核配置与「永久允许」清单按它认，创建后不再变化')}>
-                        {c.id}
-                      </span>
                     </div>
                     <div className="prow-url">{c.baseURL}</div>
                   </div>

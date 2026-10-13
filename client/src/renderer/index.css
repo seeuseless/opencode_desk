@@ -1722,13 +1722,6 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .prow.builtin { cursor: default; }
 .prow-main { flex: 1; min-width: 0; }
 .prow-name { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-/* 提供商内部 ID：不让用户填，但列在这儿备查（改名后要能对上号） */
-.prow-id {
-  font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace;
-  font-size: 11px; font-weight: 400; color: var(--fg3);
-  border: 1px solid var(--line); border-radius: 5px; padding: 0 5px;
-  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 .prow-url { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12px; color: var(--fg2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 3px; }
 /* 行内红字提示（如桌面控制遇上非视觉模型）：与 .prow-url 同层级，但可换行 */
 .prow-warn { font-size: 12px; line-height: 1.5; margin-top: 4px; white-space: normal; }
