@@ -229,6 +229,23 @@ function msgErrorText(m: MessageView): string {
 }
 
 /**
+ * 从 `session.error` 事件的 error 结构里取原文。
+ *
+ * **必须读 `error.data.message`**（2026-10-14 实测）：内核 v1.18.31 推的形状是
+ * `{ name: 'UnknownError', data: { message: 'Model not found: xxx/nope.' } }`——
+ * `error.message` 是 **undefined**，早先代码只读 `error.message`，
+ * 于是 `humanizeError('')` 返回空串 → **错误条根本不显示**，
+ * 而这恰恰是「provider 写错 / 模型 id 不存在」这类最常见错误的唯一信号。
+ *
+ * 兼容旧形状（有的版本直接挂在 error.message）与最后的 name 兜底。
+ */
+function sessionErrorText(err: unknown): string {
+  const e = err as { name?: string; data?: { message?: string }; message?: string } | undefined
+  if (!e) return ''
+  return humanizeError(e.data?.message ?? e.message ?? e.name ?? '')
+}
+
+/**
  * 回合收尾对账：拉一次 /message，把「只写进内核日志、没走事件」的失败补到界面上。
  *
  * 背景（2026-09-27 实测）：内核把大量断流/上游错误只写进 opencode.log 的
@@ -243,7 +260,18 @@ function msgErrorText(m: MessageView): string {
  */
 function turnErrorOf(list: MessageView[]): { message?: string; aborted?: 'retry' } | null {
   const last = list[list.length - 1]
-  if (!last || last.info.role !== 'assistant') return null
+  if (!last) return null
+  if (last.info.role !== 'assistant') {
+    // **末条是用户消息 = 这一轮压根没开始**（2026-10-14 实测）：
+    // provider 写错 / 模型 id 不存在这类失败，内核**连助手消息都不建**，
+    // 只在 session.error 事件里带一句 `Model not found: xxx/nope.`。
+    // 原实现要求 role==='assistant'，于是这里返回 null → 轮询兜底判不出失败，
+    // 界面表现是「发出去一句话，然后永远安静」（没有错误、没有重试入口）。
+    // 返回 aborted 让上层走「本轮已结束」的收口，不再让用户干等；
+    // 具体文案由 session.error 事件 / streamErrText 提供，这里不猜。
+    if (last.info.role === 'user') return { aborted: 'retry' }
+    return null
+  }
   const em = msgErrorText(last)
   if (em) return { message: em }
   if (isAbortedAssistant(last) || isEmptyTurn(last)) return { aborted: 'retry' }
@@ -329,6 +357,21 @@ export function ChatView(p: Props) {
   const turnBase = useRef<Set<string>>(new Set())
   // 正在执行的 prompt：断网时自动暂停，网络恢复后自动重发（sid + 原文 + 附件）
   const inflight = useRef<{ sid: string; text: string; atts?: Attachment[] } | null>(null)
+  /**
+   * 本轮**已从上游拿到真实错误原文**的会话 → 原文（会话 id → 原文）。
+   *
+   * 为什么必须记住原文、而不只是「这轮失败了」：
+   * 收到 stream error 后我们会主动 `abort()` 收掉这轮（用户定版「有错误是结束」），
+   * 而内核被 abort 后会给助手消息盖上 `MessageAbortedError`。于是紧随其后的
+   * session.idle / 轮询对账 / runPrompt 收尾三处都会读到它并写进错误条——
+   * **把真正的上游错误覆盖掉**。用户看到的就是「任务被中止」这种无信息量的废话，
+   * 而「Rate limit exceeded」「invalid api key」这些真正有用的原文被冲没了。
+   *
+   * 有这个表在，所有收尾对账一律让路；用完即删（只保护「本轮」，下一轮重新判定）。
+   *
+   * 声明放在很靠前是因为渲染期就要读它（inlineErr，见下）。
+   */
+  const streamErrText = useRef<Record<string, string>>({})
   // 已发送消息的历史：Ctrl+Z 逐条回看、Ctrl+Y 前进；histPos == length 表示在草稿态
   const hist = useRef<string[]>([])
   const histPos = useRef(0)
@@ -767,7 +810,13 @@ export function ChatView(p: Props) {
   const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
   const lastMsg = lastAid ? msgs.find((x) => x.info.id === lastAid) : undefined
   // 末条 AI 消息内联的错误文案：全局错误条与它相同就不再渲染（同一错误出现两遍很傻）
-  const inlineErr = !busy && lastMsg ? msgErrorText(lastMsg) : ''
+  //
+  // **本轮已有真实上游错误原文时直接用原文**，盖掉内核 abort 写进消息的 MessageAbortedError——
+  // 否则用户会同时看到「AI_APICallError: Rate limit exceeded…」和「任务被中止」两条，
+  // 后者是我们自己 abort 造成的收尾痕迹，对用户毫无意义（见 streamErrText）。
+  const inlineErr = !busy && lastMsg
+    ? streamErrText.current[lastMsg.info.sessionID] || msgErrorText(lastMsg)
+    : ''
   // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
   // 新消息发送将中止当前轮并接管
   let terminalBlocked = false
@@ -1190,27 +1239,30 @@ if (e.type === 'qingniao.stream.error') {
         if (!pr.message) return
         // 用户自己刚点过停止的会话不再提示：停止按钮本身就是反馈，再报一次错只会让人困惑
         if (pr.sessionID && userStopped.current.has(pr.sessionID)) return
-        const text = humanizeError(pr.message)
-        const sid = pr.sessionID
+const text = humanizeError(pr.message)
+      const sid = pr.sessionID
         if (!sid) {
-          // 拿不到会话（异常日志行）：没有可abort 的对象，只能显示
-          setError(text)
-          return
-        }
+      // 拿不到会话（异常日志行）：没有可abort 的对象，只能显示
+  setError(text)
+    return
+    }
         // **只要这一轮在跑就收口**，不区分是不是当前会话：
         // 「有错误是结束」意味着不再等内核把重试队列跑完。早先只收当前会话，
         // 切走的那些会话会在后台继续重试 1 分 39 秒（用户回来看见仍在转圈）。
         if (busySetRef.current[sid]) {
           markBusy(sid, false)
-          const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
+    const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
           delete busyDir.current[sid]
           if (inflight.current?.sid === sid) inflight.current = null
           // 记一笔：万一 abort 送不到、或 busy 被别的路径重置，轮询兜底还要能收口
           streamFailed.current.add(sid)
+    // 存原文：后续 session.idle / 轮询 / runPrompt 收尾读到内核写的
+          // MessageAbortedError 时必须让路，不能覆盖真实上游错误（见 streamErrText 注释）
+          streamErrText.current[sid] = text
           oc.abort(sid, dir).catch(() => {
-            /* 传输层失败无所谓：busy 已清，界面不会卡在处理中 */
+  /* 传输层失败无所谓：busy 已清，界面不会卡在处理中 */
           })
-        }
+    }
         // 只往当前会话的错误条里写：切走的那条等用户切回去时由轮询兜底/收尾对账补上，
         // 不往这儿的对话流里塞别的会话的错。
         if (sid === sidRef.current) setError(text)
@@ -1338,21 +1390,30 @@ if (e.type === 'qingniao.stream.error') {
         if (!owned && idleSid !== sidRef.current) return
         // 处理中的会话空闲：无论用户是否切走都要清该会话的 busy（防切回时残留"正在思考"）
         markBusy(idleSid, false)
-        // 回合正常收尾：流式失败标记作废（这一轮既然走完了，之前那次失败不影响下一轮判定）
+// 回合正常收尾：流式失败标记作废（这一轮既然走完了，之前那次失败不影响下一轮判定）
         streamFailed.current.delete(idleSid)
         const isCurrent = idleSid === sidRef.current
-        oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
-          .then((list) => {
-            // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
-            const turnErr = turnErrorOf(list)
-            if (turnErr?.message) {
-              // 有明确的失败原因（含 MessageAbortedError → 上/stream 断流）：当前会话显示红色错误条。
-              // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
-              if (isCurrent && !userStopped.current.has(idleSid)) setError(turnErr.message)
-            } else if (isCurrent && !turnErr?.aborted) {
-              // 正常完成的助手回合，清一下可能残留的旧错误提示
-              setError('')
-            }
+    oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
+       .then((list) => {
+   // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
+      const turnErr = turnErrorOf(list)
+       if (turnErr?.message) {
+        // 有明确的失败原因（含 MessageAbortedError → 上游断流）：当前会话显示红色错误条。
+   // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
+      //
+          // **但本轮已拿到真实上游错误原文时一律让路**（streamErrText）：
+          // 那条原文是我们主动 abort 换来的（内核随后盖的 MessageAbortedError 只是收尾痕迹），
+              // 覆盖它等于把「Rate limit exceeded」这类真信息换成一句废话。
+   if (isCurrent && !userStopped.current.has(idleSid)) {
+            const real = streamErrText.current[idleSid]
+    // 用完即清：这张表只保护「本轮」，下一轮必须重新判定
+            if (real) delete streamErrText.current[idleSid]
+    setError(real || turnErr.message)
+          }
+   } else if (isCurrent && !turnErr?.aborted) {
+          // 正常完成的助手回合，清一下可能残留的旧错误提示
+       setError('')
+        }
             if (!isCurrent) return
             setTodos([])
             setMsgs(hydrate(list, shown.current, texts.current))
@@ -1378,9 +1439,14 @@ if (e.type === 'qingniao.stream.error') {
               if (last) markBusy(s, false)
               // 重连前任务被中断且带明确错误（certificate/限流/Aborted）→ 当前会话补一条红色错误条。
               const turnErr = turnErrorOf(list)
-              if (turnErr?.message) {
+if (turnErr?.message) {
                 // 用户手动停止的会话不再提示
-                if (s === sidRef.current && !userStopped.current.has(s)) setError(turnErr.message)
+                if (s === sidRef.current && !userStopped.current.has(s)) {
+        // 同样让位给真实上游错误原文（见 streamErrText）
+          const real = streamErrText.current[s]
+                  if (real) delete streamErrText.current[s]
+    setError(real || turnErr.message)
+    }
               }
             })
             .catch(() => {})
@@ -1417,22 +1483,28 @@ if (e.type === 'qingniao.stream.error') {
             .then((list) => setMsgs(hydrate(list, shown.current, texts.current)))
             .catch(() => {})
         }
-      } else if (e.type === 'session.error') {
-        const pr = e.properties as { sessionID?: string; error?: { name?: string; message?: string } }
+} else if (e.type === 'session.error') {
+        const pr = e.properties as { sessionID?: string; error?: unknown }
         const sid = pr.sessionID
         if (!sid) return
         if (busySetRef.current[sid]) markBusy(sid, false)
         const isCurrent = sid === sidRef.current
         // 用户手动停止：不再弹错误条，停止按钮本身就是反馈
         const stopped = userStopped.current.has(sid)
-        oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
-          .then((list) => {
+        // session.error 也可能只是我们 abort 引发的 MessageAbortedError；
+        // 若本轮已有真实上游错误原文，一律用它（见 streamErrText）
+        const real = streamErrText.current[sid]
+        if (real) delete streamErrText.current[sid]
+    // 原文取 data.message（见 sessionErrorText 注释），空串则不显示错误条
+     const shownErr = real || sessionErrorText(pr.error)
+      oc.messages(sid, isCurrent ? dirRef.current : busyDir.current[sid])
+       .then((list) => {
             if (!isCurrent) return
-            setMsgs(hydrate(list, shown.current, texts.current))
-            if (!stopped) setError(humanizeError(pr.error?.message ?? ''))
+ setMsgs(hydrate(list, shown.current, texts.current))
+         if (!stopped && shownErr) setError(shownErr)
             p.onRefreshSessions()
-          })
-          .catch(() => { if (isCurrent && !stopped) setError(humanizeError(pr.error?.message ?? '')) })
+  })
+ .catch(() => { if (isCurrent && !stopped && shownErr) setError(shownErr) })
       }
     })
     return off
@@ -1691,11 +1763,15 @@ if (e.type === 'qingniao.stream.error') {
         // 收口兜底：轮次以**错误**结束且事件没送达（断流/限流只写进消息 info，不推 session.error）
         // 时，靠这里把 busy 清掉、错误条补上。没有错误文本的中断（用户手动停/半截截断）不动——
         // 那是「可重试」状态，留着处理中行与停止按钮交给用户处置，防「处理中」卡死。
-        if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
+if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
           const te = turnErrorOf(list)
-          if (te?.message) {
-            setError(te.message)
-            markBusy(sid, false)
+            if (te?.message) {
+   // 真实上游错误原文优先：内核被我们 abort 后盖的 MessageAbortedError 只是收尾痕迹，
+      // 拿它覆盖原文等于把真信息换成废话（见 streamErrText 注释）
+        const real = streamErrText.current[sid]
+    if (real) delete streamErrText.current[sid]
+            setError(real || te.message)
+        markBusy(sid, false)
             streamFailed.current.delete(sid)
             streamFailStreak = 0
           } else if (streamFailed.current.has(sid)) {
@@ -2214,8 +2290,13 @@ await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不
           // 回合对账：把「请求返回了、但最后一轮实际失败/被截断而**没走事件**」的情况补到界面。
           // 例：内核把 unknown certificate verification / Rate limit exceeded 只落进 opencode.log，
           // 没有 session.error 事件 → 这里读到 info.error 就补红色错误条。
-          const turnErr = turnErrorOf(list)
-          if (turnErr?.message) setError(turnErr.message)
+const turnErr = turnErrorOf(list)
+          if (turnErr?.message) {
+  // 同上：真实上游错误原文优先于内核 abort 留下的 MessageAbortedError
+            const real = streamErrText.current[sid]
+       if (real) delete streamErrText.current[sid]
+    setError(real || turnErr.message)
+          }
         } catch { /* 保留已渲染内容 */ }
       }
     }
@@ -2452,9 +2533,11 @@ await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不
                     <PartView key={last.id} part={last} projectPath={p.project?.path} preview={running ? previews[running.id] : previews[last.id]} previewParts={row.parts} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} count={row.parts.length} />
                   )
                 })}
-                {!busy && m.info.id === lastAid && msgErrorText(m) && (
-                  <div className="msgerr">
-                    <AlertCircle size={13} /> <span>{msgErrorText(m)}</span>
+{/* 末条 AI 消息内联的错误：真实上游错误原文优先（streamErrText），
+                    否则用内核写进消息的 error。两者都没有就不渲染。 */}
+    {!busy && m.info.id === lastAid && inlineErr && (
+          <div className="msgerr">
+<AlertCircle size={13} /> <span>{inlineErr}</span>
                   </div>
                 )}
                 {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账。
@@ -2656,17 +2739,17 @@ await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不
           <textarea
             ref={taRef}
             className="ctext"
-      value={input}
-rows={2}
+            value={input}
+            rows={2}
             // 内核没就绪时输入禁用（2026-10-14 用户定版：宁可禁用输入也不弹错误条、不加提示文案）。
             // readOnly 而不是 disabled：内容还能看见/选中复制，样式也不会整体变灰。
             readOnly={!kernelReady}
             placeholder={
               busy
-        ? t('当前任务执行中，输入新需求可加入队列')
-    : panelUrl && panelOpen
-          ? t('针对当前浏览器页面提问，AI 会直接操作这个浏览器')
-     : t('Enter 发送 / Shift+Enter 换行')
+                ? t('当前任务执行中，输入新需求可加入队列')
+                : panelUrl && panelOpen
+                  ? t('针对当前浏览器页面提问，AI 会直接操作这个浏览器')
+                  : t('Enter 发送 / Shift+Enter 换行')
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -2686,8 +2769,8 @@ rows={2}
                 return
               }
 if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    send()
+                e.preventDefault()
+                send()
               }
             }}
           />
@@ -2796,21 +2879,21 @@ if (e.key === 'Enter' && !e.shiftKey) {
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
-/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */
-       {busy ? (
-    <button className="send-round stop" title={t('停止当前任务，队列任务自动接续')} onClick={() => void stopCurrent()}>
-            <Square size={15} fill="currentColor" strokeWidth={0} />
-       </button>
-       ) : (
-<button
-              className="send-round"
-              disabled={!kernelReady || (!input.trim() && !atts.length)}
-              onClick={send}
-   title={t('发送')}
-        >
-              <Send size={15} />
-    </button>
-      )}
+{/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
+            {busy ? (
+              <button className="send-round stop" title={t('停止当前任务，队列任务自动接续')} onClick={() => void stopCurrent()}>
+                <Square size={15} fill="currentColor" strokeWidth={0} />
+              </button>
+            ) : (
+              <button
+                className="send-round"
+                disabled={!kernelReady || (!input.trim() && !atts.length)}
+                onClick={send}
+                title={t('发送')}
+              >
+                <Send size={15} />
+              </button>
+            )}
           </div>
         </div>
       </div>

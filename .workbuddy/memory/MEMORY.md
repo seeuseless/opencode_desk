@@ -91,7 +91,22 @@
   - `.msgerr span` 用 `white-space: pre-wrap`：上游原文常含换行/缩进（JSON 报错报文），要保留排版。
   - 空消息仍返回空串（不显示错误条），**不要填「未知错误」这种占位**。
   - **删翻译时必须同步清 i18n.ts 的死条目**（本轮清掉 7 条 × 繁英 = 14 行）。
-- **「有错误是结束」=收到 stream error 立刻 abort，不等内核把重试跑完**：
+- **`session.error` 的文案在 `error.data.message`，不在 `error.message`**（2026-10-14 实测）：
+  内核 v1.18.31 推的形状是 `{name:'UnknownError', data:{message:'Model not found: x/nope.'}}`，
+  `error.message` 是 **undefined**。只读后者会让错误条拿到空串 → **什么都不显示**。
+  统一走 `sessionErrorText(err)`（`data.message ?? message ?? name`）。
+- **「压根没开始」的失败：内核连助手消息都不建**（provider 写错 / 模型 id 不存在即此）：
+  `/message` 拉回来**只有 user 消息**，没有 error 字段。所以 `turnErrorOf()` 原来那句
+  `if (last.info.role !== 'assistant') return null` 会让轮询兜底彻底失效、界面永远安静。
+  必须把 `role==='user'` 也判成「本轮已结束」。
+- **abort 会用 `MessageAbortedError` 覆盖真实错误**（自己挖的坑）：
+  按「有错误是结束」主动 abort 后，内核给助手消息盖 Aborted，
+  而 session.idle / 轮询对账 / runPrompt 收尾 / SSE 重连**四处**都会读到它并写进错误条，
+  把「Rate limit exceeded」这类真信息冲成一句废话。
+  用 `streamErrText: Record<sid, 原文>` 表兜住，四处一律 `setError(real || turnErr.message)`，
+  消息内联 `inlineErr` 也读它；**用完即删**（只保护本轮）。
+  ⚠️ 该 ref 必须声明在靠前位置（渲染期就要读），放晚了 TS2448。
+- **「有错误是结束」= 收到 stream error 立刻 abort，不等内核把重试跑完**：
   只要该 sid 在 busySet 里就 `markBusy(false)` + `abort()`，**不限是不是当前会话**
   （早先只收当前会话，切走的那些会在后台继续重试 1 分 39 秒，用户切回来还在转圈）。
   但错误文本**只写进当前会话的对话流**，不往这儿塞别的会话的错。
@@ -108,6 +123,17 @@
     （内核起来后也不会有 session.idle 来收尾，因为压根没有这一轮）。
   - 502 = 连接层断开，内核**可能还在跑** → 保持 `transportLost`，不当失败、不清 busy，等事件流收尾。
   判定统一走 `oc.ts` 的 `isKernelTransportError(e)`。
+- **造真实上游错误的探针**（不限流时用它验证错误链路，实测好使）：
+  ```bash
+  curl -X POST "http://127.0.0.1:39421/session/$SID/message?directory=<enc>" \
+    -H "content-type: application/json" \
+    -d '{"parts":[{"type":"text","text":"hi"}],"model":{"providerID":"__nonexistent_probe__","modelID":"nope"}}'
+  ```
+  配 `curl -sN http://127.0.0.1:39421/global/event -H "accept: text/event-stream"` 抓事件。
+  **注意**：这类失败的日志行是 `message=failed …`，**不是** `message="stream error"`，
+  所以 logtail 抓不到，必须靠 `session.error` 事件。
+- **JSX 注释必须写成 `{/* */}`**：改 JSX 时把花括号弄丢，裸 `/* */` 会变成**文本子节点直接渲染到界面**。
+  排查手法：`grep` 构建产物里有没有该注释（泄漏=产物里有，真注释=tree-shake 掉=0 处）。
 ## 本机启动桌面（2026-10-13 复盘，定版启动命令）
 - **第一步永远是查环境变量残留**：`echo $ELECTRON_RUN_AS_NODE`。本 shell 长期带 `ELECTRON_RUN_AS_NODE=1`，
   Electron 被当纯 Node 跑，报 `does not provide an export named 'BrowserWindow'`——
