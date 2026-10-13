@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, LoaderCircle, Sparkles } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, LoaderCircle, Search, Sparkles } from 'lucide-react'
 import { t } from '../i18n'
 
 export interface ModelGroupModel {
@@ -63,10 +63,15 @@ interface Props {
   onOpen?: () => void
 }
 
+/** 二级列从这么多条模型起出现搜索框：三五条肉眼就能扫完，搜是多余的一步 */
+const SEARCH_MIN = 8
+
 /** 二级级联模型菜单：默认只显示一级提供商，点击后展开二级模型列 */
 export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup, onOpen }: Props) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
+  /** 二级模型列的搜索词：只在展开的分组内过滤（一级分组少，没必要搜） */
+  const [query, setQuery] = useState('')
   const wrap = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const sub = useRef<HTMLDivElement>(null)
@@ -87,6 +92,11 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
   const prevOpen = useRef(false)
   const lastOnOpen = useRef(onOpen)
   lastOnOpen.current = onOpen // 每次渲染都更新，回调里取的就是最新版
+
+  // 搜索词与展开的分组绑定：换组 / 关面板一律清空，否则下次展开还停在上一轮的过滤结果里
+  useEffect(() => {
+    setQuery('')
+  }, [expanded, open])
 
   useEffect(() => {
     const justOpened = open && !prevOpen.current
@@ -123,6 +133,13 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
           // 所以这里不再是「还没选」的占位语
           t('自动')
   const active = groups.find((g) => g.id === expanded)
+  /** 二级列实际渲染的模型：有搜索词时按词过滤（对 id 与展示名都不区分大小写匹配） */
+  const q = query.trim().toLowerCase()
+  const filtered = active
+    ? q
+      ? active.models.filter((m) => (m.mid + ' ' + (m.name || '')).toLowerCase().includes(q))
+      : active.models
+    : []
 
   /** 代码模式右侧聊天变窄时，模型菜单也不能从窗口边缘溢出去。 */
   useLayoutEffect(() => {
@@ -166,7 +183,9 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
               <button
                 key={g.id}
                 type="button"
-                className={'mp-item' + (g.id === active?.id || g.id === curGroup?.id ? ' on' : '')}
+                // 只有「展开的分组」亮 on：当前选中的分组不再常亮——鼠标在一级上移动时，
+                // 其他行必须干干净净（2026-10-13 用户反馈），选中态由二级里的对勾表达
+                className={'mp-item' + (g.id === active?.id ? ' on' : '')}
                 onClick={(e) => {
                   const willExpand = active?.id !== g.id
                   const p = panel.current
@@ -200,7 +219,33 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
           </div>
           {active && active.models.length > 0 && (
             <div className="mp-col2-float" ref={sub} style={{ top: subTop + subShift }}>
-              {active.models.map((m) => {
+              {active.models.length >= SEARCH_MIN && (
+                <div className="mp-search">
+                  <Search size={12} />
+                  <input
+                    autoFocus
+                    type="text"
+                    value={query}
+                    placeholder={t('搜索模型')}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Esc 只清词/收列，别把整个面板关掉；Enter 直选第一条命中
+                      if (e.key === 'Escape') {
+                        e.stopPropagation()
+                        if (query) setQuery('')
+                        else setExpanded('')
+                      } else if (e.key === 'Enter') {
+                        const hit = filtered[0]
+                        if (hit) {
+                          onChange(hit.mid === '' ? '' : `${active.id}/${hit.mid}`)
+                          setOpen(false)
+                        }
+                      }
+                    }}
+                  />
+                </div>
+              )}
+              {filtered.map((m) => {
                 // mid 为空 = 「自动」这条虚拟项（由 ChatView 注入）：它的值就是 ''，不能拼成 'pid/'
                 const key = m.mid === '' ? '' : `${active.id}/${m.mid}`
                 const on = key === value
@@ -221,6 +266,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                   </button>
                 )
               })}
+              {filtered.length === 0 && <div className="mp-empty">{t('无匹配模型')}</div>}
             </div>
           )}
         </div>

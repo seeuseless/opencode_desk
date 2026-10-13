@@ -1,65 +1,34 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, Modality, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
-import { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from '../../electron/main/types'
+import { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isBuiltinModel, isOpencodeEndpoint, mergeFreeModels } from '../../electron/main/types'
 
 export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, GenRole, ThinkingMode } from '../../electron/main/types'
 export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount, LocalUsage, LocalUsageBucket, LocalUsageRow, LocalUsageSeries } from '../../electron/main/types'
-export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf } from '../../electron/main/types'
+export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, hasFreeSource, opencodeConfigured } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 
 /** 平台 provider 在内核里的 ID，与 electron/main/config.ts 的 PLATFORM_PROVIDER_ID 保持一致 */
 export const PLATFORM_PROVIDER_ID = 'qingniao'
-/** Zen 免费 provider 的 ID，与 electron/main/config.ts 的 ZEN_PROVIDER_ID 保持一致 */
-export const ZEN_PROVIDER_ID = 'qnx-free'
 
 /**
  * 对话区的模型清单：平台「内置模型」排最前，用户自建的提供商居中，
- * Zen「opencode限免」排**最后**——它是兜底性质的（官方限时提供、可能随时下线），
- * 不该抢在用户自己配好的提供商前面。
+ * 配了 OpenCode 官方端点（zen / go）的提供商**排最后**——免费模型是兜底性质的
+ * （官方限时提供、可能随时下线），不该抢在用户自己配好的提供商前面。
  *
  * 平台那组的两个过滤条件缺一不可：
  *   remote —— 全局关了远程服务时，平台这套（登录/内置模型）整个不该出现；
  *   builtin —— 后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
  *              它们不属于「内置」，混进来会让人以为模型比实际多。
  *
- * Zen 那组要两个条件同时成立：内核给过免费清单（s.zen.models 非空）**且**用户在 设置 → 模型
- * 里配过 OpenCode 的端点（Zen / Go 任一，见 opencodeConfigured）。它不依赖登录态与 remote 开关——
- * 压根不走平台，也不发任何平台请求。
+ * 免费模型快照（Zen 内核池 / openrouter / unorouter）在这里由 mergeFreeModels 统一
+ * 并入对应端点的提供商分组，**不再单独出一个「opencode限免」一级分组**：
+ * 选 openrouter 就在 openrouter 组里看到它的免费模型，口径与内核配置完全一致。
  *
  * 设置页绝不能吃这份列表——它保存时会把 providers 整体写回磁盘，
- * 而前面两组都是虚拟出来的（登录态 / 内核清单），混进去会被落成一份假配置。
+ * 而平台组是虚拟出来的（登录态），混进去会被落成一份假配置。
  */
-/**
- * OpenCode 官方的两个端点：Zen（免费池，免 KEY）与 Go（$10/月订阅）。
- * 「opencode限免」这组要不要出现在聊天模型选择器里，就看用户有没有配过这两个地址之一。
- */
-const OPENCODE_URLS = ['https://opencode.ai/zen/v1', 'https://opencode.ai/zen/go/v1']
-
-/**
- * 用户是否自己在 设置 → 模型 里接了 OpenCode（Zen 或 Go 任一）。
- *
- * 认 baseURL 而不是认提供商 id：用户可能改名、可能从模板之外自己填，但地址是他真实在用 OpenCode 的证据。
- * 限免清单本身是内核给的（不看用户配置），所以没接过 OpenCode 的人也会被塞进一组他压根没打算用的模型——
- * 现在按这个判定收起整组，功能与设置页那块的「刷新」都原样保留。
- */
-export function opencodeConfigured(list: ProviderCfg[]): boolean {
-  return list.some((p) => p.enabled && OPENCODE_URLS.includes(p.baseURL.replace(/\/+$/, '')))
-}
-
 export function chatProviders(s: SettingsCfg): ProviderCfg[] {
-  const zen = (s.zen?.models ?? []).length && opencodeConfigured(s.providers)
-    ? [
-        {
-          id: ZEN_PROVIDER_ID,
-          name: 'opencode限免',
-          baseURL: 'https://opencode.ai/zen/v1',
-          apiKey: '',
-          enabled: true,
-          models: s.zen.models
-        }
-      ]
-    : []
   const builtin = s.platform.models.filter(isBuiltinModel)
   const platform =
     s.remote && s.platform.token && builtin.length
@@ -74,8 +43,10 @@ export function chatProviders(s: SettingsCfg): ProviderCfg[] {
           }
         ]
       : []
-
-  return [...platform, ...s.providers, ...zen]
+  const merged = mergeFreeModels(s.providers, s)
+  const oc = merged.filter((p) => p.enabled && isOpencodeEndpoint(p.baseURL))
+  const rest = merged.filter((p) => !(p.enabled && isOpencodeEndpoint(p.baseURL)))
+  return [...platform, ...rest, ...oc]
 }
 
 /** 「生图/生视频」意图的轻量识别（纯文字、没有附图时的生成请求）。命中只用于提示，不影响发送。 */

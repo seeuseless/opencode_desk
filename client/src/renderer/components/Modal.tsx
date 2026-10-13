@@ -5,9 +5,10 @@ import { t } from '../i18n'
 /**
  * 应用内模态层（不用原生 alert/confirm）。
  *
- * size 是宽度档位（三档，够用就不再加）：
+ * size 是宽度档位（够用就不再加）：
  *  - 不传：540px，通用表单（MCP、技能、删除确认）；
- *  - 'wide'：720px，字段多的表单（提供商：名称/ID/BaseURL/Key/模型列表）；
+ *  - 'wide'：720px，字段较多的表单（计划任务、许可协议）；
+ *  - 'xwide'：880px，字段最多的表单（提供商：名称/ID/BaseURL/Key/模型列表 + 快速填充）；
  *  - 'narrow'：460px，字段少的补充表单（模型编辑：6 个短字段，宽了反而空）。
  *
  * anchor 是垂直落点：
@@ -19,6 +20,7 @@ export function Modal({
   title,
   onClose,
   wide,
+  xwide,
   narrow,
   anchor,
   anchorRef,
@@ -27,6 +29,7 @@ export function Modal({
   title: string
   onClose: () => void
   wide?: boolean
+  xwide?: boolean
   narrow?: boolean
   anchor?: 'top' | 'above'
   anchorRef?: RefObject<HTMLElement | null>
@@ -54,7 +57,7 @@ export function Modal({
   const anchorClass = anchor === 'top' ? ' top' : anchor === 'above' ? ' above' : ''
   return (
     <div className={'mask' + anchorClass} style={anchor === 'above' ? { paddingBottom: aboveGap } : undefined}>
-      <div className={'modal' + (wide ? ' wide' : narrow ? ' narrow' : '')}>
+      <div className={'modal' + (xwide ? ' xwide' : wide ? ' wide' : narrow ? ' narrow' : '')}>
         <header className="mhead">
           <h3>{title}</h3>
           <button className="icon-btn" onClick={onClose} title={t('关闭')}>

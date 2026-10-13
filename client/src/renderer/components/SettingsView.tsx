@@ -62,7 +62,7 @@ interface Props {
   settings: SettingsCfg
   onSave: (s: SettingsCfg) => Promise<void>
   /**
-   * 外部已把设置落盘（如主进程同步了 Zen 免费模型清单），只回读刷新界面。
+   * 外部已把设置落盘（如「记忆」页从磁盘重读了最新设置），只回读刷新界面。
    * 与 onSave 的区别是**不重复写盘、不重复重启内核**——那两件事调用方已经做过了。
    */
   onSettings: (s: SettingsCfg) => void
@@ -279,7 +279,9 @@ function presetModelPatch(id: string, input?: Modality[], gen?: GenKind): Pick<M
  * 只在本家暂存地址恰好等于旧值时改写，用户手填的其他地址一律不动。
  */
 const STALE_BASE_URL: Record<string, Record<string, string>> = {
-  stepfun: { 'https://api.stepfun.com/step_plan/v1': 'https://api.stepfun.com/v1' }
+  stepfun: { 'https://api.stepfun.com/step_plan/v1': 'https://api.stepfun.com/v1' },
+  // unorouter 的 API 在 api.unorouter.com；旧档/旧模板存成官网域名的话一键改正
+  unorouter: { 'https://unorouter.com/v1': 'https://api.unorouter.com/v1' }
 }
 
 /** 已存地址若命中修正表则返回新地址，否则原样返回 */
@@ -314,13 +316,11 @@ const PROVIDER_PRESETS: {
     id: 'mimo',
     name: 'mimo',
     baseURL: 'https://api.xiaomimimo.com/v1',
-    // mimo-v2.5 是原生全模态理解（图/视频/音频进、文本出），mimo-v2.5-tts 是语音合成。
+    // 默认只给 mimo-v2.6-flash（用户定版）：原生全模态理解（图/视频/音频进、文本出），
     // 能读图的模型顺带勾上「视觉」：它本来就能看懂画面，也能当眼睛替别人代看。
-    // tts 那个显式写进 gen：名字规则虽然也能认出（带 -tts），但写出来用户打开编辑就能看到
-    // 「生成 = 语音」，不用自己去猜为什么它不出现在模型选择器里
-    models: ['mimo-v2.5', 'mimo-v2.5-tts'],
-    input: { 'mimo-v2.5': ['text', 'image', 'video', 'vision'], 'mimo-v2.5-tts': ['text'] },
-    gen: { 'mimo-v2.5-tts': 'tts' }
+    // 其它型号（v2.5 系列、tts 等）用户在模型列表里按需自行补。
+    models: ['mimo-v2.6-flash'],
+    input: { 'mimo-v2.6-flash': ['text', 'image', 'video', 'vision'] }
   },
   {
     /**
@@ -329,62 +329,69 @@ const PROVIDER_PRESETS: {
      * docs/内核Zen免费模型机制.md。
      *
      * 免 KEY：主进程给每个 provider 写的都是 `apiKey: '{env:QN_KEY_<ID>}'`，这里不注入那个变量，
-     * 内核就落到匿名通道（Zen 那批免费模型实测可通）。
-     * 只列带 free 的那几个：付费模型走同一个端点会 401，摆进清单等于给用户挖坑。
+     * 内核就落到匿名通道。
+     * 初始只给 deepseek-v4.1-flash（用户定版）：内核同步来的限免清单会在读取侧并入这个分组，
+     * 不需要在这里罗列。
      */
     id: 'qn-zen',
-    name: 'opencode zen',
+    name: 'opencodeZen',
     baseURL: 'https://opencode.ai/zen/v1',
-    models: ['big-pickle', 'space-bunny-free', 'ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'step-5-preview-free'],
-    // space-bunny-free 的模态是内核元数据给的（text/image/video 全进、1M 上下文），顺带能当代看的眼睛
-    input: { 'space-bunny-free': ['text', 'image', 'video', 'vision'] }
+    models: ['deepseek-v4.1-flash']
   },
   {
     /**
      * OpenCode Go（$10/月订阅，端点与 Zen 不同）。id 不叫 `opencode-go`：内核自带同名 provider，
      * 覆盖了会丢掉它那份模型元数据。要 KEY——在 opencode.ai/go 订阅后把 Key 填进下面的 API Key。
+     * 初始只给 deepseek-v4.1-flash（用户定版），其余按需手动补。
      */
     id: 'qn-go',
-    name: 'opencode go',
+    name: 'opencodeGo',
     baseURL: 'https://opencode.ai/zen/go/v1',
-    models: ['deepseek-v4-flash', 'glm-5.3', 'kimi-k3', 'mimo-v2.5', 'qwen3.8-max']
+    models: ['deepseek-v4.1-flash']
   },
   {
     id: 'stepfun',
     name: 'stepfun',
     baseURL: 'https://api.stepfun.com/v1',
-    // step-3.7-flash 对话（原生多模态）、step-image-edit-2 改图；
-    // stepaudio-3-asr-max 语音识别、stepaudio-3-music-preview 音乐生成、stepaudio-3-tts 语音合成。
-    // 后三个不走 chat 接口，靠生成角色分别挂到听写 / 音乐 / 配音工具（名字规则能自动认出，也可手动指定）
-    models: [
-      'step-3.7-flash',
-      'step-image-edit-2',
-      'stepaudio-3-asr-max',
-      'stepaudio-3-music-preview',
-      'stepaudio-3-tts'
-    ],
-    input: { 'step-3.7-flash': ['text', 'image', 'vision'] }
+    // 默认只给两个对话模型（用户定版）：step-5-preview 旗舰、step-3.7-flash 轻量，
+    // 两个都是原生多模态（图进、文本出），顺带勾上「视觉」。
+    // 语音/图像生成类（stepaudio-3-*、step-image-*）不在初始清单：按需手动补，
+    // 免得一打开「添加提供商」就一大串模型。
+    models: ['step-5-preview', 'step-3.7-flash'],
+    input: {
+      'step-5-preview': ['text', 'image', 'vision'],
+      'step-3.7-flash': ['text', 'image', 'vision']
+    }
   },
-  { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com', models: ['deepseek-flash'] }
+  { id: 'deepseek', name: 'deepseek', baseURL: 'https://api.deepseek.com', models: ['deepseek-flash'] },
+  {
+    /**
+     * unorouter（聚合网关，OpenAI 兼容 https://api.unorouter.com/v1）。要 KEY（unorouter.com/token 生成）。
+     * 模型不用手填：主进程在窗口显示 / 点开选择器时自动拉免费清单（/v1/models 里带
+     * `:free` 后缀、走 openai 端点的那批，见 electron/main/freemodels.ts），并入这个提供商的分组；
+     * 付费模型仍可在下面手动添加。
+     */
+    id: 'unorouter',
+    name: 'unorouter',
+    baseURL: 'https://api.unorouter.com/v1',
+    models: []
+  },
+  {
+    /**
+     * openrouter（聚合网关，OpenAI 兼容 https://openrouter.ai/api/v1）。要 KEY（openrouter.ai/keys 生成）。
+     * 模型不用手填：主进程在窗口显示 / 点开选择器时自动拉公开清单（/api/v1/models 无需鉴权，
+     * 四项计价全 0 的那批 = 官网 max_price=0 同口径，见 electron/main/freemodels.ts），
+     * 并入这个提供商的分组；付费模型仍可在下面手动添加。
+     */
+    id: 'openrouter',
+    name: 'openrouter',
+    baseURL: 'https://openrouter.ai/api/v1',
+    models: []
+  }
 ]
 
 export function SettingsView(p: Props) {
   const providers = p.settings.providers
-  /** 官方免费模型（Zen）快照：只读，本页只提供「刷新」 */
-  const zenModels = p.settings.zen?.models ?? []
-  const [zenBusy, setZenBusy] = useState(false)
-  async function refreshZen(): Promise<void> {
-    setZenBusy(true)
-    try {
-      // 主进程返回的是落盘后的完整 Settings：它已经写过盘、并在清单有增删时重启过内核。
-      // 这里**只更新界面 state**，不能再走 onSave —— 那会重复写盘 + 多重启一次内核。
-      p.onSettings(await window.qingniao.zenRefresh())
-    } catch {
-      /* 内核没起/取不到：清单保持原样，不清空（见 main/zen.ts fetchZenModels 注释） */
-    } finally {
-      setZenBusy(false)
-    }
-  }
   /**
    * 访问权限档位：**完全控制是总权限闸**——主进程收到「能不能调用别的模型」的询问时直接放行，
    * 不再弹授权卡（见 electron/main/gate.ts requestModelAuth）。所以这一档下本页的授权清单
@@ -1258,33 +1265,6 @@ export function SettingsView(p: Props) {
 
         {tab === 'providers' && (
         <>
-        {/*
-          官方免费模型（Zen）：只读卡片。
-          它不是用户自建的 provider——清单由内核持有、免 KEY、不需要登录，所以没有开关/编辑/删除，
-          只有「刷新」。摆在这里主要是让用户知道这批模型从哪来、什么时候同步的、可能会下线。
-        */}
-        {zenModels.length > 0 && (
-          <section>
-            <h3>
-              {t('opencode限免')}
-              <span className="spacer" />
-              <button className="ghost" onClick={refreshZen} disabled={zenBusy}>
-                <RefreshCw size={14} className={zenBusy ? 'spin' : ''} /> {t('刷新')}
-              </button>
-            </h3>
-            <div className="plist">
-              <div className="prow">
-                <div className="prow-main">
-                  <div className="prow-name">
-                    {t('opencode限免')}
-                    <span className="chip">{t('{n} 个模型', { n: zenModels.length })}</span>
-                  </div>
-                  <div className="prow-url">opencode.ai/zen</div>
-                </div>
-              </div>
-            </div>
-          </section>
-        )}
         <section>
           <h3>
             {t('模型提供商')}
@@ -1293,11 +1273,6 @@ export function SettingsView(p: Props) {
               <Plus size={14} /> {t('添加提供商')}
             </button>
           </h3>
-          <p className="sec-tip">
-            {t('填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。')}
-            <br />
-            {t('拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。')}
-          </p>
           {providers.length === 0 && <div className="plist-empty">{t('还没有自定义提供商，点击右上角添加')}</div>}
           {providers.length > 0 && (
             <div className="plist">
@@ -1321,7 +1296,9 @@ export function SettingsView(p: Props) {
                   <div className="prow-main">
                     <div className="prow-name">
                       {c.name}
-                      <span className="chip">{t('{n} 个模型', { n: c.models.length })}</span>
+                      {/* 一个模型都没配的（如刚加的 openrouter/unorouter 模板，模型全靠免费清单并入）
+                          就别打「0 个模型」的标签了——纯噪音；配了模型的才显示数量 */}
+                      {!!c.models.length && <span className="chip">{t('{n} 个模型', { n: c.models.length })}</span>}
                       {/* ID 不让用户填了，但列在这儿：改名后还能对上号，内核配置与授权记录都按它认 */}
                       <span className="prow-id" title={t('内部标识：内核配置与「永久允许」清单按它认，创建后不再变化')}>
                         {c.id}
@@ -1515,27 +1492,30 @@ export function SettingsView(p: Props) {
       </div>
 
       {draft && (
-        <Modal title={draft.isNew ? t('添加提供商') : t('编辑提供商')} wide onClose={closeProviderModal}>
+        <Modal title={draft.isNew ? t('添加提供商') : t('编辑提供商')} xwide onClose={closeProviderModal}>
           {draft.isNew && (
             <div className="preset-row">
               <span className="preset-lab">{t('快速填充')}</span>
-              {PROVIDER_PRESETS.map((pr) => (
+              {/* 模板还会继续增加： chips 区限高两行，放不下出细滚动条，不把弹窗撑高 */}
+              <div className="preset-chips">
+                {PROVIDER_PRESETS.map((pr) => (
+                  <button
+                    type="button"
+                    key={pr.id}
+                    className={'preset-chip' + (draft.id === pr.id ? ' on' : '')}
+                    onClick={() => applyPreset(pr.id)}
+                  >
+                    {pr.name}
+                  </button>
+                ))}
                 <button
                   type="button"
-                  key={pr.id}
-                  className={'preset-chip' + (draft.id === pr.id ? ' on' : '')}
-                  onClick={() => applyPreset(pr.id)}
+                  className="preset-chip"
+                  onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })}
                 >
-                  {pr.name}
+                  {t('手动填写')}
                 </button>
-              ))}
-              <button
-                type="button"
-                className="preset-chip"
-                onClick={() => setDraft({ ...draft, name: '', id: '', baseURL: '', apiKey: '', modelsText: '', cfgs: {} })}
-              >
-                {t('手动填写')}
-              </button>
+              </div>
             </div>
           )}
           <label>

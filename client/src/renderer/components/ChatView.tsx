@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, opencodeConfigured, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -521,9 +521,44 @@ export function ChatView(p: Props) {
     return () => window.removeEventListener('qingniao:open-in-browser', onOpen)
   }, [])
 
-  // 切会话时清掉用户点开的地址：面板若开着回到新会话的 AI 浏览上下文
+  // 切会话时浏览器面板**按会话隔离**：
+  //   - 给即将离开的会话拍快照（开合/放大/当前页）；
+  //   - 新会话默认收起面板——浏览器属于「打开它的那个对话」，跟着会话走，
+  //     否则 A 对话开的网页一直挂在 B 对话旁边，AI 的浏览上下文也会串台；
+  //   - 切回开过面板的会话时原样恢复（含把 webview 导回那个会话在看的那一页）。
+  // webview 本体仍全局唯一（panelBorn 不复位）：AI 随时能操作，只是可见性与导航上下文按会话切换。
+  const browserBySess = useRef<Map<string, { open: boolean; max: boolean; url: string; pin: string }>>(new Map())
+  const lastBrowserSess = useRef(p.sessionId)
   useEffect(() => {
+    const prev = lastBrowserSess.current
+    const next = p.sessionId
+    if (prev === next) return
+    lastBrowserSess.current = next
+    browserBySess.current.set(prev, {
+      open: panelOpen,
+      max: browserMax,
+      url: panelUrl,
+      pin: pinnedUrl
+    })
+    // 收起 + 清上下文：新会话从「没有浏览器」开始，需要时由用户点开或 AI 的 browser.wake 弹出
+    setPanelOpen(false)
+    setBrowserMax(false)
+    setChatHidden(false)
+    setFloatOpen(false)
     setPinnedUrl('')
+    setPanelUrl('')
+    const saved = next ? browserBySess.current.get(next) : undefined
+    if (saved?.open) {
+      setPanelOpen(true)
+      setBrowserMax(saved.max)
+      // 恢复页面：pinSeq 自增强制 webview 导回该会话当时看的那一页（webview 可能已被别的会话导航走）
+      const back = saved.pin || saved.url
+      if (back) {
+        setPinnedUrl(back)
+        setPinSeq((n) => n + 1)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.sessionId])
 
   // 收藏夹落盘：状态即事实源，变化即写
@@ -985,21 +1020,21 @@ export function ChatView(p: Props) {
   }
 
   /**
-   * 用户点开模型选择器时，顺手把 opencode 限免的清单同步一次。
+   * 用户点开模型选择器时，顺手把免费模型清单（Zen + 网关）同步一次。
    *
-   * 推迟到这一刻而不是启动时：清单要向内核问，而绝大多数用户配了自己的 provider，
-   * 那批限免模型根本不会被点开——启动就同步等于每次开机白等一次。
-   * 没同步到（内核没起 / 官方当前没有免费模型）时分组不显示，符合「没有就不显示」。
+   * App 层已改为「每次窗口显示时自动同步」（见 App.tsx），这里是同一件事的按需补刀：
+   * 窗口一直开着但清单在期间变了，点开选择器时也能拿到最新值。
+   * 没同步到（网络不可达 / 上游没有免费模型）时不显示，符合「没有就不显示」。
    */
-  const syncZen = useCallback(async () => {
-    // 没配过 OpenCode（Zen / Go 任一）就不用去问这份清单：分组本来就不显示，白等一次内核往返
-    if (!opencodeConfigured(p.settings)) return
+  const syncFree = useCallback(async () => {
+    // 一家免费源都没配就不用发请求：各组里本来就不会有免费模型，白等一次往返
+    if (!hasFreeSource(p.settings)) return
     try {
-      const s = await window.qingniao.zenRefresh()
+      const s = await window.qingniao.freeRefresh()
       // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
       p.onSettings?.(s)
     } catch {
-      /* 内核不可达：限免分组不显示，不打扰用户 */
+      /* 同步失败：沿用上次快照，不打扰用户 */
     }
   }, [p.onSettings, p.settings])
 
@@ -2214,6 +2249,14 @@ export function ChatView(p: Props) {
                     <span>{t('本轮另调用：')}{summarizeModels(usedByMsg[m.info.id])}</span>
                   </div>
                 )}
+                {/* 本次回复使用的模型：modelID/providerID 是内核持久化在消息里的，
+                    重启后历史消息照样能显示。流式期间不显示（回复还没完），落定后出现。 */}
+                {!busy && m.info.modelID && (
+                  <div className="amsg-model" title={`${m.info.providerID || '?'}/${m.info.modelID}`}>
+                    <Cpu size={12} />
+                    <span>{usedModelLabel(groups, m.info)}</span>
+                  </div>
+                )}
               </div>
             )
           })}
@@ -2519,7 +2562,7 @@ export function ChatView(p: Props) {
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
-              onOpen={() => void syncZen()}
+              onOpen={() => void syncFree()}
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
@@ -3529,6 +3572,25 @@ function summarizeModels(list: ModelUsed[]): string {
       return `${rl ? t(rl) : role}${t('「{name}」', { name: names })}${items.length > 1 ? `×${items.length}` : ''}`
     })
     .join(' · ')
+}
+
+/**
+ * 一条 AI 消息「这次是谁答的」：内核把 providerID/modelID 持久化在消息 info 里，
+ * 重启后历史照样读得到，所以这里只做展示名的翻译，不依赖任何本机状态。
+ *
+ * 展示优先级：模型在当前分组里的展示名 > modelID 短名（去厂商前缀）；
+ * 提供商给了分组名就带上（用户常在多家之间切，只写模型名对不上账）。
+ */
+function usedModelLabel(groups: ModelGroup[], info: { providerID?: string; modelID?: string }): string {
+  const mid = info.modelID || ''
+  const g = info.providerID ? groups.find((x) => x.id === info.providerID) : undefined
+  const short = (n: string): string => {
+    const i = n.lastIndexOf('/')
+    return i >= 0 ? n.slice(i + 1) : n
+  }
+  const name = short(g?.models.find((x) => x.mid === mid)?.name || mid) || mid
+  const label = g?.label || info.providerID || ''
+  return label ? `${label} · ${name}` : name
 }
 
 /**

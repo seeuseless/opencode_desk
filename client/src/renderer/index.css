@@ -717,6 +717,17 @@ html[data-bg-content='on'] .cbox {
 .cu-models svg { flex-shrink: 0; color: var(--accent); }
 .cu-models span { min-width: 0; word-break: break-word; }
 
+/* 本次回复使用的模型（回复末尾一行小字）：与 .cu-models 同风格但更弱——
+   它几乎每条回复都有，不加分隔线，不抢正文注意力；title 悬浮给 provider/model 原始串供核对。
+   数据来自内核持久化在消息里的 modelID/providerID，重启后历史照样显示。 */
+.amsg-model {
+  display: flex; align-items: center; gap: 6px;
+  margin: 7px 0 2px; padding-left: 10px;
+  color: var(--fg2); font-size: 12px; line-height: 1.6;
+}
+.amsg-model svg { flex-shrink: 0; opacity: 0.8; }
+.amsg-model span { min-width: 0; word-break: break-word; }
+
 /* 对话流内的中性提示（自动换模型等说明）：与失败反馈同结构，弱化色 + 灰边，不抢注意力 */
 .msgnotice {
   display: flex; align-items: flex-start; gap: 8px;
@@ -1384,6 +1395,20 @@ html[data-bg-content='on'] .cbox {
   background: var(--bg2); border-radius: 12px;
   box-shadow: 0 10px 36px var(--shadow); padding: 6px;
 }
+/* 二级模型列顶部的搜索框（模型多时出现）：与项目下拉的 .pp-search 同款 */
+.mp-search {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg2);
+}
+.mp-search svg { flex-shrink: 0; opacity: 0.75; }
+.mp-search input {
+  flex: 1; min-width: 0;
+  background: transparent; border: none; outline: none; padding: 0;
+  color: var(--fg); font-size: 13px; font-family: inherit;
+}
+.mp-search input::placeholder { color: var(--fg2); opacity: 0.8; }
 
 /* ================= 项目下拉（pp 前缀，风格对齐 mp） ================= */
 .menu-panel.pp { min-width: 260px; }
@@ -1740,6 +1765,8 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
   box-shadow: 0 18px 60px var(--shadow);
 }
 .modal.wide { width: 720px; }
+/* 宽档：字段最多的表单（添加/编辑提供商：快速填充 + 五组字段，720 挤） */
+.modal.xwide { width: 960px; max-width: calc(100vw - 48px); }
 /* 窄档：字段少的补充表单（模型编辑/添加）。540 太宽会留一大片空白，看着散 */
 .modal.narrow { width: 460px; }
 .mhead { display: flex; align-items: center; padding: 16px 18px 12px; flex-shrink: 0; }
@@ -1801,8 +1828,12 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 
 /* 添加提供商弹窗：常用提供商一键模板 */
 /* 顶部留白给胶囊右上角的「生图/视频」角标，避免它压到弹窗标题 */
-.preset-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 14px; }
-.preset-lab { font-size: 12px; color: var(--fg2); }
+/* 标签固定在左，胶囊区自适应换行；模板继续增多时限高两行出细滚动条，不把弹窗撑高 */
+.preset-row { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0 14px; }
+.preset-lab { font-size: 12px; color: var(--fg2); padding-top: 6px; flex-shrink: 0; }
+.preset-chips { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 1; min-width: 0; max-height: 64px; overflow-y: auto; }
+.preset-chips::-webkit-scrollbar { width: 6px; }
+.preset-chips::-webkit-scrollbar-thumb { background: var(--field-line); border-radius: 3px; }
 .preset-chip {
   position: relative;
   border: 1px solid var(--field-line); background: var(--field-bg); color: var(--fg2);

@@ -9,7 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { UpgradeDialog } from './components/UpgradeDialog'
-import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
+import { oc, chatProviders, hasFreeSource, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import type { UpdateState } from '../../electron/main/types'
 import { getLang, setLang, t, type Lang } from './i18n'
 import { load, save } from './store'
@@ -146,6 +146,8 @@ export default function App() {
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
     // Zen 免费模型缓存：与主进程 DEFAULT_SETTINGS 一致（空清单 = 该分组不显示）
     zen: { models: [] },
+    // 聚合网关（openrouter / unorouter）免费模型快照：键 = baseURL，默认全空
+    freeModels: {},
     // 全局记忆：与主进程 DEFAULT_SETTINGS 一致（空 = 不带额外指令）
     memory: '',
     // access 'default' = 写操作要确认（与主进程 DEFAULT_SETTINGS 一致）
@@ -542,6 +544,35 @@ export default function App() {
     })()
   }, [])
 
+  /**
+   * 每次 App 窗口「显示」时自动同步一次免费模型清单
+   * （OpenCode Zen 内核池 + openrouter / unorouter 网关，主进程一次性全同步）。
+   *
+   * 覆盖三类时机：启动首显（settingsReady 后补跑一次，首次挂载时页面本就是 visible、
+   * 不会触发 visibilitychange）、从最小化恢复、托盘唤起——后两者都是窗口翻回 visible 的时刻。
+   * 设置 → 模型 里没有手动刷新入口，这里是唯一的定时同步（模型选择器点开时会再补一次）。
+   * 一家免费源都没配的用户不去发请求，零开销。
+   */
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+  useEffect(() => {
+    if (!settingsReady) return
+    const sync = () => {
+      if (!hasFreeSource(settingsRef.current.providers)) return
+      // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
+      void window.qingniao
+        .freeRefresh()
+        .then(setSettings)
+        .catch(() => undefined)
+    }
+    sync()
+    const onVis = () => {
+      if (document.visibilityState === 'visible') sync()
+    }
+    document.addEventListener('visibilitychange', onVis)
+    return () => document.removeEventListener('visibilitychange', onVis)
+  }, [settingsReady])
+
   async function loadProjectSessions(proj: Project): Promise<void> {
     try {
       const list = sortSessions(await oc.sessions(proj.path))
@@ -749,9 +780,35 @@ export default function App() {
   }
 
   async function deleteSessionOf(proj: Project, sid: string) {
+    // 删除失败**绝不能静默吞**：内核在免费清单同步后重启的那几秒里，DELETE 会拿到
+    // 503「内核未启动」——吞掉错误 + 重拉列表，界面上就是「点了删除、会话还在」，
+    // 用户只会以为删除坏了（2026-10-13 用户反馈「有些任务删除不掉」即此）。
+    // 所以：失败先提示；503/502（内核正在回来的路上）等 1.5s 自动补一刀，成功就不打扰。
+    //
+    // **404 单独处理**：会话在内核已不存在（内核进程曾被强杀、建会话的写入没落盘，
+    // UI 状态里留下的「幻影行」）——这不是失败，直接当删成功：清本地行 + 重拉列表对账，
+    // 弹错误只会让用户反复点一个永远 404 的按钮（2026-10-13 ses_ecba... 即此）。
+    const del = (): Promise<unknown> => oc.deleteSession(sid, proj.path)
     try {
-      await oc.deleteSession(sid, proj.path)
-    } catch { /* 内核已无此会话时忽略 */ }
+      await del()
+    } catch (e) {
+      const status = (e as { status?: number }).status ?? 0
+      if (status === 404) {
+        // 幻影行：内核早没有这条了，顺手把本地选中态也清掉
+      } else if (status === 503 || status === 502) {
+        await new Promise((r) => setTimeout(r, 1500))
+        try {
+          await del()
+        } catch {
+          setNotice(t('删除会话失败：内核还在重启，请稍后再试一次。'))
+          return
+        }
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        setNotice(t('删除会话失败：{msg}', { msg }))
+        return
+      }
+    }
     if (sid === sessionId) setSessionId('')
     loadProjectSessions(proj)
   }
@@ -848,7 +905,16 @@ export default function App() {
     const path = activeProject?.path
     if (!path) return
     setSessionId(s.id)
-    setSessionsMap((m) => ({ ...m, [path]: sortSessions([s, ...(m[path] ?? [])]) }))
+    setSessionsMap((m) => {
+      const cur = m[path] ?? []
+      // **必须先按 id 去重**：草稿创建后要先 await 记忆注入才走到这里，而内核的
+      // session.created 事件在这段 await 里就完成了防抖重拉——会话已经在列表里了。
+      // 无脑 unshift 会把它加成两行（用户实测：发一条消息，任务列表出两条同题会话）。
+      if (cur.some((x) => x.id === s.id)) {
+        return { ...m, [path]: sortSessions(cur.map((x) => (x.id === s.id ? s : x))) }
+      }
+      return { ...m, [path]: sortSessions([s, ...cur]) }
+    })
     setExpanded((e) => ({ ...e, [activeId]: true }))
     setLastActive((a) => ({ ...a, [activeId]: Date.now() }))
   }

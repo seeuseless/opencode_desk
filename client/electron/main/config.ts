@@ -1,8 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { AccessLevel, DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode, ZenCfg } from './types.ts'
-import { DEFAULT_PLATFORM_URL, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel } from './types.ts'
+import type { AccessLevel, DeviceCfg, FreeModelsCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode, ZenCfg } from './types.ts'
+import { DEFAULT_PLATFORM_URL, FREE_MODEL_SOURCES, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel, mergeFreeModels, normBaseURL } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -62,6 +62,14 @@ function normalizeModel(m: unknown): ModelCfg | null {
   }
 }
 
+/**
+ * 旧档迁移：unorouter 的 API 域名是 api.unorouter.com，早期模板把 base URL 误写成官网
+ * 域名（unorouter.com/v1 是网页，接口全 404）。读到旧值就静默改正，下一次保存落回磁盘。
+ */
+function fixBaseURL(u: string): string {
+  return /^https:\/\/unorouter\.com\/v1\/?$/i.test(u.trim()) ? 'https://api.unorouter.com/v1' : u
+}
+
 /** 补齐缺失字段并做形状清洗（旧版存档 / 手改文件都走这里） */
 export function normalize(raw: Partial<Settings> | null | undefined): Settings {
   const providers: ProviderCfg[] = Array.isArray(raw?.providers)
@@ -70,7 +78,7 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
         .map((p) => ({
           id: String(p.id).trim(),
           name: String(p.name ?? p.id),
-          baseURL: String(p.baseURL ?? ''),
+          baseURL: fixBaseURL(String(p.baseURL ?? '')),
           apiKey: String(p.apiKey ?? ''),
           enabled: p.enabled !== false,
           models: Array.isArray(p.models) ? p.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
@@ -118,6 +126,20 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     models: Array.isArray(rawZen.models) ? rawZen.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : [],
     syncedAt: Number(rawZen.syncedAt) > 0 ? Number(rawZen.syncedAt) : undefined
   }
+  // 聚合网关免费模型快照（openrouter / unorouter）：键 = 归一化 baseURL（mergeFreeModels 读取侧
+  // 就是按 baseURL 查的），兼容来源名（'unorouter'）做键的旧写法。手改文件塞进未知键直接丢弃。
+  const freeModels: Record<string, FreeModelsCfg> = {}
+  const knownFreeKeys = Object.values(FREE_MODEL_SOURCES)
+  if (raw?.freeModels && typeof raw.freeModels === 'object') {
+    for (const [key, val] of Object.entries(raw.freeModels as Record<string, unknown>)) {
+      const known = !!FREE_MODEL_SOURCES[key] || knownFreeKeys.includes(normBaseURL(key))
+      if (!known || !val || typeof val !== 'object') continue
+      const v = val as Partial<FreeModelsCfg>
+      const models = Array.isArray(v.models) ? v.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
+      if (!models.length) continue
+      freeModels[key] = { models, syncedAt: Number(v.syncedAt) > 0 ? Number(v.syncedAt) : undefined }
+    }
+  }
   return {
     providers,
     mcps,
@@ -127,6 +149,7 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     mobile: raw?.mobile === true,
     platform,
     zen,
+    freeModels,
     // 全局记忆：老存档没有这个键，落空串（= 不生成指令文件）
     memory: typeof raw?.memory === 'string' ? raw.memory : '',
     // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
@@ -157,16 +180,17 @@ function normalizeAccess(raw: unknown): AccessLevel {
 /**
  * 内核 `permission` 配置：按访问档位生成。
  *
- * 两档的差别只在**写操作**上——`edit`（改文件）、`bash`（执行命令）默认要确认；
- * 读类的 `read` / `glob` / `grep` / `list` 一律放行：这是本应用的核心用途，
- * 每看一眼文件都弹框只会把人逼疯，而读操作本身不可逆伤害为 0。
+ * 默认档：`edit`（改文件）、`bash`（执行命令）要确认；读类的 `read` / `glob` / `grep` / `list`
+ * 一律放行——这是本应用的核心用途，每看一眼文件都弹框只会把人逼疯。
+ * 项目外目录（external_directory）保持内核默认的 'ask'：用户授权的是「这个项目目录」。
  *
- * 注意内核对**项目外**目录的写入本来就是 'ask'（external_directory），这里不动它——
- * 用户授权的是「这个项目目录」，越过边界仍然要问。
+ * 完全控制（full）：`"*": "allow"` 一把全放——`*` 是内核 permission 的全局通配键，
+ * 连内核默认 'ask' 的 external_directory（访问项目外路径的弹窗）、doom_loop 一起覆盖。
+ * 用户在设置里点过「完全控制」就是明确要所有权限，任何残留的弹窗都算违约。
  */
 function permissionCfgFor(level: AccessLevel): Record<string, unknown> {
   if (level === 'full') {
-    return { edit: 'allow', bash: 'allow' }
+    return { '*': 'allow' }
   }
   return { edit: 'ask', bash: 'ask' }
 }
@@ -281,19 +305,6 @@ export const PLATFORM_PROVIDER_ID = 'qingniao'
 export const PLATFORM_PROVIDER_NAME = '青鸟平台'
 
 /**
- * OpenCode Zen（内核自带的免费模型池）的固定 ID 与名称。
- *
- * **不要用 'opencode' 当 id**：那是内核内置 provider 的保留名，在 opencode.json 里
- * 同名会整个覆盖掉内核自带的定义（连带那 11 个免费模型及其能力元数据一起被替换掉）。
- * 用独立 id + 空 env 插值走我们自己的条目，实测内核照样正常调用。
- * 见 docs/内核Zen免费模型机制.md。
- */
-export const ZEN_PROVIDER_ID = 'qnx-free'
-export const ZEN_PROVIDER_NAME = 'opencode限免'
-/** Zen 的 OpenAI 兼容网关。免费模型必须经内核调用，桌面端直连会被 403 挡掉 */
-const ZEN_BASE_URL = 'https://opencode.ai/zen/v1'
-
-/**
  * 生效的平台地址 —— 全应用只此一处：
  * 环境变量 QINGNIAO_PLATFORM_URL > 设置里的 platform.baseUrl > 内置默认值。
  * 上线换域名时改设置（或打包时给环境变量）即可，登录入口与网关 baseURL 自动跟着变。
@@ -335,27 +346,11 @@ export function platformProvider(s: Settings): ProviderCfg | null {
 }
 
 /**
- * Zen 免费模型 → 一个虚拟 provider（免 KEY，走内核）。
- *
- * 与 platformProvider 不同的是：**它不依赖登录、不依赖 remote 开关**，只要同步到过清单就显示，
- * 因此排在平台之前——新装未登录的用户第一眼看到的就是「开箱能用」的一组。
- *
- * 返回 null（分组不出现）的两种情况：还没同步过清单、清单已空。
- * apiKey 刻意留空：opencode.json 里写成 `{env:QN_KEY_QNX_FREE}`，而 spawn 时并不注入这个变量，
- * 内核由此落到匿名通道（实测可用）。**别改成注入真实 key**——那会让它变成付费路径。
+ * 免费模型快照（Zen / 聚合网关）不再以虚拟 provider 出现：
+ * 它们由 mergeFreeModels() 并入用户自己配置的对应端点提供商（OpenCode zen/go、openrouter、unorouter），
+ * 不再单独占一个一级分组——见 types.ts 与 docs/内核Zen免费模型机制.md。
+ * 旧版虚拟 provider 的 id（qnx-free）一并废弃：用户若还选着它，resolveModel 会自然回落默认档。
  */
-export function zenProvider(s: Settings): ProviderCfg | null {
-  const models = s.zen?.models ?? []
-  if (!models.length) return null
-  return {
-    id: ZEN_PROVIDER_ID,
-    name: ZEN_PROVIDER_NAME,
-    baseURL: ZEN_BASE_URL,
-    apiKey: '',
-    enabled: true,
-    models
-  }
-}
 
 /** 只改平台登录态并落盘（是否重启内核交给调用方决定） */
 export function setPlatform(patch: Partial<PlatformCfg>): Settings {
@@ -387,6 +382,22 @@ export function setZen(patch: Partial<ZenCfg>): { settings: Settings; changed: b
   return { settings: next, changed }
 }
 
+/**
+ * 只改聚合网关（openrouter / unorouter）的免费模型快照并落盘（键 = 归一化 baseURL）。
+ *
+ * 与 setZen 同一套纪律：清单真的变了才重写 opencode.json（模型增删要内核重启才能选），
+ * 空清单/拉取失败由调用方负责过滤——这里只管如实写入传入的补丁。
+ */
+export function setFreeModels(patch: Record<string, FreeModelsCfg>): { settings: Settings; changed: boolean } {
+  const cur = loadSettings()
+  const next = normalize({ ...cur, freeModels: { ...cur.freeModels, ...patch } })
+  const changed = JSON.stringify(next.freeModels) !== JSON.stringify(cur.freeModels)
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(next, null, 2))
+  if (changed) writeOpencodeConfig(next)
+  return { settings: next, changed }
+}
+
 export function providerEnv(s: Settings): Record<string, string> {
   const env: Record<string, string> = {}
   const platform = platformProvider(s)
@@ -401,16 +412,16 @@ export function providerEnv(s: Settings): Record<string, string> {
  * 真正会写入 opencode.json 的 provider（writeOpencodeConfig 与 defaultModel 的唯一判定源）。
  * 平台 provider 固定排在最前：平台登录后它就是默认首选，第三方配置照旧并排列在后面。
  *
- * Zen 免费模型排在**最后**：它是兜底性质的（官方限时提供、可能随时下线），
- * 不该抢在用户自己配好的提供商前面当默认档。
+ * 免费模型快照在这里统一并入（mergeFreeModels）：内核要认识这些模型 id 才能路由请求。
+ * 合并发生在 models 过滤**之前**，所以「只配了 Key、一个模型都没手填」的 unorouter
+ * 也能凭自动加载的免费清单成为可用提供商。
  */
 export function usableProviders(s: Settings): ProviderCfg[] {
-  const manual = s.providers.filter(
-    (p) => p.enabled && p.id.trim() && p.id !== PLATFORM_PROVIDER_ID && p.id !== ZEN_PROVIDER_ID && p.baseURL.trim() && p.models.length > 0
-  )
   const platform = platformProvider(s)
-  const zen = zenProvider(s)
-  return [...(platform ? [platform] : []), ...manual, ...(zen ? [zen] : [])]
+  const manual = mergeFreeModels(s.providers, s).filter(
+    (p) => p.enabled && p.id.trim() && p.baseURL.trim() && p.models.length > 0
+  )
+  return [...(platform ? [platform] : []), ...manual]
 }
 
 /** 面板浏览器 MCP 的启动信息（主进程启动时注入：脚本路径 + 控制端点端口），writeOpencodeConfig 用 */

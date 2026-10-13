@@ -273,6 +273,8 @@ const TW_COMPONENTS: Record<string, string> = {
   限免: '限免',
   折扣: '折扣',
   opencode限免: 'opencode 限免',
+  搜索模型: '搜尋模型',
+  无匹配模型: '沒有符合的模型',
   刷新: '重新整理',
   选择项目: '選擇專案',
   切换项目文件夹: '切換專案資料夾',
@@ -440,9 +442,6 @@ const TW_SETTINGS: Record<string, string> = {
   自定义: '自訂',
   模型提供商: '模型供應商',
   添加提供商: '新增供應商',
-  '填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。':
-    '填寫任意 OpenAI Chat 相容端點的 Base URL 即可接入，一個供應商可掛多個模型；儲存後自動重啟核心生效，API Key 僅存於本機 ~/.qingniaoai/settings.json。',
-  '拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。': '拖動左側握把可調整順序，這個順序決定模型選擇器裡各供應商分組的先後。',
   '还没有自定义提供商，点击右上角添加': '還沒有自訂供應商，點擊右上角新增',
   拖动调整顺序: '拖動調整順序',
   '{n} 个模型': '{n} 個模型',
@@ -739,6 +738,8 @@ const TW_SIDEBAR: Record<string, string> = {
   '确定把「{name}」从项目列表移除吗？不会删除本地文件夹与历史记录。': '確定把「{name}」從專案清單移除嗎？不會刪除本機資料夾與歷史記錄。',
   移除: '移除',
   '确定删除「{name}」吗？聊天记录将一并删除，不可恢复。': '確定刪除「{name}」嗎？聊天記錄將一併刪除，無法復原。',
+  '删除会话失败：{msg}': '刪除會話失敗：{msg}',
+  '删除会话失败：内核还在重启，请稍后再试一次。': '刪除會話失敗：核心還在重啟，請稍後再試一次。',
   从列表移除: '從清單移除',
   '移动端配对二维码': '行動端配對 QR Code'
 }
@@ -1047,6 +1048,8 @@ const EN_COMPONENTS: Record<string, string> = {
   限免: 'Free',
   折扣: 'Sale',
   opencode限免: 'OpenCode Free Tier',
+  搜索模型: 'Search models',
+  无匹配模型: 'No matching models',
   选择项目: 'Select project',
   切换项目文件夹: 'Switch project folder',
   搜索文件夹: 'Search folders',
@@ -1214,9 +1217,6 @@ const EN_SETTINGS: Record<string, string> = {
   自定义: 'Custom',
   模型提供商: 'Model Providers',
   添加提供商: 'Add provider',
-  '填写任意 OpenAI Chat 兼容端点的 Base URL 即可接入，一个提供商可挂多个模型；保存后自动重启内核生效，API Key 仅存于本机 ~/.qingniaoai/settings.json。':
-    'Enter the Base URL of any OpenAI-compatible chat endpoint. One provider can host multiple models; saving restarts the kernel. API keys are stored only in ~/.qingniaoai/settings.json on this machine.',
-  '拖动左侧手柄可调整顺序，这个顺序决定模型选择器里各提供商分组的先后。': 'Drag the handle to reorder; this order sets the provider groups in the model picker.',
   '还没有自定义提供商，点击右上角添加': 'No custom providers yet — add one from the top right',
   拖动调整顺序: 'Drag to reorder',
   '{n} 个模型': '{n} models',
@@ -1522,6 +1522,8 @@ const EN_SIDEBAR: Record<string, string> = {
     'Remove "{name}" from the project list? Local files and history are kept.',
   移除: 'Remove',
   '确定删除「{name}」吗？聊天记录将一并删除，不可恢复。': 'Delete "{name}"? The chat history is removed too and cannot be recovered.',
+  '删除会话失败：{msg}': 'Failed to delete session: {msg}',
+  '删除会话失败：内核还在重启，请稍后再试一次。': 'Failed to delete session: the kernel is still restarting, please try again shortly.',
   从列表移除: 'Remove from list',
   '移动端配对二维码': 'Mobile pairing QR code'
 }
