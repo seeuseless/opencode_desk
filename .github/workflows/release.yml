@@ -418,18 +418,53 @@ jobs:
             echo "✓ QingNiao-Setup-$ARCH.dmg 存在"
           done
 
-      - name: 上传 macOS 安装包到 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            client/dist/QingNiao-Setup-arm64.dmg
-            client/dist/QingNiao-Setup-x64.dmg
-          fail_on_unmatched_files: true
-          draft: false
-          prerelease: false
+      # ⚠️ 这里不用 softprops/action-gh-release，改用 gh CLI 逐文件上传 + 重试（2026-10-13 v1.7.25 踩坑）：
+      #   softprops 上传大附件（dmg ~150MB+）偶发 `Error: other side closed`——
+      #   uploads.github.com 传一半被对端断开，softprops 内部无重试，整个步骤直接红。
+      #   当次 x64.dmg 已传成功、arm64.dmg 挂掉，只能人工 Re-run。
+      #   gh release upload --clobber：同名附件先删后传（覆盖，不产生重复），
+      #   每个文件独立重试 5 次（指数退避 10s/20s/30s/40s/50s），单个文件失败不影响
+      #   已传成功的，重试只补缺的那个。文件缺失语义等价 fail_on_unmatched_files: true。
+      - name: 上传 macOS 安装包到 Release（逐文件重试）
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # Release 不存在时先建（tag 触发时 softprops 不再参与建 Release，兜住补跑场景）
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG 不存在，先创建"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes --title "$TAG"
+          fi
+          # 已存在的附件直接跳过（--clobber 只对真正要传的文件生效）：
+          # 补跑场景下，上次已传成功的文件不必再传一遍白耗时间、白担断流风险
+          EXISTING=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          for f in dist/QingNiao-Setup-arm64.dmg dist/QingNiao-Setup-x64.dmg; do
+            if [ ! -f "$f" ]; then
+              echo "::error::未找到 $f——检查 electron-builder.yml 的 mac.artifactName 是否带 \${arch}"
+              exit 1
+            fi
+            NAME=$(basename "$f")
+            if printf '%s\n' "$EXISTING" | grep -qx "$NAME"; then
+              echo "↷ 附件已存在，跳过：$NAME"
+              continue
+            fi
+            ok=0
+            for i in 1 2 3 4 5; do
+              if gh release upload "$TAG" "$f" --clobber --repo "$GITHUB_REPOSITORY"; then
+                echo "✓ 上传成功：$f"
+                ok=1
+                break
+              fi
+              echo "⚠ 第 $i/5 次上传失败：$f，${i}0s 后重试..."
+              sleep $((i * 10))
+            done
+            if [ "$ok" != 1 ]; then
+              echo "::error::重试 5 次仍失败：$f"
+              exit 1
+            fi
+          done
 
       - name: 列出产物
         shell: bash
