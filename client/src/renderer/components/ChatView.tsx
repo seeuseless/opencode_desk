@@ -7,12 +7,11 @@ import {
   Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isGoEndpoint, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isGoEndpoint, isKernelTransportError, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
 import { ModelPicker, type ModelGroup } from './ModelPicker'
-import { Toasts, type ToastItem } from './Toasts'
 import { AccessPicker, ProjectPicker } from './ProjectPicker'
 import { ThinkingPicker } from './ThinkingPicker'
 import { Modal } from './Modal'
@@ -208,47 +207,24 @@ interface TodoItem {
   priority?: string
 }
 
-/** 上游错误 → 一句人话（错误条展示，不 dump 原始 JSON） */
 /**
- * 把内核/端点抛的错误消息翻译成一眼能看懂的中文。
- * 已知模式 → 对应提示；**未知/空消息 → 返回空串**（调用方据此不显示错误条——
- * 宁可没提示，也不该用「未知错误」这种毫无信息量的占位糊弄人）。
+ * 上游错误原文（错误条直接展示）。
+ *
+ * **不翻译、不改写**（2026-10-14 用户定版：「上游错误是什么就输出什么，有错误是结束。让用户看到就行了。」）。
+ * 早先这里有一整套 humanizeError 关键词映射（限流/额度/TLS/中断… → 各一句中文建议），
+ * 现在全部删掉：那些改写会**丢掉上游原文里的关键信息**（错误码、端点返回的细节、
+ * request id），用户要复制给上游排查时只能复制到一句二手中文。
+ * 上游返回什么就显示什么，够短就全显示，很长才截断（免得撑爆布局）。
  */
 function humanizeError(raw: string): string {
   if (!raw) return ''
-  // 凭据类放最前：实测同一个「没填 Key」的 Go 端点会随机回两种文案——
-  // 带凭据要求时是 `Go requires a credential`，无凭据直接打某些模型时又回 `Model is unavailable.`
-  // （官方 Go 文档说「额度用完仍可用那几个免费模型」，但匿名调一律要 credential）。
-  // 两种文案根因都是同一个：**这个端点要先填 Key**。所以先把两者都收拢到这一条，
-  // 否则用户会照着「换个模型」去反复换，而真正该做的是填 Key。
-  if (/requires a credential|missing api key|credential|model is unavailable/i.test(raw))
-    return t('该提供商需要先在 设置 → 模型 里填写 API Key 才能用（此端点不支持免 Key 调用）。')
-  if (/insufficient[_ ]credit|quota|balance|arrears|exceeded your current/i.test(raw)) return t('账户额度不足或已欠费，请检查该提供商的余额。')
-  if (/invalid[_ ]api[_ ]key|incorrect api key|unauthorized|authentication/i.test(raw)) return t('API Key 无效或未通过认证，请到设置里检查该提供商的密钥。')
-  if (/rate[_ ]?limit|too many requests|429|速率限制|rate limit/i.test(raw)) return t('请求过于频繁，已被限流，请稍候片刻再试。')
-  if (/model[_ ]not[_ ]found|does not exist|unknown model|unsupported model|provider.{0,20}not found/i.test(raw)) return t('请求的模型在该端点不存在或不可用，请更换模型。')
-  // Bad Request：端点认为请求本身不合法（参数/模态不符），重试无用，提示换个模型或检查配置
-  if (/bad request/i.test(raw)) return t('模型端点拒绝了这次请求（Bad Request），通常是模型与任务类型不匹配，请更换模型。')
-  if (/unable to connect|cannot connect to api/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
-  // 视频/图像模型被当成对话模型用：端点直接拒掉 chat 请求（如 agnes-video-* 提示走 /v1/videos）
-  if (/\/v1\/videos|\/v1\/images|是\s*(video|image)\s*模型|(video|image) (?:generation )?model/i.test(raw))
-    return t('该模型是视频/图像生成模型，不能用于文字对话。请到 设置 → 模型 换用对话模型。')
-  if (/timeout|timed out|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(raw)) return t('无法连接模型端点，请检查 Base URL 与网络。')
-  // 实测高频断流根因：上游 TLS 证书校验失败（unknown certificate verification error）。
-  // 常见于代理/中间人拦截或系统证书过期，重试无意义，应提示用户更换模型或检查网络代理。
-  if (/certificate|self[- ]?signed|TLS|SSL|verify/i.test(raw)) return t('模型端点 TLS 证书校验失败（可能被代理拦截或证书过期），请检查网络代理或更换模型。')
-  if (/aborted|interrupt|mid[- ]stream|Unexpected end|ECONNRESET|socket hang up/i.test(raw)) return t('回复被中断（上游连接断开），内容可能不完整，可点重试继续。')
-  return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
+  return raw.length > 400 ? raw.slice(0, 400) + '…' : raw
 }
 
 /** 助手消息自带的失败原因：session.error 事件偶尔漏推，这是「这轮为什么空了」的唯一兜底展示 */
 function msgErrorText(m: MessageView): string {
   const e = (m.info as unknown as { error?: { name?: string; data?: { message?: string }; message?: string } }).error
   if (!e) return ''
-  // MessageAbortedError 以前被无条件静默，但这正是「AI 吐了半截就停」最常见的样子：
-  // 上游断流 / 生成被迫中止时内核统一标成 Aborted。用户手动停止走的是另一条路径
-  // （stopCurrent 已取消重试并打标），这里把原因显示出来，让「突然停住」不再无声无息。
-  if (e.name === 'MessageAbortedError') return t('任务被中止（可能是上游断流或请求被终止）')
   return humanizeError(e.data?.message ?? e.message ?? e.name ?? '')
 }
 
@@ -322,26 +298,16 @@ export function ChatView(p: Props) {
   // 执行中每秒跳一次表（只当刷新信号用）：已用时按本轮真实开始时间算，见 busySince
   const [, tick] = useState(0)
   const [error, setError] = useState('')
+  /**
+   * 内核是否就绪。**false 时只禁用输入，不显示任何提示**（2026-10-14 用户定版）。
+   *
+   * 内核冷启动要几秒、保存设置/切权限档位后还要重启几秒，这些窗口里任何请求都必然失败。
+   * 早先的做法是把 503「内核未启动」原样弹成红色错误条——用户原话「显示错误太垃圾了」：
+   * 它既不是用户的错、也不能靠用户做什么解决，几秒后自动就好了。所以只禁用输入，其余什么都不说。
+   */
+  const [kernelReady, setKernelReady] = useState(true)
   /** 中性提示（非失败）：如「已切到能看图的模型」，同样落在对话流末尾，可手动关掉 */
   const [notice, setNotice] = useState('')
-  /**
-   * 右上角浮层提示（见 components/Toasts）。
-   *
-   * 与对话流里的错误条是**互补**而非重复：
-   *   - 错误条：回合收尾后落在消息流里，用户翻上去能看到、能留存；
-   *   - toast：内核重试期间就弹（内核把失败只写日志，既不推 session.error 也不立刻写进消息，
-   *     实测自动重试 6 次、间隔递增、累计 1 分 39 秒——那段时间对话流里**什么都没有**，
-   *     用户只看到一个转圈，根本不知道出了什么事）。这个窗口只能靠 toast 补。
-   *
-   * 所以失败当下的第一手信息走 toast；回合收尾后错误条照旧补，两处口径一致（都用 humanizeError）。
-   */
-  const [toasts, setToasts] = useState<ToastItem[]>([])
-  const toastSeq = useRef(0)
-  /** 弹一条浮层提示（最多堆 5 条：再多就把最早的一条挤掉，失败风暴下别把屏幕糊满） */
-  function pushToast(kind: ToastItem['kind'], text: string, detail?: string) {
-    const id = ++toastSeq.current
-    setToasts((prev) => [...prev, { id, kind, text, detail }].slice(-5))
-  }
   /** 每个会话独立的任务队列：切走保留、切回还在，只消费当前视图会话的队列 */
   const [queues, setQueues] = useState<Record<string, string[]>>({})
   const curQueue = p.sessionId ? (queues[p.sessionId] ?? []) : []
@@ -871,6 +837,14 @@ export function ChatView(p: Props) {
   const halted = useRef<Set<string>>(new Set())
   /** 用户手动停止（点停止按钮）的会话：收尾对账不得自动续跑——他是亲手要停的 */
   const userStopped = useRef<Set<string>>(new Set())
+  /**
+   * 已收到内核流式失败（qingniao.stream.error）的会话。
+   *
+   * 存在的理由：这种失败**不写进助手消息**，所以轮询兜底的 `turnErrorOf` 在内核重试期间
+   * 判不出失败，只能等内核收尾（最长 1 分 39 秒）。记下来让轮询知道「这轮已经废了，
+   * 不用再等 session.idle」，超时直接收口。收口后即从集合移除。
+   */
+  const streamFailed = useRef<Set<string>>(new Set())
   /** onRefreshSessions 的最新引用（事件回调只注册一次，闭包里的 props 会过期） */
   const onRefreshRef = useRef(p.onRefreshSessions)
   onRefreshRef.current = p.onRefreshSessions
@@ -942,12 +916,15 @@ export function ChatView(p: Props) {
     try {
       await oc.revert(sid, dir, uid)
     } catch (e) {
-      const st = (e as Error & { status?: number }).status
-      // 502/503 主进程代抛传输层故障，内核可能仍在跑，交给状态收尾
-      if (st && st !== 502 && st !== 503) {
-        setError((t('撤回失败：') + (e instanceof Error ? e.message : String(e))).slice(0, 120))
+      // 502/503 主进程代抛传输层故障（内核没起来或仍在跑），不报错：
+      // 503 说明这轮根本不存在，直接把新文本退回输入框等内核就绪；502 则交给下面的重发兜底。
+      if (isKernelTransportError(e)) {
+   setKernelReady(false)
+        setInput((prev) => (prev.trim() ? prev : newText))
         return
       }
+    setError((t('撤回失败：') + (e instanceof Error ? e.message : String(e))).slice(0, 120))
+      return
     }
     // 撤回后历史已不含被编辑的那条（若有残留本地也剔除，避免新旧重复），再重发新文本
     try {
@@ -975,14 +952,16 @@ export function ChatView(p: Props) {
     userStopped.current.add(sid)
     // 记录停止时刻：之后到达的 running 工具快照若启动于停止之前，一律视为残骸不再续命
     userStopMarks.current.set(sid, Date.now())
+    // 用户亲手停了，这一轮的流式失败标记也作废（否则下一轮会被兜底误判成"上轮废了"）
+    streamFailed.current.delete(sid)
     markBusy(sid, false)
     delete busyDir.current[sid]
     // 只作废属于本会话的在途记录：别的会话那一条还活着，不能一起清
     if (inflight.current?.sid === sid) inflight.current = null
-    oc.abort(sid, dir).catch((e) => {
-      const st = (e as Error & { status?: number }).status
-      // 502/503 是主进程代抛的传输层故障（内核仍在跑），不代表停止没送到
-      if (!st || st === 502 || st === 503) return
+oc.abort(sid, dir).catch((e) => {
+      // 502/503 是主进程代抛的传输层故障（内核仍在跑，或正在重启），不代表停止没送到，
+      // 更不该弹成错误——用户点停止时看到「内核未启动」纯属倒垃圾（2026-10-14 用户定版）。
+      if (isKernelTransportError(e)) return
       const msg = e instanceof Error ? e.message : String(e)
       setError(t('停止失败：') + msg.slice(0, 120))
     })
@@ -1123,13 +1102,15 @@ export function ChatView(p: Props) {
         if (mine.length) setAsks(mine)
       })
       .catch(() => {})
-    oc.messages(p.sessionId, p.project?.path)
+oc.messages(p.sessionId, p.project?.path)
       .then((list) => {
-        if (!askAlive) return
-        setMsgs(hydrate(list, shown.current, texts.current))
-      })
+      if (!askAlive) return
+      setMsgs(hydrate(list, shown.current, texts.current))
+    })
       .catch((e) => {
-        if (askAlive) setError(e instanceof Error ? e.message : String(e))
+        // 内核没起来（502/503）不报错：切会话恰好撞上内核重启是常事，
+        // 弹一条「内核未启动」纯属噪音，输入框禁用着等它回来就行（kernelReady）。
+        if (askAlive && !isKernelTransportError(e)) setError(e instanceof Error ? e.message : String(e))
       })
     return () => {
       askAlive = false
@@ -1181,15 +1162,58 @@ export function ChatView(p: Props) {
   useEffect(() => {
     const off = window.qingniao.onEvent(async (raw) => {
       const e = raw as { type: string; properties: Record<string, unknown> }
-      if (e.type === 'qingniao.stream.error') {
+      if (e.type === 'qingniao.kernel.state') {
+        // 内核就绪状态变化（主进程 adapter 在 start/stop 时广播）。
+        // 只切输入框的禁用态，**不弹任何提示**——内核重启是后台的常规动作，用户不需要被打扰。
+        const pr = e.properties as { ready?: boolean }
+        const ready = pr.ready !== false
+        setKernelReady(ready)
+        if (ready) {
+          // 内核回来了：把「因为它不在」而作废的收尾状态清掉，
+          // 否则上一轮留下的 streamFailed 标记会让轮询兜底误判（见 streamFailed 注释）。
+          streamFailed.current.clear()
+        }
+        return
+      }
+if (e.type === 'qingniao.stream.error') {
         // 主进程 tail 内核日志转发的**流式失败**（见 electron/main/logtail.ts）。
-        // 这是内核自动重试期间唯一的信号：它既不推 session.error，也不会立刻把 error 写进
-        // 助手消息（实测重试 6 次、累计 1 分 39 秒才收口）。不弹的话用户只会看着「处理中」干等。
+        // 内核失败只写日志：既不推 session.error，也不会立刻把 error 写进助手消息，
+        // 而是按退避策略继续重试（实测最多 6 次、间隔递增、累计 1 分 39 秒）。
+        //
+        // 用户定版（2026-10-14）：**上游错误原文直接显示，有错误就结束**——
+        //   1. 原文写进对话流（setError → 红色错误条，落在 AI 回复末尾），不翻译不改写；
+        //   2. 立刻 abort 收掉这个回合，不让内核把 6 次重试跑完、也不让用户对着转圈干等。
+        //
+        // 走对话流而不是右上角浮层：错误是这一轮回复的一部分，
+        // 留在对话里能跟着会话一起被看到、复制、留存，浮层 9 秒就没了。
         const pr = e.properties as { sessionID?: string; message?: string; providerID?: string; modelID?: string }
         if (!pr.message) return
-        // 用户自己刚点过停止的会话不再提示：停止按钮本身就是反馈，再弹一个报错只会让人困惑
+        // 用户自己刚点过停止的会话不再提示：停止按钮本身就是反馈，再报一次错只会让人困惑
         if (pr.sessionID && userStopped.current.has(pr.sessionID)) return
-        pushToast('error', humanizeError(pr.message), pr.modelID ? pr.providerID + '/' + pr.modelID : undefined)
+        const text = humanizeError(pr.message)
+        const sid = pr.sessionID
+        if (!sid) {
+          // 拿不到会话（异常日志行）：没有可abort 的对象，只能显示
+          setError(text)
+          return
+        }
+        // **只要这一轮在跑就收口**，不区分是不是当前会话：
+        // 「有错误是结束」意味着不再等内核把重试队列跑完。早先只收当前会话，
+        // 切走的那些会话会在后台继续重试 1 分 39 秒（用户回来看见仍在转圈）。
+        if (busySetRef.current[sid]) {
+          markBusy(sid, false)
+          const dir = busyDir.current[sid] ?? (sid === sidRef.current ? dirRef.current : undefined)
+          delete busyDir.current[sid]
+          if (inflight.current?.sid === sid) inflight.current = null
+          // 记一笔：万一 abort 送不到、或 busy 被别的路径重置，轮询兜底还要能收口
+          streamFailed.current.add(sid)
+          oc.abort(sid, dir).catch(() => {
+            /* 传输层失败无所谓：busy 已清，界面不会卡在处理中 */
+          })
+        }
+        // 只往当前会话的错误条里写：切走的那条等用户切回去时由轮询兜底/收尾对账补上，
+        // 不往这儿的对话流里塞别的会话的错。
+        if (sid === sidRef.current) setError(text)
       } else if (e.type === 'session.busy') {
         // 手机发来的回合：busy 事实由 relay.markBusy 注入事件桥，这里立即认领/释放——
         // 不等内核出 delta（部分 provider 只发 heartbeat），让「处理中」/停止按钮即时亮起。
@@ -1314,6 +1338,8 @@ export function ChatView(p: Props) {
         if (!owned && idleSid !== sidRef.current) return
         // 处理中的会话空闲：无论用户是否切走都要清该会话的 busy（防切回时残留"正在思考"）
         markBusy(idleSid, false)
+        // 回合正常收尾：流式失败标记作废（这一轮既然走完了，之前那次失败不影响下一轮判定）
+        streamFailed.current.delete(idleSid)
         const isCurrent = idleSid === sidRef.current
         oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
           .then((list) => {
@@ -1379,8 +1405,11 @@ export function ChatView(p: Props) {
             .catch(() => {})
         }
       } else if (e.type === 'qingniao.kernel.unhealthy') {
-        // 主进程自动重启内核后，本地 busy 状态全部失效，做一次整体重同步
-        setError(t('内核连接异常，正在自动恢复…'))
+        // 主进程自动重启内核后，本地busy 状态全部失效，做一次整体重同步。
+        // **不弹错误条**（2026-10-14 用户定版）：内核已在自动重启、几秒后就回来，
+        // 「内核连接异常」这种红色错误条除了让人烦躁什么也没说；输入框会自己禁用（kernelReady）。
+        setKernelReady(false)
+        streamFailed.current.clear()
         for (const s of Object.keys(busySetRef.current)) markBusy(s, false)
         if (sidRef.current) {
           setTodos([])
@@ -1407,6 +1436,30 @@ export function ChatView(p: Props) {
       }
     })
     return off
+  }, [])
+
+  /**
+   * 内核就绪状态的初值 + 兜底轮询。
+   *
+   * 初值走 IPC 问一次（此刻内核通常已就绪，因为主进程是`await adapter.start()` 之后才建窗口）。
+   * 之后的变化全靠 `qingniao.kernel.state` 事件——但事件桥本身也可能丢（SSE 是另一条通道、
+   * 窗口重建时序等），所以额外挂一个**低频兜底**：只有「已知未就绪」时才每2s 探一次，
+   * 一就绪立刻停。已就绪时不轮询，零开销。
+   */
+  useEffect(() => {
+    let alive = true
+    void oc
+      .kernelReady()
+      .then((r) => { if (alive) setKernelReady(r) })
+      .catch(() => { /* 主进程不可达：保持默认可用，不阻塞界面 */ })
+    const t = window.setInterval(() => {
+      if (!alive) return
+      void oc
+        .kernelReady()
+        .then((r) => { if (alive) setKernelReady(r) })
+        .catch(() => { /* 探不到就当没就绪，下轮再试 */ })
+    }, 2000)
+    return () => { alive = false; clearInterval(t) }
   }, [])
 
   // 打字机心跳：每帧把未吐完的 text part 匀速推进
@@ -1614,6 +1667,8 @@ export function ChatView(p: Props) {
      * 把还在跑的回合提前清成空闲（实测 thinkphp 查询轮就踩了）。
      */
     let finishedStreak = 0
+    /** 流式失败后仍 busy 的连续轮数：≥3 轮（≥3.6s）判定这轮废了，见下方收口兜底 */
+    let streamFailStreak = 0
     const sync = async () => {
       if (!alive) return
       // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准。
@@ -1641,6 +1696,26 @@ export function ChatView(p: Props) {
           if (te?.message) {
             setError(te.message)
             markBusy(sid, false)
+            streamFailed.current.delete(sid)
+            streamFailStreak = 0
+          } else if (streamFailed.current.has(sid)) {
+            // **本轮已收到内核的流式失败，但消息里还没有 error**（这正是 stream error 的特征：
+            // 失败只写日志，内核要重试到耗尽才写进消息）。此时绝不能继续等 session.idle——
+            // 内核重试最多 6 次、累计 1 分 39 秒，而它在这期间**既不推事件也不写消息**，
+            // 界面上就只剩一个永远转圈的「处理中」。
+            //
+            // 给 3 轮（≥3.6s）宽限让正常收尾先发生：万一内核其实恢复了呢（它有重试机制）。
+            // 超过 3 轮还 busy → 判定这轮已经废了，收口 + 提示，不再让用户干等。
+            streamFailStreak++
+            if (streamFailStreak >= 3) {
+              streamFailStreak = 0
+              streamFailed.current.delete(sid)
+              markBusy(sid, false)
+            }
+          } else {
+            // 本轮没有流式失败（走上面 else 分支说明失败标记不在）——复位计数
+            streamFailStreak = 0
+            streamFailed.current.delete(sid)
           }
         }
         // 卡死看门狗：**正常结束**的回合如果 session.idle 事件漏收（SSE 断连），上面那个
@@ -1662,6 +1737,7 @@ export function ChatView(p: Props) {
             finishedStreak++
             if (finishedStreak >= 5) {
               finishedStreak = 0
+              streamFailed.current.delete(sid)
               markBusy(sid, false)
             }
           } else {
@@ -1874,6 +1950,12 @@ export function ChatView(p: Props) {
   async function send() {
     const text = input.trim()
     if (!text && !atts.length) return
+    // 内核没就绪：安静地不作为（输入框已禁用，这里只是防快捷键/粘贴等旁路）。
+// **不弹错误**——内核几秒后就起来了，报错纯属倒垃圾（2026-10-14 用户定版）。
+    if (!kernelReady) {
+      setKernelReady(false)
+      return
+    }
     const files = atts
     setNotice('') // 新的一轮先清掉上次的切换提示，避免旧提示赖在对话末尾
     // 自动预警：用户用文字要「生图/生视频」，但当前没配生图模型（工具根本不存在，再提示也真出不了图）。
@@ -1923,6 +2005,8 @@ export function ChatView(p: Props) {
       halted.current.delete(sid)
       toolFails.current.delete(sid)
       userStopped.current.delete(sid)
+      // 上一轮的流式失败标记同样作废：新回合不该继承上一轮的"已废"判定
+      streamFailed.current.delete(sid)
     }
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
@@ -1951,9 +2035,16 @@ export function ChatView(p: Props) {
         if (dailyMem) memText += '\n\n# 今日已做\n' + dailyMem
         // 必须 await：与正题 prompt 并发进内核队列时，loop 会在下一步捞到这条 noReply 消息
         // 并按内核默认模型生成一条答非所问的回复（历史事故：桌面控制中途冒出「我没有桌面工具」）
-        await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不影响正常对话 */ })
+await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不影响正常对话 */ })
         p.onDraftCreated(s)
       } catch (e) {
+        // 建会话撞上内核未启动（503）：不报错，把这句话退回输入框等内核就绪后重发。
+        // 内核几秒后就起来了，报「内核未启动」对用户毫无意义（2026-10-14 用户定版）。
+        if (isKernelTransportError(e)) {
+          setKernelReady(false)
+          setInput((prev) => (prev.trim() ? prev : text))
+          return
+        }
         setError(e instanceof Error ? e.message : String(e))
         return
       }
@@ -2085,10 +2176,23 @@ export function ChatView(p: Props) {
       await oc.prompt(sid, dir, text, modelOverride ?? parseModel(p.model), files, thinkRef.current)
     } catch (e) {
       const status = (e as Error & { status?: number }).status
-      // 502/503 是主进程代抛的传输层故障（内核还在跑），不代表任务结束：
-      // 任务继续执行任意时长都由事件流与轮询展示，session.idle / SSE 重连负责收尾。
+      if (status === 503) {
+        // **内核确定没起来**（主进程发现进程为 null 直接代抛）——请求压根没被接受，
+        // 这一轮不存在，所以必须把乐观气泡撤掉、清 busy、把原话退回输入框，
+        // 否则界面会永远卡在「处理中」（内核起来后也不会有 session.idle 来收尾）。
+        // 不弹错误条：用户原话「内核没启动不要在界面上显示错误，最多就是输入禁用」。
+        setKernelReady(false)
+        setMsgs((prev) => prev.filter((m) => m.info.id !== tmpId))
+        markBusy(sid, false)
+        delete busyDir.current[sid]
+        if (inflight.current?.sid === sid) inflight.current = null
+        setInput((prev) => (prev.trim() ? prev : text))
+        return
+      }
+      // 502 是连接层断开，内核**可能还在跑**这一轮：任务继续执行任意时长都由事件流与
+      // 轮询展示，session.idle / SSE 重连负责收尾，所以不当失败、也不清 busy。
       // 只有内核明确拒绝（如 4xx，请求未被接受）才当场报错收尾。
-      if (status && status !== 502 && status !== 503) {
+      if (status && status !== 502) {
         setError(e instanceof Error ? e.message : String(e))
         markBusy(sid, false)
       } else {
@@ -2147,7 +2251,11 @@ export function ChatView(p: Props) {
     replyingRef.current.add(req.id)
     setAsks((prev) => prev.filter((x) => x.id !== req.id))
     oc.replyQuestion(req.id, answers, dirRef.current)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => {
+        // 内核没起来时不报错（它在重启/冷启动），只把输入禁用起来等它回来
+     if (isKernelTransportError(e)) { setKernelReady(false); return }
+        setError(e instanceof Error ? e.message : String(e))
+      })
       .finally(() => replyingRef.current.delete(req.id))
   }
 
@@ -2243,9 +2351,6 @@ export function ChatView(p: Props) {
   return (
     <div className="chat-row">
     {dragShield && <div className="drag-shield" />}
-    {/* 浮层提示挂在 chat-row 下（position:fixed，不受对话区滚动影响）：内核重试期间的失败
-        在对话流里还什么都没有，只有这里能让用户第一时间知道「出事了，别干等」。 */}
-    <Toasts items={toasts} onClose={(id) => setToasts((prev) => prev.filter((x) => x.id !== id))} />
     <main
       ref={mainRef}
       className={'main' + (browserMax ? (floatOpen ? ' float' : ' hidden') : '')}
@@ -2546,19 +2651,22 @@ export function ChatView(p: Props) {
           用流内嵌而非绝对定位浮层——浮层会横向盖住下方、可能压到任务队列；
           这里在任务队列之后、输入框之前，消息流滚动不影响它（.msgs 是独立滚动区）。 */}
       <div className="topnotify" />
-      <div className="cwrap" ref={cwrapRef}>
+<div className="cwrap" ref={cwrapRef}>
         <div className="cbox col">
           <textarea
             ref={taRef}
             className="ctext"
-            value={input}
-            rows={2}
+      value={input}
+rows={2}
+            // 内核没就绪时输入禁用（2026-10-14 用户定版：宁可禁用输入也不弹错误条、不加提示文案）。
+            // readOnly 而不是 disabled：内容还能看见/选中复制，样式也不会整体变灰。
+            readOnly={!kernelReady}
             placeholder={
               busy
-                ? t('当前任务执行中，输入新需求可加入队列')
-                : panelUrl && panelOpen
-                  ? t('针对当前浏览器页面提问，AI 会直接操作这个浏览器')
-                  : t('Enter 发送 / Shift+Enter 换行')
+        ? t('当前任务执行中，输入新需求可加入队列')
+    : panelUrl && panelOpen
+          ? t('针对当前浏览器页面提问，AI 会直接操作这个浏览器')
+     : t('Enter 发送 / Shift+Enter 换行')
             }
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {              // Ctrl+Z 回看已发送消息（草稿先存，前进时恢复）；Ctrl+Y / Ctrl+Shift+Z 前进
@@ -2577,9 +2685,9 @@ export function ChatView(p: Props) {
                 setInput(histPos.current === hist.current.length ? draftRef.current : hist.current[histPos.current])
                 return
               }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send()
+if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    send()
               }
             }}
           />
@@ -2604,18 +2712,18 @@ export function ChatView(p: Props) {
             </div>
           )}
           <div className="crow">
-            <button
-              className="icon-btn"
-              title={
-                busy
-                  ? t('处理中不能上传附件')
-                  : t('上传图片、视频或音频（图片配合生图模型可图生图；音频可让 AI 转文字）')
-              }
-              disabled={busy}
-              onClick={() => void pickAtt()}
-            >
-              <Paperclip size={14} />
-            </button>
+<button
+  className="icon-btn"
+      title={
+   busy
+          ? t('处理中不能上传附件')
+          : t('上传图片、视频或音频（图片配合生图模型可图生图；音频可让 AI 转文字）')
+      }
+   disabled={busy || !kernelReady}
+   onClick={() => void pickAtt()}
+      >
+   <Paperclip size={14} />
+      </button>
             {!p.codeMode && (
               <>
                 <ProjectPicker
@@ -2688,16 +2796,21 @@ export function ChatView(p: Props) {
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}
-            {/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */}
-            {busy ? (
-              <button className="send-round stop" title={t('停止当前任务，队列任务自动接续')} onClick={() => void stopCurrent()}>
-                <Square size={15} fill="currentColor" strokeWidth={0} />
-              </button>
-            ) : (
-              <button className="send-round" disabled={!input.trim() && !atts.length} onClick={send} title={t('发送')}>
-                <Send size={15} />
-              </button>
-            )}
+/* 只有本会话在跑才显示停止：别的会话是用户另开的并行任务，不该被这里的按钮掐掉 */
+       {busy ? (
+    <button className="send-round stop" title={t('停止当前任务，队列任务自动接续')} onClick={() => void stopCurrent()}>
+            <Square size={15} fill="currentColor" strokeWidth={0} />
+       </button>
+       ) : (
+<button
+              className="send-round"
+              disabled={!kernelReady || (!input.trim() && !atts.length)}
+              onClick={send}
+   title={t('发送')}
+        >
+              <Send size={15} />
+    </button>
+      )}
           </div>
         </div>
       </div>

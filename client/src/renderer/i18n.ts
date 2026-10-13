@@ -53,9 +53,6 @@ const TW_APP: Record<string, string> = {
 }
 
 const TW_CHAT: Record<string, string> = {
-  '账户额度不足或已欠费，请检查该提供商的余额。': '帳戶額度不足或已欠費，請檢查該供應商的餘額。',
-  'API Key 无效或未通过认证，请到设置里检查该提供商的密钥。': 'API Key 無效或未通過驗證，請到設定裡檢查該供應商的密鑰。',
-  '请求过于频繁，已被限流，请稍候片刻再试。': '請求過於頻繁，已被限流，請稍候片刻再試。',
   '请求的模型在该端点不存在或不可用，请更换模型。': '請求的模型在該端點不存在或不可用，請更換模型。',
   '该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。':
     '該模型是圖像生成模型，只能收生圖請求、不能對話，文字任務發給它都會失敗。請到 設定 → 模型 換用對話模型。',
@@ -68,7 +65,6 @@ const TW_CHAT: Record<string, string> = {
   找不到可重试的内容: '找不到可重試的內容',
   '撤回失败：': '撤回失敗：',
   '停止失败：': '停止失敗：',
-  '内核连接异常，正在自动恢复…': '核心連線異常，正在自動恢復…',
   '网络已断开，任务自动暂停，恢复后自动执行。': '網路已斷線，任務自動暫停，恢復後自動執行。',
   '当前模型只能生成、不能对话，已切到「{name}」；出图、出片、配音都由对应工具完成。':
     '當前模型只能生成、不能對話，已切到「{name}」；出圖、出片、配音都由對應工具完成。',
@@ -124,9 +120,7 @@ const TW_CHAT: Record<string, string> = {
   '任务已中断，自动重试已完成（{n}/10）。': '任務已中斷，自動重試已完成（{n}/10）。',
   立即重试: '立即重試',
   '自动重试 {n} 次仍未成功，请稍后手动重试。': '自動重試 {n} 次仍未成功，請稍後手動重試。',
-  '回复被中断（上游连接断开），内容可能不完整，可点重试继续。': '回覆被中斷（上游連線斷開），內容可能不完整，可點重試繼續。',
   '模型端点 TLS 证书校验失败（可能被代理拦截或证书过期），请检查网络代理或更换模型。': '模型端點 TLS 憑證校驗失敗（可能被代理攔截或憑證過期），請檢查網路代理或更換模型。',
-  '任务被中止（可能是上游断流或请求被终止）': '任務被中止（可能是上游斷流或請求被終止）',
   '停止该服务进程': '停止該服務程序',
   本地服务: '本機服務',
   '在浏览器打开': '在瀏覽器開啟',
@@ -276,7 +270,6 @@ const TW_COMPONENTS: Record<string, string> = {
   限免: '限免',
   折扣: '折扣',
   opencode限免: 'opencode 限免',
-  '该提供商需要先在 设置 → 模型 里填写 API Key 才能用（此端点不支持免 Key 调用）。': '該提供商需要先在 設定 → 模型 裡填寫 API Key 才能用（此端點不支援免 Key 呼叫）。',
   '该模型在当前端点不存在或已下线，请换一个模型（可能是模型改名或端点不支持）。': '該模型在當前端點不存在或已下線，請換一個模型（可能是模型改名或端點不支援）。',
   '该模型是视频/图像生成模型，不能用于文字对话。请到 设置 → 模型 换用对话模型。': '該模型是影片/圖像生成模型，不能用於文字對話。請到 設定 → 模型 換用對話模型。',
   '模型端点拒绝了这次请求（Bad Request），通常是模型与任务类型不匹配，请更换模型。': '模型端點拒絕了這次請求（Bad Request），通常是模型與任務類型不匹配，請更換模型。',
@@ -837,9 +830,6 @@ const EN_APP: Record<string, string> = {
 }
 
 const EN_CHAT: Record<string, string> = {
-  '账户额度不足或已欠费，请检查该提供商的余额。': 'The account is out of credit or in arrears. Check the provider balance.',
-  'API Key 无效或未通过认证，请到设置里检查该提供商的密钥。': 'The API Key is invalid or failed authentication. Check the provider key in Settings.',
-  '请求过于频繁，已被限流，请稍候片刻再试。': 'Too many requests — rate limited. Wait a moment and try again.',
   '请求的模型在该端点不存在或不可用，请更换模型。': 'The requested model does not exist or is unavailable on this endpoint. Try another model.',
   '该模型是图像生成模型，只能收生图请求、不能对话，文字任务发给它都会失败。请到 设置 → 模型 换用对话模型。':
     'This is an image-generation model: it only accepts image requests and cannot chat, so text tasks will always fail. Switch to a chat model in Settings → Models.',
@@ -852,7 +842,6 @@ const EN_CHAT: Record<string, string> = {
   找不到可重试的内容: 'Nothing to retry',
   '撤回失败：': 'Revert failed: ',
   '停止失败：': 'Stop failed: ',
-  '内核连接异常，正在自动恢复…': 'Kernel connection error — recovering automatically…',
   '网络已断开，任务自动暂停，恢复后自动执行。': 'Network lost — the task was paused and will resume automatically once you are back online.',
   '当前模型只能生成、不能对话，已切到「{name}」；出图、出片、配音都由对应工具完成。':
     'The current model can only generate, not chat — switched to "{name}". Image, video and voice output are handled by the matching tools.',
@@ -908,9 +897,7 @@ const EN_CHAT: Record<string, string> = {
   '任务已中断，自动重试已完成（{n}/10）。': 'Task interrupted — auto-retry finished ({n}/10).',
   立即重试: 'Retry now',
   '自动重试 {n} 次仍未成功，请稍后手动重试。': 'Auto-retried {n} times without success. Please retry manually later.',
-  '回复被中断（上游连接断开），内容可能不完整，可点重试继续。': 'The reply was interrupted (upstream connection lost). Content may be incomplete — click retry to continue.',
   '模型端点 TLS 证书校验失败（可能被代理拦截或证书过期），请检查网络代理或更换模型。': 'TLS certificate verification failed for the model endpoint (proxy interception or expired certificate). Check your network proxy or switch models.',
-  '任务被中止（可能是上游断流或请求被终止）': 'Task aborted (upstream stream break or request terminated)',
   '停止该服务进程': 'Stop this service process',
   本地服务: 'Local services',
   '在浏览器打开': 'Open in browser',
@@ -1060,7 +1047,6 @@ const EN_COMPONENTS: Record<string, string> = {
   限免: 'Free',
   折扣: 'Sale',
   opencode限免: 'OpenCode Free Tier',
-  '该提供商需要先在 设置 → 模型 里填写 API Key 才能用（此端点不支持免 Key 调用）。': 'This provider needs an API key first — fill it in Settings → Models (this endpoint does not support keyless calls).',
   '该模型在当前端点不存在或已下线，请换一个模型（可能是模型改名或端点不支持）。': 'This model does not exist on the current endpoint or has been retired. Pick another one (it may have been renamed, or the endpoint may not support it).',
   '该模型是视频/图像生成模型，不能用于文字对话。请到 设置 → 模型 换用对话模型。': 'This is a video/image generation model and cannot handle text chat. Switch to a chat model in Settings → Models.',
   '模型端点拒绝了这次请求（Bad Request），通常是模型与任务类型不匹配，请更换模型。': 'The model endpoint rejected this request (Bad Request) — the model usually does not match the task type. Try another model.',

@@ -46,6 +46,14 @@ const api = {
   getSettings: (): Promise<Settings> => ipcRenderer.invoke('settings:get'),
   /** 内核健康探测（主进程 isHealthy；渲染层停止按钮的兜底判断用） */
   kernelHealth: (): Promise<boolean> => ipcRenderer.invoke('kernel:health'),
+  /**
+   * 内核是否已就绪（进程在 + /global/health 通）。
+   *
+   * 界面据此**禁用输入框**而不是报错：内核冷启动 / 重启只要几秒，那段时间发消息必然失败，
+   * 弹一条「内核未启动」纯属噪音（用户原话：「显示错误太垃圾了。最多就是输入禁用」）。
+   * 状态变化由 `qingniao.kernel.state` 事件推送，这个只用于首屏取一次初值。
+   */
+  kernelReady: (): Promise<boolean> => ipcRenderer.invoke('kernel:ready'),
   /** 第三方依赖清单（设置 → 依赖）：包名 + 真实版本号 + 真实协议，来自 package.json 与已安装的包 */
   depsList: (): Promise<DepItem[]> => ipcRenderer.invoke('deps:list'),
   saveSettings: (s: Settings): Promise<void> => ipcRenderer.invoke('settings:save', s),

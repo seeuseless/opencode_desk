@@ -980,8 +980,18 @@ function dataMcpPath(): string {
 
 ipcMain.handle('settings:get', () => loadSettings())
 
-/** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核 REST） */
+/** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核REST） */
 ipcMain.handle('kernel:health', () => adapter.isHealthy())
+
+/**
+ * 内核是否已就绪（进程在 + /global/health 已通）。
+ *
+ * 渲染层拿它决定**输入框要不要禁用**：内核冷启动 / 设置保存后重启都要几秒，
+ * 这段时间任何请求都会拿到 503「内核未启动」。用户的要求是「不要在界面上显示错误，
+ * 最多就是输入禁用」——所以这里只暴露一个布尔状态，让界面安静地等内核起来。
+ * 状态变化另有 `qingniao.kernel.state` 事件推送，不必轮询。
+ */
+ipcMain.handle('kernel:ready', () => adapter.isReady)
 
 // 保存即生效：写 ~/.qingniaoai 并重启内核（provider/MCP 变更后需重载）。
 // 重启**后台进行、不 await**（2026-09-24 用户反馈：弹窗要陪内核重启走完才关，太慢）——

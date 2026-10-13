@@ -97,6 +97,33 @@ class Adapter {
   }
   bin = ''
   workspace = ''
+  /**
+   * 内核是否已就绪（进程在 + /global/health 已通）。
+   *
+   * 渲染层拿它做两件事，**都不是为了「 nicer报错」**：
+   *   1. 没就绪时把输入框禁用——内核冷启动/重启只要几秒，这段时间根本发不出去；
+   *   2. 没就绪期间的 502/503 一律不当错误展示（见 index.ts 的注释）。
+   * 用户原话：「内核没启动不要在界面上显示错误，因为内核一会就启动好了，显示错误太垃圾了。最多就是输入禁用。」
+   */
+  private ready = false
+
+  /** 内核就绪状态（true = /global/health 已通） */
+  get isReady(): boolean {
+    return this.ready
+  }
+
+  /**
+   * 就绪状态变化时广播 `qingniao.kernel.state`。
+   *
+   * 为什么必须有这条事件：`restart()`（保存设置、切换权限档位后触发）会先把内核 stop 掉再起，
+   * 期间进程是 null，但**不会**触发 onUnhealthy——渲染层因此完全不知道内核正在重启，
+   * 用户会在这几秒里撞上 503「内核未启动」并看到一条毫无意义的红色错误条。
+   */
+  private setReady(v: boolean): void {
+    if (this.ready === v) return
+    this.ready = v
+    this.safePush({ type: 'qingniao.kernel.state', properties: { ready: v } })
+  }
 
   /** 内核 REST 基地址（如 http://127.0.0.1:39421）。桌面移动端服务反代要用；未启动时为空串 */
   get baseUrl(): string {
@@ -126,6 +153,7 @@ class Adapter {
     // 应用已退出（shutdown）：拒绝任何（重）启动，防孤儿内核——见 quitting 注释
     if (this.quitting) return
     this.stopping = false
+    this.ready = false
     mkdirSync(qingniaoHome(), { recursive: true })
     mkdirSync(opencodeDataDir(), { recursive: true })
     mkdirSync(opencodeStateDir(), { recursive: true })
@@ -181,6 +209,7 @@ class Adapter {
     })
     this.logTail.start()
     // 内核（重）启动成功：渲染层据此清理重启前的残留 busy/running 状态（任务为内存态，重启即失效）
+    this.setReady(true)
     this.safePush({ type: 'qingniao.kernel.started', properties: {} })
   }
 
@@ -278,6 +307,9 @@ class Adapter {
 
   stop(): void {
     this.stopping = true
+    // 重启一开始就是「未就绪」，必须立刻广播：否则渲染层不知道内核正在重启，
+    // 用户会在这几秒里撞上 503 并看到一条「内核未启动」的红色错误条（用户明确要求不要）。
+    this.setReady(false)
     this.sseAbort?.abort()
     this.sseAbort = null
     // 日志 tail 也要停：否则定时器还活着、内核都退了还在读文件（且 stop→start 轮换时会积出多个 tail）

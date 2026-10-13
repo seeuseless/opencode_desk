@@ -49,8 +49,16 @@ export interface StreamErrorInfo {
  * 引号内的值可能带**转义引号**（`\"`）——实测见过 error.error="All providers for model \"x\" …" 这种，
  * 用 `"[^"]*"` 会截在第一个转义引号处，拿到半句垃圾文案。逐字符扫并识别 `\X` 转义才拿得全。
  * 无引号的裸值扫到空白为止。
+ *
+ * **key 传字面量**（`'session.id'` / `'error.error'`），不是正则：
+ * 本函数内部走的是 `indexOf(key + '=')` 字面查找，早先误传了正则风格的 `'session\\.id'`，
+ * 于是它找的是含反斜杠的 `session\.id=`，而内核日志里是 `session.id=` —— **永远匹配不上**，
+ * handle() 第一行就 `return`，整条失败被丢掉（2026-10-14 实测：日志里明确有
+ * `message="stream error" … error.error="…Rate limit exceeded…"`，界面却什么都不显示）。
  */
 function field(line: string, key: string): string | undefined {
+  // 兼容误传的正则风格键名：去掉反斜杠转义再找，避免同一个坑再踩一次
+  key = key.replace(/\\(.)/g, '$1')
   const at = line.indexOf(key + '=')
   if (at < 0) return undefined
   // 键名左边必须是行首或空白，避免 `xsession.id=` 之类误命中
@@ -88,6 +96,10 @@ export class KernelLogTail {
   private watcher: FSWatcher | null = null
   private timer: NodeJS.Timeout | null = null
   private stopped = false
+  /** 当前监听的文件路径：内核可能换文件名（opencode.log ↔ opencode-1.log），变了要重挂 watch */
+  private watching: string | null = null
+  /** 是否已完成过首次定位（决定下次遇到文件时是从末尾起步还是从头读） */
+  private positioned = false
   /** 去重指纹：同一回合的同一错误只提示一次（内核重试 6 次不该弹 6 个 toast） */
   private readonly seen = new Set<string>()
   /** 指纹上限：超出就清空重来（长期运行的进程不能无限涨） */
@@ -97,16 +109,13 @@ export class KernelLogTail {
 
   start(): void {
     this.stopped = false
-    const file = logFile()
-    if (!file) return
-    try {
-      this.watcher = watch(file, () => this.pump())
-    } catch {
-      // 监听失败（文件被短暂锁住等）：退回纯定时轮询，仍能工作
-      this.watcher = null
-    }
     // 兜底定时器：watch 在部分 Windows 场景下会漏事件（网络盘/杀软拦截），
     // 1.2s 一跳与渲染层轮询同频，保证最坏情况也只迟 1.2s。
+    //
+    // **定时器无条件启动、绝不因为「暂时找不到日志文件」而放弃**（2026-10-13 实测踩过）：
+    // 内核刚 spawn 时 opencode.log 可能还没被创建/重写，那一刻 logFile() 返回 null。
+    // 早先的实现直接 `if (!file) return`，于是 tail 永远不起来——日志里明明有 stream error，
+    // 界面却什么都不显示（用户看到的现象就是「发消息一直处理中、没有报错」）。
     this.timer = setInterval(() => this.pump(), 1200)
     this.pump()
   }
@@ -115,6 +124,7 @@ export class KernelLogTail {
     this.stopped = true
     this.watcher?.close()
     this.watcher = null
+    this.watching = null
     if (this.timer) clearInterval(this.timer)
     this.timer = null
   }
@@ -123,11 +133,32 @@ export class KernelLogTail {
   private pump(): void {
     if (this.stopped) return
     const file = logFile()
+    // 文件还没出现（内核刚起、日志尚未创建）：**这一轮跳过，下一轮再试**——
+    // 定时器是无条件常驻的，所以「暂时没有」不会再变成「永远不起」（这正是原实现踩的坑）。
     if (!file) return
+    // 路径变了（opencode.log ↔ opencode-1.log，内核轮转日志）：重挂 watch 并重置偏移
+    if (file !== this.watching) {
+      this.watching = file
+      this.carry = ''
+      try {
+        this.watcher?.close()
+        this.watcher = watch(file, () => this.pump())
+      } catch {
+        this.watcher = null // 挂不上就纯靠定时器，功能不受影响
+      }
+    }
     let size: number
     try {
       size = statSync(file).size
     } catch {
+      return
+    }
+    if (!this.positioned) {
+      // **首次定位从文件末尾起步**：日志里堆着历次运行的记录（本机实测已 8.9MB / 220+ 条 stream error），
+      // 从头读会在启动瞬间把一堆陈年错误全弹成提示，用户看到的是"刚开 app 就一屏报错"。
+      // 我们只关心**从现在起**新发生的失败。
+      this.positioned = true
+      this.pos = size
       return
     }
     // 内核重启 → 日志被截断重写：偏移越界，回到文件头
@@ -163,14 +194,16 @@ export class KernelLogTail {
   /** 单行分派：只认内核的流式失败行 */
   private handle(line: string): void {
     if (!line || !line.includes('message="stream error"')) return
-    const sessionID = field(line, 'session\\.id')
+    const sessionID = field(line, 'session.id')
     if (!sessionID) return
-    // 错误文案在 error.error="…" 里（可能含空格，必须取引号内整段）
-    const raw = field(line, 'error\\.error') ?? ''
-    const message = raw.replace(/^[A-Za-z_]*Error:\s*/, '').trim()
+    // 错误文案在 error.error="…" 里（可能含空格，必须取引号内整段）。
+    // **原文直出不剥前缀**（2026-10-14 用户定版：「上游错误是什么就输出什么」）：
+    // 早先会 replace(/^[A-Za-z_]*Error:\s*/) 把 `AI_APICallError:` 这类包装名削掉，
+    // 那正是上游给的错误标识，删了用户就没法拿去搜/去问上游。
+    const message = (field(line, 'error.error') ?? '').trim()
     if (!message) return
 
-    // 去重：同一回合同一错误只提示一次（重试风暴不刷屏）
+    // 去重：同一回合同一错误只推一次（重试风暴不刷屏）
     const key = sessionID + '|' + message.slice(0, 120)
     if (this.seen.has(key)) return
     if (this.seen.size > KernelLogTail.SEEN_MAX) this.seen.clear()
@@ -178,7 +211,7 @@ export class KernelLogTail {
 
     this.onError({
       sessionID,
-      message: message.length > 300 ? message.slice(0, 300) + '…' : message,
+      message: message.length > 500 ? message.slice(0, 500) + '…' : message,
       providerID: field(line, 'providerID'),
       modelID: field(line, 'modelID')
     })

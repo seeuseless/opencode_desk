@@ -75,6 +75,39 @@
   带 Key 走自己的额度。`providerEnv()` 刻意不给 `qn-zen` 注入 `QN_KEY_QN_ZEN`（免 KEY 匿名通道），要自带配额得用户手填。
 - **手写 curl 验 provider 可用性**：必须带 `x-opencode-session: <任意串>` 头，否则一律返回
   `MissingSessionID`（会误判成 Key 失效）；带上后才显形真实错误。先 `GET {baseURL}/models` 看清单里有没有这个 id。
+- **`logtail.ts` 的 `field()` 键名只能是字面量，绝不能写正则转义**（2026-10-14 踩过）：
+  `field()` 内部是 `line.indexOf(key + '=')`，传 `'session\\.id'` 会去找含反斜杠的 `session\.id=`，
+  而内核日志写的是 `session.id=` → 返回 undefined → `handle()` 第一行 `if (!sessionID) return`
+  把**每一条** stream error 都丢掉（当时日志里 223 条，界面一条都没显示）。
+  现已在 `field()` 开头加 `key.replace(/\\(.)/g,'$1')` 兜底，但新代码仍应直接写字面量。
+  凡是用 `indexOf`/`startsWith` 的手写扫描器，参数就不是正则。
+## 内核就绪态与错误展示口径（2026-10-14 用户定版，最新版）
+- **上游错误原文直出，一字不改**（用户原话：「上游错误是什么就输出什么，有错误是结束。让用户看到就行了。」）。
+  - `humanizeError()` **已删掉全部 12 条正则翻译映射**，现在只剩「原样返回 + 400 字截断」。
+    那些改写会**丢掉上游原文里的关键信息**（错误码、端点返回细节、request id），
+    用户复制去搜/去问上游时只能拿到一句二手中文。
+  - `logtail.handle()` 里的 `replace(/^[A-Za-z_]*Error:\s*/, '')` 同样删了——
+    `AI_APICallError:` 这类包装名正是上游给的东西，削掉就没法搜。
+  - `.msgerr span` 用 `white-space: pre-wrap`：上游原文常含换行/缩进（JSON 报错报文），要保留排版。
+  - 空消息仍返回空串（不显示错误条），**不要填「未知错误」这种占位**。
+  - **删翻译时必须同步清 i18n.ts 的死条目**（本轮清掉 7 条 × 繁英 = 14 行）。
+- **「有错误是结束」=收到 stream error 立刻 abort，不等内核把重试跑完**：
+  只要该 sid 在 busySet 里就 `markBusy(false)` + `abort()`，**不限是不是当前会话**
+  （早先只收当前会话，切走的那些会在后台继续重试 1 分 39 秒，用户切回来还在转圈）。
+  但错误文本**只写进当前会话的对话流**，不往这儿塞别的会话的错。
+- **内核没起来时绝不弹错误，最多禁用输入**（用户原话：「显示错误太垃圾了。最多就是输入禁用。」）。
+  内核冷启动/重启只要几秒，弹「内核未启动」既不是用户的错、也不能靠用户解决。
+  - **保留机制、砍掉文案**：`kernelReady` 状态机（adapter.setReady / `kernel:ready` IPC / 2s 兜底轮询）
+    只是驱动 textarea `readOnly` 的布尔值，用户看不见；
+    **不要加「内核正在启动，请稍候…」这类 placeholder / title 文案**——用户嫌多余、要求「不要废话」。
+  - `adapter.setReady()` 必须在 `restart()` 期间也广播：原来只有 onUnhealthy 推事件，
+    保存设置触发的重启渲染层完全不知道，用户会撞上 503看到红字。
+- **502 与 503 必须分开处理**（原来混为一谈，是个真坑）：
+  - 503 = 主进程确认内核进程为 null，请求**压根没被接受**，这一轮不存在 →
+    必须撤乐观气泡 + `markBusy(false)` + 原话退回输入框。否则界面**永远卡在「处理中」**
+    （内核起来后也不会有 session.idle 来收尾，因为压根没有这一轮）。
+  - 502 = 连接层断开，内核**可能还在跑** → 保持 `transportLost`，不当失败、不清 busy，等事件流收尾。
+  判定统一走 `oc.ts` 的 `isKernelTransportError(e)`。
 ## 本机启动桌面（2026-10-13 复盘，定版启动命令）
 - **第一步永远是查环境变量残留**：`echo $ELECTRON_RUN_AS_NODE`。本 shell 长期带 `ELECTRON_RUN_AS_NODE=1`，
   Electron 被当纯 Node 跑，报 `does not provide an export named 'BrowserWindow'`——
@@ -99,17 +132,21 @@
 - 空值显示文案用 `未选择模型`（不是「自动」——那一刻并没有自动挑选这回事）。
 - `resolveChatModel` 的 `i <= 0` 分支保留兜底：新流程走不到，但「切回会话即发消息」可能抢在校正之前触发。
 
-## 失败提示链路（2026-10-13 定版：重试期间必须让用户看到）
+## 失败提示链路（2026-10-13 定版，2026-10-14 修订）
 - **内核失败只写日志**（`opencode.log` 的 `message="stream error"`），**既不推 session.error、也不立刻写进助手消息**，
   而是自动重试 6 次（间隔 2/4/9/17/37s 递增，**累计 1 分 39 秒**）。这段时间对话流里什么都没有，
   用户只看到转圈——**轮询兜底救不了**（那 1 分 39 秒消息里确实没有 error）。
-- 方案：`electron/main/logtail.ts` 按字节偏移 tail 日志 → `qingniao.stream.error` 事件 → 渲染层 toast。
+- 方案：`electron/main/logtail.ts` 按字节偏移 tail 日志 → `qingniao.stream.error` 事件 → 渲染层**对话流错误条**。
   - **只取 `stream error`、绝不取 `process … error=`**（后者回合对账已兜住，取了会弹两遍）。
   - 同一回合同一错误**只推一次**（内核重试 6 次不该弹 6 个）。
   - 内核重启日志**被截断重写** → `size < pos` 归零重来；start() 重建、stop() 关闭（否则 stop→start 轮换会积多个 tail）。
-  - 浮层组件 `components/Toasts.tsx`（右上角 fixed，错误 9s / info 4s / ok 3s，悬停暂停倒计时）。
-- **诊断口诀：三个文案对应三个病因，别混查**
-  | 文案 | 病因 |
+  - **2026-10-14：右上角浮层 `components/Toasts.tsx` 已删除**，错误改回落在对话流末尾
+    （用户定版：错误是这一轮回复的一部分，要能跟着会话被看到/复制/留存，浮层 9 秒就没了）。
+  - **2026-10-14 踩过的坑：`field()` 的键名传了正则风格**（`'session\\.id'`）而内部是字面查找，
+    导致 223 条 stream error **一条都没到界面**。详见上文「logtail.ts 的 field() 键名只能是字面量」。
+- **诊断口诀：三个文案对应三个病因，别混查**（下面是**日志/上游原文**，
+  界面显示的就是这些原文，翻译已删，所以对着日志原文查即可）
+  | 原文 | 病因 |
   |---|---|
   | `Go requires a credential` | Go 端点没填 Key |
   | `Model is unavailable.`（Go 端点） | **也是没填 Key**——见下 |
@@ -118,8 +155,9 @@
 - **Go 端点的 `Model is unavailable.` 是个陷阱（实测）**：`step-5-preview-free` /
   `longcat-2.5-preview-free` / `cat-jam-free` 这三个 id 在 Go 的 /models 里**确实存在**，
   匿名调却是 `Go requires a credential`；而不存在的 id（如 `space-bunny-free`），无凭据时上游回的却是
-  `Model is unavailable.`。**两者根因同一个：没填 Key**。所以 `humanizeError` 的凭据规则要
-  **同时匹配两者且排在最前**，否则用户会照着「换个模型」反复换，真正该做的却是填 Key。
+  `Model is unavailable.`。**两者根因同一个：没填 Key**。
+  （注：原`humanizeError` 里那条「把两者收拢到同一句中文」的规则随翻译一起删了，
+  现在界面原样显示 `Model is unavailable.`，排查时按上面这张表对照。）
 - **日志解析的坑**：`error.error="All providers for model \"x\" are busy"` —— 引号值里**含转义引号**。
   用正则 `"[^"]*"` 会截在第一个转义引号处拿半句垃圾。`logtail.ts` 的 `field()` 逐字符扫 + 识别 `\X` 转义。
 - `server unavailable key=office` 是**无害噪音**，每个 session 都有一条，与任何卡死/报错无关，别顺着它查。

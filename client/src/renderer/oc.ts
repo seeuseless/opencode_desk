@@ -393,6 +393,21 @@ export interface PtySession {
 /** 多项目：所有会话类接口都带 directory 参数，同一内核实例按项目隔离 */
 const dirQ = (directory?: string) => (directory ? `?directory=${encodeURIComponent(directory)}` : '')
 
+/**
+ * 这个错误是不是「内核没起来」造成的（而不是真的请求失败）？
+ *
+ * 502 / 503 两种：503 是主进程发现内核进程为null（冷启动中/ 重启中）直接代抛的，
+ * 502 是 fetch 连不上（内核进程刚死、端口还没释放）。
+ *
+ * **这两种一律不许显示成错误**（2026-10-14 用户定版）：内核几秒后就起来了，
+ * 界面上弹一条「内核未启动 / 内核连接中断」除了让人烦躁没有任何信息量。
+ * 正确做法是那几秒把输入框禁用（见 ChatView 的 kernelReady），等它起来自己恢复。
+ */
+export function isKernelTransportError(e: unknown): boolean {
+  const st = (e as { status?: number } | null)?.status
+  return st === 502 || st === 503
+}
+
 export const oc = {
   /** 项目会话列表：**过滤掉 AI 派生的子会话**（task 工具 / 子 agent 创建，带 parentID）。
    *  左侧任务列表只显示用户自己创建的会话，AI 跑子任务不再往左栏冒条目。 */
@@ -453,6 +468,8 @@ export const oc = {
   killTerminal: (ptyID: string, directory?: string) => call(`/pty/${ptyID}${dirQ(directory)}`, { method: 'DELETE' }),
   /** 内核健康探测（主进程 isHealthy，不经内核 REST；停止按钮兜底用） */
   kernelHealth: (): Promise<boolean> => window.qingniao.kernelHealth(),
+  /** 内核是否已就绪（首屏取初值；后续变化走 qingniao.kernel.state 事件） */
+  kernelReady: (): Promise<boolean> => window.qingniao.kernelReady(),
   /** question 工具应答：answers 与 questions 一一对应，每项是选中的标签数组 */
   replyQuestion: (requestID: string, answers: string[][], directory?: string) =>
     call(`/question/${requestID}/reply${dirQ(directory)}`, { method: 'POST', body: { answers } }),
