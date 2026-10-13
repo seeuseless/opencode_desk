@@ -127,6 +127,8 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     mobile: raw?.mobile === true,
     platform,
     zen,
+    // 全局记忆：老存档没有这个键，落空串（= 不生成指令文件）
+    memory: typeof raw?.memory === 'string' ? raw.memory : '',
     // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
     access: normalizeAccess(raw?.access),
     // 「永久允许调用」清单：只收非空字符串（手改存档塞进数字/对象时一并滤掉，否则授权判定会静默失配）
@@ -484,6 +486,11 @@ let officeMcp: { path: string } | undefined
 export function setOfficeMcp(v: { path: string }): void {
   officeMcp = v
 }
+/** 全局记忆 MCP（memory_read / memory_append）脚本路径；回调复用面板那台本机控制端点 */
+let memoryMcp: { path: string } | undefined
+export function setMemoryMcp(v: { path: string }): void {
+  memoryMcp = v
+}
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
@@ -648,6 +655,16 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   }
+  // 全局记忆 MCP：AI 把用户口述的长期偏好追加进「设置 → 记忆」。
+  // 端口沿用面板那台控制端点（同一 createServer，只监听 127.0.0.1）。
+  if (memoryMcp && panelMcp) {
+    mcp.memory = {
+      type: 'local',
+      command: [...nodeExec(), memoryMcp.path, String(panelMcp.port)],
+      environment: nodeEnv(),
+      enabled: true
+    }
+  }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
   // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
   //
@@ -786,7 +803,12 @@ export function writeOpencodeConfig(s: Settings): void {
       '这类脚本看不见画面、不会等待界面就绪，只会把东西打进错误的地方。`bash` 只允许用来「启动一个进程」。\n' +
       '- **执行命令一律用 bash（Git Bash）语法**：路径用正斜杠、环境变量用 `export`/`$VAR`。' +
       '**严禁调用 powershell / pwsh / powershell.exe / pwsh.exe（含 `cmd /c` 转调），严禁写 PowerShell 语法' +
-      '（`$env:`、`Get-Content`、`Write-Host`、`-ErrorAction` 之类）**——那会在用户桌面上弹出 PowerShell 窗口，明确违反用户要求。'
+      '（`$env:`、`Get-Content`、`Write-Host`、`-ErrorAction` 之类）**——那会在用户桌面上弹出 PowerShell 窗口，明确违反用户要求。\n' +
+        // 全局记忆（设置 → 记忆）：只给追加口，删与改留给用户在界面上做（见 appendGlobalMemory）
+        '- **全局记忆**：用户明确说「记住…」「以后都…」「写进全局记忆」时，调 `memory_append` 追加**一条**；' +
+        '写成**规则本身**（如「包管理统一用 pnpm」），不要写成「用户希望…」的转述，也不要一次塞多条内容。' +
+        '想看现有记忆调 `memory_read`。**严禁**把闲聊、一次性任务细节、单个项目的临时上下文写进全局记忆' +
+        '——那会污染用户之后所有项目、所有会话（含手机端），用户要求删除前它一直在。'
   )
   instructions.push(routing)
   // 文件系统边界（2026-09-24 用户要求）：青鸟自身数据只放 ~/.qingniaoai，项目操作不越界。
@@ -801,6 +823,24 @@ export function writeOpencodeConfig(s: Settings): void {
       '- 在项目里干活时**只处理当前项目内的文件**；确需写到别的目录，先停下来问用户、拿到明确指定的路径再动手。\n'
   )
   instructions.push(boundary)
+  /**
+   * 全局记忆（设置 → 记忆，用户可改）：走内核 instructions 而不是逐条消息拼前缀——
+   * 这样手机端发起的对话、以及任何新项目/新会话都自动带上，且不会污染用户消息原文。
+   * 空内容不生成文件，也不进 instructions（否则内核读到一份空指令，白费上下文）。
+   */
+  const memory = (s.memory ?? '').trim()
+  if (memory) {
+    const mem = join(opencodeConfigDir(), 'qingniao-memory.md')
+    writeFileSync(
+      mem,
+      '# 全局记忆（用户设定，长期有效）\n' +
+        '下面是用户在青鸟「设置 → 记忆」里写下的背景与偏好，**对所有项目和会话都要遵守**：\n\n' +
+        memory +
+        '\n\n- 与用户**这一轮**明确说出的要求冲突时，以当前这轮为准，并在回复末尾提一句「和全局记忆不一致，已按本次要求做」。\n' +
+        '- 记忆里没有的信息不要当成事实引用，也不要凭空补充。\n'
+    )
+    instructions.push(mem)
+  }
   /**
    * 工具路由约定（常驻指令）：模型看不到图片画面、或没意识到有生图工具时，光靠工具 description 里的
    * 触发条件基本不会调工具——实测它会直接回「我看不了图片」、或改用写代码的方式画图。这块把规则写进
@@ -896,10 +936,54 @@ export function writeOpencodeConfig(s: Settings): void {
   writeFileSync(opencodeConfigPath(), JSON.stringify(cfg, null, 2))
 }
 
-/** 首个可用 provider+model，作为 UI 未选中/选中失效时的回落档 */
+/**
+ * 写全局记忆并落盘（设置页保存与 AI 侧 memory_append 共用这一个入口）。
+ *
+ * 与 saveSettings 的关键区别：**不重启内核**。AI 正在这一轮回话里，重启会直接把它的
+ * 回复掐断；代价是新写的内容要等下一次内核启动才进 instructions（工具回执里如实说明）。
+ */
+export function setGlobalMemory(text: string): Settings {
+  const s = loadSettings()
+  s.memory = text
+  mkdirSync(storeDir(), { recursive: true })
+  writeFileSync(settingsPath(), JSON.stringify(normalize(s), null, 2))
+  writeOpencodeConfig(loadSettings())
+  return s
+}
+
+/**
+ * 追加一条全局记忆（AI 侧唯一的写入口——**只追加，不整段覆盖**）。
+ *
+ * 为什么不给 AI 覆盖口：全局记忆会喂给所有项目、所有会话（含手机端），一次误改写就是
+ * 长期污染，且改前用户往往没看到原文。追加 + 设置页人工删改，把破坏半径按住。
+ * 重复条目就地丢弃：同一句话被「记住」三遍会挤占每次对话的上下文。
+ */
+export function appendGlobalMemory(line: string): { added: boolean; memory: string } {
+  const cur = loadSettings().memory.trim()
+  const item = line.trim().replace(/^[-*]\s*/, '')
+  if (!item) return { added: false, memory: cur }
+  const exists = cur.split(/\r?\n/).some((l) => l.replace(/^[-*]\s*/, '').trim() === item)
+  if (exists) return { added: false, memory: cur }
+  return { added: true, memory: setGlobalMemory(cur ? cur + '\n- ' + item : '- ' + item).memory }
+}
+
+/**
+ * 回落档挑模型：跳过生图/生视频/配音这类纯生成模型，优先能收文本输入的。
+ *
+ * 「自动」档就落在这里，所以这里选中的必须是**真能对话**的模型——否则用户点「自动」
+ * 发一句话，整轮直接白发（生成模型回的是图片/音频，不是话）。一个 chattable 都没有时
+ * 退回首个模型：此时provider 里本来就没有对话模型，报什么错由调用方决定，不在此处改行为。
+ */
+function pickChatModel(models: ModelCfg[]): ModelCfg | undefined {
+  return (
+    models.find((m) => genRoleOf(m) === 'none' && (m.input ?? MODEL_DEFAULTS.input).includes('text')) ?? models[0]
+  )
+}
+
+/** 首个可用 provider + 其中能对话的模型，作为 UI 未选中/选中失效时的回落档 */
 export function defaultModel(s: Settings): { providerID: string; modelID: string } | undefined {
   const p = usableProviders(s)[0]
-  const m = p?.models[0]
+  const m = p && pickChatModel(p.models)
   return p && m ? { providerID: p.id, modelID: m.id } : undefined
 }
 
@@ -914,6 +998,7 @@ export function resolveModel(
   const list = usableProviders(s)
   const hit = sel?.providerID ? list.find((p) => p.id === sel.providerID) : undefined
   if (!hit) return defaultModel(s)
-  const modelID = sel?.modelID && hit.models.some((m) => m.id === sel.modelID) ? sel.modelID : hit.models[0].id
+  const modelID = sel?.modelID && hit.models.some((m) => m.id === sel.modelID) ? sel.modelID : pickChatModel(hit.models)?.id
+  if (!modelID) return defaultModel(s)
   return { providerID: hit.id, modelID }
 }

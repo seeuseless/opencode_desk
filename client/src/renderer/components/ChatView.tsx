@@ -948,6 +948,18 @@ export function ChatView(p: Props) {
     }))
     // 组内一个可对话模型都没有的提供商直接不显示，免得点进去是空列
     .filter((g) => g.models.length > 0)
+  /**
+   * 「自动」档：model 存空串，请求不带 model，由主进程挑一个可用模型
+   * （adapter.resolveModel → config.defaultModel = 第一个可用提供商里**能对话**的那个模型，
+   * 登录了平台就是平台内置模型里的第一个对话模型）。内核自己不挑：它的默认档依赖 opencode.json 顶层
+   * `model` 字段与内核的 recent 列表，这两样青鸟都没写、也不受控。
+   *
+   * 摆在「内置模型」分组的第一条——与主进程的挑选口径一致，用户点它拿到的就是那个默认模型。
+   */
+  if (groups.length) {
+    const home = groups.find((g) => g.id === PLATFORM_PROVIDER_ID) ?? groups[0]
+    home.models = [{ mid: '', name: t('自动') }, ...home.models]
+  }
 
   // 文字聊天模型禁止自动切换（用户约定）：一旦选中，对话就用当前模型，端点拒绝时报错给用户手动处理，
   // 绝不在后台静默换成同提供的其他模型再自动重发「继续」。
@@ -989,14 +1001,16 @@ export function ChatView(p: Props) {
     }
   }, [p.onSettings])
 
-  // 无选中或选中已失效（提供商被停用/删除/模型被改）时，自动落到第一个可用模型。
+  // 空值 = 「自动」档，是**合法选择**，绝不能被校正掉（它也是新装用户的默认档位）。
+  // 只有存档值确实失效（提供商被停用/删除、模型改名）才回落，且回落到「自动」而不是某个具体模型——
+  // 静默替用户定死一个模型会让他下次看到的选中态莫名其妙。
   // 关键：设置尚未加载完成时绝不能跑校验——此刻 groups 为空，会把用户的存档值误判失效清掉。
   useEffect(() => {
-    if (!p.settingsReady) return
+    if (!p.settingsReady || !p.model) return
     const i = p.model.indexOf('/')
     const valid =
       i > 0 && groups.some((g) => g.id === p.model.slice(0, i) && g.models.some((m) => m.mid === p.model.slice(i + 1)))
-    if (!valid) p.onModelChange(groups[0] ? `${groups[0].id}/${groups[0].models[0].mid}` : '')
+    if (!valid) p.onModelChange('')
   }, [p.model, p.settings, p.settingsReady])  // 切换项目/会话：先清旧内容再拉历史（项目切换瞬间 sessionId 为空）
   useEffect(() => {
     if (justCreated.current && justCreated.current === p.sessionId) {
@@ -1670,7 +1684,24 @@ export function ChatView(p: Props) {
    * 对话模型一个字都不用改。这条路的成本是「每次截屏多一轮识图」，换来的却是用户选定的模型不被夺走。 */
   function resolveChatModel(files: Attachment[], text: string): ModelSel | undefined {
     const i = p.model.indexOf('/')
-    if (i <= 0) return undefined // 跟随内核默认，无法判定，不干预
+    /**
+     * 「自动」档遇到图片/视频附件：主进程挑默认模型时不看模态，可能选中一个收不了图的，
+     * 用户看到的就是"发了图，AI 只读到文件路径"。这里本轮临时借一个收得下附件的模型——
+     * 只走 modelOverride，**不改**用户选中的「自动」，下一轮仍是自动。
+     */
+    if (i <= 0) {
+      const want: Modality[] = []
+      if (files.some((a) => a.mime.startsWith('image/'))) want.push('image')
+      if (files.some((a) => a.mime.startsWith('video/'))) want.push('video')
+      if (!want.length) return undefined
+      const canTalk = (mm: ModelCfg) => genRoleOf(mm) === 'none' && (mm.input ?? MODEL_DEFAULTS.input).includes('text')
+      for (const g of p.settings) {
+        if (!g.enabled) continue
+        const hit = g.models.find((mm) => canTalk(mm) && want.every((n) => (mm.input ?? MODEL_DEFAULTS.input).includes(n)))
+        if (hit) return { providerID: g.id, modelID: hit.id }
+      }
+      return undefined // 一个都收不下：原样发，路径照样能交给识图工具处理
+    }
     const pid = p.model.slice(0, i)
     const cur = p.settings.find((x) => x.enabled && x.id === pid)
     const curM = cur?.models.find((mm) => mm.id === p.model.slice(i + 1))

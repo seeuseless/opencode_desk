@@ -5,7 +5,7 @@ import { createServer } from 'node:http'
 import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, writeOpencodeConfig, type Settings } from './config.ts'
+import { appendGlobalMemory, loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setMediaMcp, setMemoryMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, writeOpencodeConfig, type Settings } from './config.ts'
 import { fetchZenModels } from './zen.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
@@ -868,6 +868,22 @@ async function panelOp(action: string, body: Record<string, unknown>): Promise<u
   throw new Error('未知操作：' + action)
 }
 
+/**
+ * 全局记忆端点（memory-mcp 调）：read 取全文，append 追加一条。
+ *
+ * 只有追加口，没有覆盖/删除口——全局记忆会进用户之后所有项目、所有会话（含手机端）的
+ * 常驻指令，让模型整段重写一次就可能长期污染；删改保留在「设置 → 记忆」由人做。
+ * 写盘走 config.setGlobalMemory，**不重启内核**：AI 正在这一轮回话里，重启会掐断它的回复。
+ */
+async function memoryOp(action: string, body: Record<string, unknown>): Promise<unknown> {
+  if (action === 'read') return { ok: true, memory: loadSettings().memory }
+  if (action === 'append') {
+    const r = appendGlobalMemory(String(body?.line ?? ''))
+    return { ok: true, added: r.added, memory: r.memory }
+  }
+  throw new Error('未知操作：memory/' + action)
+}
+
 /** 本地控制端点（仅监听 127.0.0.1）：MCP server → 主进程 → 面板 webview */
 function startPanelApi(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -879,9 +895,14 @@ function startPanelApi(): Promise<number> {
         let body: Record<string, unknown> = {}
         try { body = data ? JSON.parse(data) : {} } catch { /* 空体/坏 JSON 按空参处理 */ }
         const path = (req.url ?? '').replace(/^\/+/, '').split('?')[0]
-        // `/qn/*` 是「AI 调其他模型」的授权闸门（MCP 子进程发来的），其余是面板浏览器操作。
+        // `/qn/*` 是「AI 调其他模型」的授权闸门（MCP 子进程发来的），`/memory/*` 是全局记忆读写，
+        // 其余是面板浏览器操作。
         // 注意 authorize 会**挂起这个响应**直到用户作答——HTTP 那侧等着，正是我们要的阻塞语义。
-        const task = path.startsWith('qn/') ? handleGate(path.slice(3), body) : panelOp(path, body)
+        const task = path.startsWith('qn/')
+          ? handleGate(path.slice(3), body)
+          : path.startsWith('memory/')
+            ? memoryOp(path.slice(7), body)
+            : panelOp(path, body)
         task
           .then((r) => res.end(JSON.stringify(r ?? { ok: true })))
           .catch((e: unknown) => res.end(JSON.stringify({ error: e instanceof Error ? e.message : String(e) })))
@@ -939,6 +960,11 @@ function asrMcpPath(): string {
 /** 办公文件 MCP（office_* 读写 pdf/docx/pptx/xlsx）脚本位置（随安装包分发） */
 function officeMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'office-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'office-mcp.mjs')
+}
+
+/** 全局记忆 MCP（memory_read / memory_append）脚本位置（随安装包分发） */
+function memoryMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'memory-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'memory-mcp.mjs')
 }
 
 ipcMain.handle('settings:get', () => loadSettings())
@@ -1501,6 +1527,7 @@ app.whenReady().then(async () => {
   setMusicMcp({ path: musicMcpPath() })
   setAsrMcp({ path: asrMcpPath() })
   setOfficeMcp({ path: officeMcpPath() })
+  setMemoryMcp({ path: memoryMcpPath() })
   // 平台服务端（青鸟平台，Go 单二进制）：探测 health，不通时在本机扫顺延端口并落盘修正地址。
   // 必须在 writeOpencodeConfig 之前——发现出的新端口要写进内核的平台网关地址；
   // 也必须在 relay.apply() 之前——远程开关是 apply 的前提，否则服务端起来了也不会注册设备。

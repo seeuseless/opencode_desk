@@ -20,7 +20,7 @@ import { CODE_STYLES, type CodeStyle } from './codeStyle'
 type View = 'chat' | 'settings' | 'schedules'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'general' | 'theme' | 'providers' | 'skills' | 'mcp' | 'usage' | 'account' | 'about'
+export type SettingsTab = 'general' | 'theme' | 'providers' | 'skills' | 'mcp' | 'memory' | 'usage' | 'account' | 'about'
 export type ProjectSortMode = 'activity' | 'fixed'
 
 /**
@@ -146,6 +146,8 @@ export default function App() {
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
     // Zen 免费模型缓存：与主进程 DEFAULT_SETTINGS 一致（空清单 = 该分组不显示）
     zen: { models: [] },
+    // 全局记忆：与主进程 DEFAULT_SETTINGS 一致（空 = 不带额外指令）
+    memory: '',
     // access 'default' = 写操作要确认（与主进程 DEFAULT_SETTINGS 一致）
     access: 'default',
     // 「永久允许调用其他模型」清单：默认空，AI 每次要调别的模型都会先问

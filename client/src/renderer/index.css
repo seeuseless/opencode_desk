@@ -2206,6 +2206,51 @@ body.dragging-row, body.dragging-row * { cursor: grabbing !important; }
 .lp-swatch { display: inline-flex; border-radius: 4px; overflow: hidden; flex-shrink: 0; border: 1px solid var(--side-line); }
 .lp-swatch i { width: 7px; height: 13px; }
 
+/* ================= 设置 · 自动获取模型的勾选窗 ================= */
+.mpick-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.mpick-q {
+  flex: 1; min-width: 0;
+  background: var(--field-bg); color: var(--fg);
+  border: 1px solid var(--field-line); border-radius: 9px;
+  padding: 8px 11px; font-size: 13px; outline: none;
+}
+.mpick-q:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent); }
+.mpick-count { font-size: 12px; color: var(--fg2); white-space: nowrap; }
+.mpick-list {
+  max-height: 340px; overflow-y: auto;
+  border: 1px solid var(--field-line); border-radius: 10px;
+  padding: 6px; background: var(--bg3);
+}
+.mpick-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: 8px; cursor: pointer; font-size: 13px;
+}
+.mpick-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.mpick-item input[type='checkbox'] { accent-color: var(--accent); width: 15px; height: 15px; flex-shrink: 0; }
+.mpick-id { font-family: "Sarasa Mono SC", "Cascadia Mono", Consolas, monospace; font-size: 12.5px; word-break: break-all; }
+.mpick-item.added { color: var(--fg2); }
+.mpick-item.added svg { color: var(--ok); flex-shrink: 0; }
+.mpick-sub { font-size: 11.5px; color: var(--fg2); margin: 10px 9px 4px; }
+.mpick-empty { font-size: 12.5px; color: var(--fg2); padding: 16px 10px; text-align: center; }
+
+/* ================= 设置 · 全局记忆 ================= */
+.mem-area {
+  display: block; width: 100%; margin-top: 4px;
+  background: var(--field-bg); color: var(--fg);
+  border: 1px solid var(--field-line); border-radius: 10px;
+  padding: 11px 12px; outline: none; font-size: 13px; line-height: 1.7;
+  resize: vertical; min-height: 220px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.mem-area::placeholder { color: var(--fg2); opacity: 0.7; }
+.mem-area:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--field-line)); }
+.mem-area:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.mem-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.mem-state { font-size: 12px; color: var(--fg2); margin-left: auto; }
+
 /* ================= 设置 · 使用量 ================= */
 .usage-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 4px 0 16px; }
 .ucard {

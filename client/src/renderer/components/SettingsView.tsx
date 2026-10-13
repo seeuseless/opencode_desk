@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Settings, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Brain, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Settings, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
@@ -141,7 +141,7 @@ function BgSlot({ label, url, onPick, onClear }: { label: string; url: string; o
   )
 }
 
-/** 设置页左侧导航：账号 / 通用 / 主题 / 模型 / 技能 / MCP / 使用量 / 关于 */
+/** 设置页左侧导航：账号 / 通用 / 主题 / 模型 / 技能 / MCP / 记忆 / 使用量 / 关于 */
 type TabId = SettingsTab
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   // 账号置顶：登录是「用上内置模型」的前提，放第一位最容易被找到
@@ -151,6 +151,8 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'providers', label: '模型', icon: Cpu },
   { id: 'skills', label: '技能', icon: Sparkles },
   { id: 'mcp', label: 'MCP', icon: Globe },
+  // 记忆排在「使用量」上面：它是往里配的东西（AI 该知道什么），使用量是往外看的账
+  { id: 'memory', label: '记忆', icon: Brain },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
   { id: 'usage', label: '使用量', icon: BarChart3 },
   // 关于排最末：它是「这个软件本身」的信息（版本、条款），不是要配置的东西，
@@ -415,6 +417,26 @@ export function SettingsView(p: Props) {
    * 这一列表就是**唯一的撤销入口**——没有它，「永久允许」等于单向门，只能手改 settings.json。
    */
   const [authGrants, setAuthGrants] = useState<string[]>([])
+  /**
+   * 全局记忆编辑草稿：进本页时用磁盘上的值回填，保存后由 settings 变化再同步。
+   * 本地草稿是为了「改到一半不生效」——记忆是启动时喂给内核的，不像普通输入能逐字生效。
+   */
+  const [memDraft, setMemDraft] = useState(p.settings.memory ?? '')
+  useEffect(() => setMemDraft(p.settings.memory ?? ''), [p.settings.memory])
+  /**
+   * 每次进「记忆」页都从磁盘重读一遍设置。
+   *
+   * 必要性：AI 在对话里能用 memory_append 往全局记忆加条目，而渲染层这份 settings 是
+   * 应用启动时的快照——不重读的话，用户在界面上点保存会把 AI 刚记下的那条**整段覆盖掉**。
+   */
+  useEffect(() => {
+    if (p.tab !== 'memory') return
+    void window.qingniao
+      .getSettings()
+      .then((s) => p.onSettings(s))
+      .catch(() => undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.tab])
   /** 右侧正文滚动容器：外部跳页后置顶，避免停在上一页的半截位置 */
   const body = useRef<HTMLDivElement>(null)
 
@@ -540,6 +562,16 @@ export function SettingsView(p: Props) {
     })
   }
 
+  /**
+   * 「自动获取模型」拉回来的**候选清单**（弹窗里勾选，不直接写进配置）。
+   *
+   * 为什么要勾而不是直接加：不少服务商的 /models 返回几百个模型（同名多版本、各家快照、
+   * 已下线旧档），一次性全塞进 provider.models，模型选择器就变成翻不到底的长列表，
+   * 而且每个模型都占一份上下文/倍率配置。用户真正要用的通常只有几个。
+   */
+  const [pick, setPick] = useState<{ all: string[]; sel: Set<string> } | null>(null)
+  const [pickQ, setPickQ] = useState('')
+
   async function fetchModels() {
     if (!draft) return
     if (!draft.baseURL.trim()) {
@@ -550,11 +582,41 @@ export function SettingsView(p: Props) {
     setFormMsg(null)
     const r = await window.qingniao.fetchModels(draft.baseURL, draft.apiKey)
     setFetching(false)
-    if (r.error) setFormMsg({ text: t('拉取失败：') + r.error, bad: true })
-    else {
-      setDraft({ ...draft, modelsText: r.models!.join('\n') })
-      setFormMsg({ text: t('已获取 {n} 个模型', { n: r.models!.length }), bad: false })
+    if (r.error) {
+      setFormMsg({ text: t('拉取失败：') + r.error, bad: true })
+      return
     }
+    // 一律弹勾选窗（含 0 个新模型的情况）：用户点这个按钮就是要看上游到底有什么
+    setPickQ('')
+    setPick({ all: [...r.models!], sel: new Set() })
+  }
+
+  /** 勾选窗里点一个模型：只动选中集 */
+  function togglePick(id: string) {
+    setPick((v) => {
+      if (!v) return v
+      const sel = new Set(v.sel)
+      if (sel.has(id)) sel.delete(id)
+      else sel.add(id)
+      return { ...v, sel }
+    })
+  }
+
+  /** 勾选完点「添加」：只把选中的并进清单，已有的一个不动 */
+  function applyModelPick() {
+    if (!draft || !pick) return
+    const chosen = pick.all.filter((id) => pick.sel.has(id))
+    if (!chosen.length) {
+      setPick(null)
+      return
+    }
+    const ids = parseModels(draft.modelsText)
+    setDraft({
+      ...draft,
+      modelsText: [...ids, ...chosen.filter((x) => !ids.includes(x))].join('\n')
+    })
+    setFormMsg({ text: t('已添加 {n} 个模型', { n: chosen.length }), bad: false })
+    setPick(null)
   }
 
   /** 某个模型的接入参数：编辑过的取草稿值，没编辑过的用默认 */
@@ -867,6 +929,15 @@ export function SettingsView(p: Props) {
     } finally {
       setSkBusy(false)
     }
+  }
+
+  /** 全局记忆落盘：内容会写进内核 instructions（见 config.writeOpencodeConfig），
+   *  而指令是内核启动时读的，所以必须重启才生效 —— 走带确认的 applySettings，
+   *  让用户知道跑着的任务会一同结束，不想重启可以先「稍后再说」。 */
+  function saveMemory() {
+    const next = memDraft.trim()
+    if (next === (p.settings.memory ?? '').trim()) return
+    applySettings({ ...p.settings, memory: next }, { note: t('全局记忆要重启内核才会带进对话，'), keepTab: 'memory' })
   }
 
   /** 技能分组：内置随安装包分发（只读），全局对所有项目生效，项目级只在当前项目下被内核发现 */
@@ -1361,6 +1432,42 @@ export function SettingsView(p: Props) {
         </section>
         )}
 
+        {tab === 'memory' && (
+          <section>
+            <h3>
+              <Brain size={15} /> {t('全局记忆')}
+            </h3>
+            <p className="sec-tip">
+              {t('写给 AI 的长期背景与偏好，对所有项目、所有会话生效（手机端发起的对话也算）。')}
+              {t('每次保存都会写进内核的常驻指令，所以要把这段写得短而明确，别堆长文。')}
+            </p>
+            <textarea
+              className="mem-area"
+              rows={14}
+              value={memDraft}
+              placeholder={t('例如：\n- 我是后端工程师，回答简洁，直接给结论和代码。\n- 包管理统一用 pnpm，不要用 npm。\n- 生成图片一律存到 ~/.qingniaoai/workspace。')}
+              onChange={(e) => setMemDraft(e.target.value)}
+            />
+            <div className="mem-actions">
+              <button
+                className="primary"
+                disabled={p.saving || memDraft.trim() === (p.settings.memory ?? '').trim()}
+                onClick={saveMemory}
+              >
+                {p.saving ? t('保存并重启内核…') : t('保存')}
+              </button>
+              <button className="ghost" onClick={() => setMemDraft(p.settings.memory ?? '')}>
+                {t('放弃修改')}
+              </button>
+              {(p.settings.memory ?? '').trim() ? (
+                <span className="mem-state">{t('当前已生效 {n} 字', { n: String((p.settings.memory ?? '').trim().length) })}</span>
+              ) : (
+                <span className="mem-state">{t('当前没有全局记忆')}</span>
+              )}
+            </div>
+          </section>
+        )}
+
         {tab === 'usage' && <UsagePanel />}
 
         {tab === 'about' && <UpdatePanel baseUrl={p.platform?.baseUrl ?? ''} onSetBaseUrl={p.onSetBaseUrl} />}
@@ -1671,6 +1778,74 @@ export function SettingsView(p: Props) {
           </div>
         </Modal>
       )}
+
+      {/* 「自动获取模型」的勾选窗：拉回来的候选由用户自己挑，一个都不替用户加（见 fetchModels）。
+          叠在提供商弹窗之上（.mask 同为 fixed，后渲染的在上）。 */}
+      {pick &&
+        draft &&
+        (() => {
+          const added = new Set(parseModels(draft.modelsText))
+          const q = pickQ.trim().toLowerCase()
+          const shown = pick.all.filter((id) => !added.has(id) && (!q || id.toLowerCase().includes(q)))
+          const addedShown = pick.all.filter((id) => added.has(id))
+          return (
+            <Modal title={t('选择要添加的模型')} onClose={() => setPick(null)} wide>
+              <p className="sec-tip">
+                {t('上游返回 {n} 个模型。勾出你真正要用的那几个——全加进来，模型选择器就变成翻不到底的长列表。', {
+                  n: pick.all.length
+                })}
+              </p>
+              <div className="mpick-bar">
+                <input
+                  className="mpick-q"
+                  value={pickQ}
+                  placeholder={t('搜索模型名')}
+                  autoFocus
+                  onChange={(e) => setPickQ(e.target.value)}
+                />
+                <button
+                  className="ghost"
+                  disabled={!shown.length}
+                  onClick={() => setPick((v) => (v ? { ...v, sel: new Set([...v.sel, ...shown]) } : v))}
+                >
+                  {t('全选')}
+                </button>
+                <button className="ghost" disabled={!pick.sel.size} onClick={() => setPick((v) => (v ? { ...v, sel: new Set() } : v))}>
+                  {t('清空')}
+                </button>
+                <span className="mpick-count">{t('已选 {n} 个', { n: pick.sel.size })}</span>
+              </div>
+              <div className="mpick-list">
+                {!shown.length && <div className="mpick-empty">{pickQ.trim() ? t('没有匹配的模型') : t('上游模型都已在清单里')}</div>}
+                {shown.map((id) => (
+                  <label key={id} className="mpick-item">
+                    <input type="checkbox" checked={pick.sel.has(id)} onChange={() => togglePick(id)} />
+                    <span className="mpick-id">{id}</span>
+                  </label>
+                ))}
+                {addedShown.length > 0 && (
+                  <>
+                    <div className="mpick-sub">{t('已在清单里')}</div>
+                    {addedShown.map((id) => (
+                      <div key={id} className="mpick-item added">
+                        <Check size={14} />
+                        <span className="mpick-id">{id}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+              <div className="actions">
+                <button className="ghost" onClick={() => setPick(null)}>
+                  {t('取消')}
+                </button>
+                <button className="primary" disabled={!pick.sel.size} onClick={applyModelPick}>
+                  {t('添加选中的 {n} 个', { n: pick.sel.size })}
+                </button>
+              </div>
+            </Modal>
+          )
+        })()}
 
       {mcpDraft && (
         <Modal title={mcpDraft.isNew ? t('添加 MCP 服务器') : t('编辑 MCP 服务器')} onClose={() => setMcpDraft(null)}>

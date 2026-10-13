@@ -279,6 +279,15 @@ export interface Settings {
    */
   zen: ZenCfg
   /**
+   * 全局记忆（设置 → 记忆）：用户写下的一段长期背景/偏好，**对所有项目、所有会话生效**，
+   * 手机端发起的对话同样带上它。
+   *
+   * 生效方式是写进内核的 instructions（见 config.writeOpencodeConfig 的 qingniao-memory.md），
+   * 而不是在渲染层逐条消息拼前缀——后者只覆盖桌面输入框，且会把用户原文污染成拼接文本。
+   * 空串 = 没有全局记忆，不生成那份指令文件。
+   */
+  memory: string
+  /**
    * 访问权限档位，**全局一份、对所有文件夹生效**（默认 'default'：写操作要确认）。
    *
    * 为什么不按目录存：内核的 permission 是一份全局配置，按目录存再合并回去只是自欺；
@@ -308,6 +317,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
   zen: { models: [] },
+  memory: '',
   access: 'default',
   modelAuth: []
 }

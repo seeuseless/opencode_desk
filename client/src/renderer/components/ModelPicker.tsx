@@ -119,7 +119,9 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
         ? codeMode
           ? shortModelName(value)
           : value
-        : t('选择模型')
+        : // 空值就是「自动」档（不指定模型，交给主进程挑一个可用模型）——它现在也是默认档位，
+          // 所以这里不再是「还没选」的占位语
+          t('自动')
   const active = groups.find((g) => g.id === expanded)
 
   /** 代码模式右侧聊天变窄时，模型菜单也不能从窗口边缘溢出去。 */
@@ -198,22 +200,27 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
           </div>
           {active && active.models.length > 0 && (
             <div className="mp-col2-float" ref={sub} style={{ top: subTop + subShift }}>
-              {active.models.map((m) => (
-                <button
-                  key={m.mid}
-                  type="button"
-                  className={'mp-item mp-model' + (`${active.id}/${m.mid}` === value ? ' on' : '')}
-                  onClick={() => {
-                    onChange(`${active.id}/${m.mid}`)
-                    setOpen(false)
-                  }}
-                >
-                  <span className="mi-check">{`${active.id}/${m.mid}` === value && <Check size={13} />}</span>
-                  <span className="mp-name">{shortModelName(m.name || m.mid)}</span>
-                  <Tag m={m} />
-                  <Rate m={m} />
-                </button>
-              ))}
+              {active.models.map((m) => {
+                // mid 为空 = 「自动」这条虚拟项（由 ChatView 注入）：它的值就是 ''，不能拼成 'pid/'
+                const key = m.mid === '' ? '' : `${active.id}/${m.mid}`
+                const on = key === value
+                return (
+                  <button
+                    key={m.mid}
+                    type="button"
+                    className={'mp-item mp-model' + (on ? ' on' : '')}
+                    onClick={() => {
+                      onChange(key)
+                      setOpen(false)
+                    }}
+                  >
+                    <span className="mi-check">{on && <Check size={13} />}</span>
+                    <span className="mp-name">{shortModelName(m.name || m.mid)}</span>
+                    <Tag m={m} />
+                    <Rate m={m} />
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
