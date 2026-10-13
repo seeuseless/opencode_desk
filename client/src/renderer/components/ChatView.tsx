@@ -991,8 +991,12 @@ export function ChatView(p: Props) {
    *
    * 摆在「内置模型」分组的第一条——与主进程的挑选口径一致，用户点它拿到的就是那个默认模型。
    */
-  if (groups.length) {
-    const home = groups.find((g) => g.id === PLATFORM_PROVIDER_ID) ?? groups[0]
+  // 「自动」档只挂在平台「内置模型」分组下（与主进程挑选口径一致的那组）。
+  // **不要兜底挂到 groups[0]**：用户没登录平台时 groups[0] 是他自己的提供商（如 agnes），
+  // 凭空多出的「自动」看起来像该分组自己的模型（2026-10-13 用户反馈）。
+  // 没有平台组就哪都不挂——「自动」档位本身仍生效（value 为空即自动，触发器正常显示）。
+  const home = groups.find((g) => g.id === PLATFORM_PROVIDER_ID)
+  if (home) {
     home.models = [{ mid: '', name: t('自动') }, ...home.models]
   }
 
@@ -1555,6 +1559,13 @@ export function ChatView(p: Props) {
     if (!busy || !p.sessionId) return
     const sid = p.sessionId
     let alive = true
+    /**
+     * 卡死看门狗计数：连续 5 轮（≥6s）看到「内核真相 = 回合已结束」才收口。
+     * 不能太紧：模型两步衔接（工具跑完 → 下一条 assistant 消息开始）实测有 3.7s+ 的空档，
+     * 这个空档里「末条已 completed + 无 running 工具」全部成立，阈值 2 轮会误判收口，
+     * 把还在跑的回合提前清成空闲（实测 thinkphp 查询轮就踩了）。
+     */
+    let finishedStreak = 0
     const sync = async () => {
       if (!alive) return
       // 提问对账：question.v2.asked 事件可能漏收，busy 期间以内核待答列表为准。
@@ -1582,6 +1593,31 @@ export function ChatView(p: Props) {
           if (te?.message) {
             setError(te.message)
             markBusy(sid, false)
+          }
+        }
+        // 卡死看门狗：**正常结束**的回合如果 session.idle 事件漏收（SSE 断连），上面那个
+        // 错误兜底救不了——「处理中」会永远挂着（实测：执行完命令后对话卡住转圈）。
+        // 判据全部来自内核 /message 实拉数据，不是猜：
+        //   ① 最后一条消息是 assistant 且 info.time.completed 已盖戳（内核只在消息结束时写）；
+        //   ② 整个会话没有任何 running/pending 的工具 part；
+        //   ③ 连续 5 轮轮询（≥6s）都满足——两步衔接空档实测 3.7s+，2 轮会被误判提前收口。
+        // 三条同时成立说明内核那边回合已经落幕，本端补一次 markBusy(false) 对账。
+        if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
+          const last = list[list.length - 1]
+          const hasRunning = list.some((m) => m.parts.some((x) => x.state?.status === 'running' || x.state?.status === 'pending'))
+          const finished =
+            !!last &&
+            last.info.role === 'assistant' &&
+            typeof last.info.time?.completed === 'number' &&
+            !hasRunning
+          if (finished) {
+            finishedStreak++
+            if (finishedStreak >= 5) {
+              finishedStreak = 0
+              markBusy(sid, false)
+            }
+          } else {
+            finishedStreak = 0
           }
         }
       } catch {
@@ -2110,9 +2146,14 @@ export function ChatView(p: Props) {
   // 每条 assistant 消息是否轮首（owner 变化处）：轮结束后「已工作」徽标只挂轮首一条
   let prevTurnOwner: string | undefined
   const turnStarts = new Map<string, boolean>()
+  // 每个回合「最后一条」AI 消息：模型名 / 速率 / 耗时尾注只挂它。
+  // 工具多的回合内核会拆出多条 assistant 消息，逐条挂尾注就会一回合重复好几行
+  // （2026-10-13 用户明确要求：模型 token 耗时这些绝不能重复生成多行）。
+  const turnTail = new Map<string, string>()
   for (const m of msgs) {
     const owner = turnOwner.get(m.info.id)
     turnStarts.set(m.info.id, m.info.role === 'assistant' && owner !== undefined && owner !== prevTurnOwner)
+    if (m.info.role === 'assistant' && owner !== undefined) turnTail.set(owner, m.info.id)
     if (owner !== undefined) prevTurnOwner = owner
   }
 
@@ -2219,6 +2260,16 @@ export function ChatView(p: Props) {
             }
             // 生成速率（见 genRateOf 注释）：拿不到就只显示模型名
             const rate = genRateOf(m)
+            // 尾注（模型/速率/耗时）只挂回合**最后一条** AI 消息，其余一律不渲染——防重复多行。
+            // 耗时与顶部「已工作」同口径（turnSpent，回合总时长）；老会话没有这份记录时
+            // 退回消息自带的起止时间差（completed-created），再没有就不显示。
+            const isTail = turnTail.get(owner ?? '') === m.info.id
+            const spent = isTail
+              ? (owner != null ? turnSpent[owner] : 0) ||
+                (m.info.time?.completed && m.info.time?.created
+                  ? Math.max(1, Math.round((m.info.time.completed - m.info.time.created) / 1000))
+                  : 0)
+              : 0
             return (
               <div key={m.info.id} className="amsg">
                 {/* 轮首的「已工作」徽标：轮结束后固定显示该轮总耗时（处理中的实时时长看尾部状态条） */}
@@ -2244,17 +2295,20 @@ export function ChatView(p: Props) {
                     <AlertCircle size={13} /> <span>{msgErrorText(m)}</span>
                   </div>
                 )}
-                {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账 */}
-                {!busy && !!usedByMsg[m.info.id]?.length && (
+                {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账。
+                    与下面的模型尾注同规矩：busy 期间也要常驻，只藏正在流式的那条。 */}
+                {(!busy || m.info.id !== lastAid) && !!usedByMsg[m.info.id]?.length && (
                   <div className="cu-models" title={usedByMsg[m.info.id].map((u) => `${u.label || u.id}（${u.provider || u.id}）`).join('\n')}>
                     <Cpu size={12} />
                     <span>{t('本轮另调用：')}{summarizeModels(usedByMsg[m.info.id])}</span>
                   </div>
                 )}
                 {/* 本次回复使用的模型：modelID/providerID 是内核持久化在消息里的，
-                    重启后历史消息照样能显示。流式期间不显示（回复还没完），落定后出现。
-                    后面追加生成速率（如 `· 148 token/s`），算法见 genRateOf。 */}
-                {!busy && m.info.modelID && (
+                    重启后历史消息照样能显示。只挂回合最后一条（isTail）防多行重复；
+                    后面依次追加生成速率与耗时。
+                    **旧尾注要常驻**：不能整体被 !busy 门住——发新消息（busy）期间历史回合的
+                    尾注必须还在，只藏正在流式生成的那条（lastAid），它落定后自然出现。 */}
+                {(!busy || m.info.id !== lastAid) && m.info.modelID && isTail && (
                   <div
                     className="amsg-model"
                     title={
@@ -2265,6 +2319,7 @@ export function ChatView(p: Props) {
                     <Cpu size={12} />
                     <span>{usedModelLabel(groups, m.info)}</span>
                     {rate && <span className="amsg-rate"> · {rate}</span>}
+                    {!!spent && <span className="amsg-rate"> · {t('耗时 {v}', { v: fmtElapsed(spent) })}</span>}
                   </div>
                 )}
               </div>

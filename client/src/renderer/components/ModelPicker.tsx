@@ -199,8 +199,12 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                 }}
               >
                 <span className="mp-name">{t(g.label)}</span>
+                {/* 当前选中的分组用对勾标识（常驻、不占悬浮态）：面板一开就知道用的是哪家，
+                    也不用再靠行底色「选中态」——那会干扰鼠标经过（2026-10-13 用户反馈） */}
                 {refreshingGroup === g.id ? (
                   <LoaderCircle size={13} className="mp-arrow spin" />
+                ) : g.id === curGroup?.id ? (
+                  <Check size={13} className="mp-arrow mp-arrow-on" />
                 ) : (
                   <ChevronRight size={13} className="mp-arrow" />
                 )}
