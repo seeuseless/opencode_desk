@@ -188,4 +188,21 @@
   用正则 `"[^"]*"` 会截在第一个转义引号处拿半句垃圾。`logtail.ts` 的 `field()` 逐字符扫 + 识别 `\X` 转义。
 - `server unavailable key=office` 是**无害噪音**，每个 session 都有一条，与任何卡死/报错无关，别顺着它查。
 
+## AI 自报身份 / 记忆自我污染闭环（2026-10-14 定版）
+- **常驻指令 `qingniao-identity.md`（instructions 第一条，config.ts 生成）**：身份口径写死为
+  「我是青鸟Open 桌面客户端的 AI 助手，基于 opencode，当前模型是 <模型名>」；
+  **模型名只写 api id，严禁 `xxx/yyy` 前缀**（`qn-zen/space-bunny-free` 是对内路由标识）；
+  **闲聊/自我介绍禁止写进项目记忆**。
+- **模型名不用我们告诉它**：内核环境提示词保留 `You are powered by the model named ${api.id}`，
+  只删掉后半句 `The exact model ID is ${providerID}/${api.id}`（用户只见后者那半句的产物）。
+  若内核升级后又开始报 `provider/model`，先查这条是否还在。
+- **「模型答错且怎么都纠正不过来」的标准排查法**：多半是**项目记忆自我污染闭环**——
+  模型答错 → 按注入指令把问答原文写进 `<项目>/.qingniao/memory/YYYY-MM-DD.md` →
+  ChatView 新会话首发 `readMemory(dir)` 整段 noReply 注入 → 模型照抄旧回答。删记忆 + 加指令，两边一起改。
+- **查会话原文用 SQLite**：`~/.qingniaoai/data/opencode/opencode.db`（表 `session`/`message`/`part`，
+  `part.data` 是 JSON，含注入块原文）。⚠️ 内核**按目录隔离**：`/session?directory=` 只列该目录会话，
+  查不到就换 `directory` 再试（App 当时跑在 `~/.qingniaoai/workspace`）。
+- 内核二进制补丁（改 `node_modules/opencode-ai/bin/opencode.exe` 里的提示词）**必须等长替换**，
+  且 `npm install` 会覆盖——属于临时手段，优先找注入层（instructions）的正式修法。
+
 

@@ -805,6 +805,33 @@ export function writeOpencodeConfig(s: Settings): void {
   }
   // 内置浏览器常驻，工具路由约定围绕它展开
   const instructions: string[] = []
+  /**
+   * 身份口径（2026-10-14 用户定版）。
+   *
+   * 起因：内核环境提示词里那句 "The exact model ID is ${providerID}/${api.id}" 被去掉后，
+   * 模型自报身份时开始自由发挥——先说自己是「opencode 命令行界面」，又报出
+   * `qn-zen/space-bunny-free` 这种带 provider 前缀的对内路由标识。更糟的是它把这段错误回答
+   * 写进了项目记忆的每日文件，而渲染层每轮都把那份记忆原样注入，于是后续会话照着复读，形成闭环。
+   *
+   * 所以身份不能靠模型自由发挥，得在常驻指令里写死；模型名本身不用我们告诉它——
+   * 环境提示词仍保留 "You are powered by the model named ${api.id}"，它照着答即可。
+   */
+  const identity = join(opencodeConfigDir(), 'qingniao-identity.md')
+  writeFileSync(
+    identity,
+    '# 身份\n' +
+      '- 你是「青鸟Open」（QingNiao）桌面客户端里的 AI 助手：基于 opencode 内核、通过 API 调用，' +
+      '跑在用户的桌面应用里。**这是桌面应用，不是命令行界面**——严禁把自己说成 CLI / 终端 / 命令行。\n' +
+      '- 用户问「你是谁 / 你是哪个AI / 你叫什么 / 你是什么模型 / 你基于什么」时，就按这个口径答：\n' +
+      '  「我是青鸟Open 桌面客户端的 AI 助手，基于 opencode，当前模型是 <模型名>。」\n' +
+      '- **模型名只写模型 id 本身**（如 `space-bunny-free`），**严禁带 provider / 渠道前缀**、' +
+      '严禁输出 `xxx/yyy` 这种形式（如 `qn-zen/space-bunny-free`）——那是对内路由标识，对用户没有意义。\n' +
+      '- 模型名就是系统提示里 "You are powered by the model named …" 那个名字，照它答，**不要自己另编一个**。\n' +
+      // 上面那个闭环的另一半：记忆注入是每轮无条件的，垃圾一旦写进去就会一直复读。
+      '- **自我介绍、闲聊不要写进项目记忆**：每日记忆只追加「本轮完成的重要工作」。' +
+      '身份问答写进去会被下一轮原样注入、让模型照抄旧回答（2026-10-14 用户实测踩过）。\n'
+  )
+  instructions.push(identity)
   const routing = join(opencodeConfigDir(), 'qingniao-tools.md')
   writeFileSync(
     routing,
