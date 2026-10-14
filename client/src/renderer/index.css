@@ -695,18 +695,6 @@ html[data-bg-content='on'] .cbox {
 /* 空对话引导：标题用主文字色突出，说明行沿用 .empty 的弱化色 */
 .empty-title { color: var(--fg); font-size: 15px; font-weight: 600; margin-bottom: 2px; }
 
-/* 对话流内的失败反馈（AI 消息位置的红边气泡）：拦截、回合报错与事件丢失兜底共用 */
-.msgerr {
-  display: flex; align-items: flex-start; gap: 8px;
-  color: var(--err); padding: 2px 0 2px 10px; margin: 4px 0;
-  border-left: 2px solid var(--err);
-  font-size: 13px; line-height: 1.6; word-break: break-word;
-}
-.msgerr svg { flex-shrink: 0; margin-top: 3px; }
-/* 上游原文直出（2026-10-14 用户定版），里面有换行/缩进（如 JSON 报错报文）：
-   pre-wrap 保留原始排版，break-word 保证长 URL / 长 id 也能断行不撑破布局 */
-.msgerr span { flex: 1; min-width: 0; white-space: pre-wrap; }
-
 /* 本轮额外调用过的模型汇总（识图 / 生图 / 配音…）：挂在 AI 回复末尾，
    用虚线分隔 + 弱化色小字，既让人对得上账，又不至于抢正文的注意力。
    详情（provider 全称）走 title 悬浮，不在这行里堆字。 */
@@ -732,7 +720,22 @@ html[data-bg-content='on'] .cbox {
 /* 生成速率：比模型名再弱一档（数字用等宽，避免每条消息宽度跳动时对不齐） */
 .amsg-rate { color: var(--fg3, var(--fg2)); opacity: 0.85; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
-/* 对话流内的中性提示（自动换模型等说明）：与失败反馈同结构，弱化色 + 灰边，不抢注意力 */
+/* 对话流末尾的失败提示（上游错误原文）：红边 + 红字，一眼看得出这是失败。
+   只在末尾显示一处，**不内联**在 AI 消息里——内核写进消息 info.error 的是包装过的文案
+   （`Unauthorized: 未认证或登录已过期`），与上游原文（`AI_APICallError: Unauthorized`）
+   语义重复，两个都显示就是同一失败说两遍且各说各话（2026-10-14 用户定版）。 */
+.msgerr {
+  display: flex; align-items: flex-start; gap: 8px;
+  color: var(--err); padding: 2px 0 2px 10px; margin: 4px 0;
+  border-left: 2px solid var(--err);
+  font-size: 13px; line-height: 1.6; word-break: break-word;
+}
+.msgerr svg { flex-shrink: 0; margin-top: 3px; }
+/* 上游错误原文直出，里面常有换行/缩进（如 JSON 报错报文）：
+   pre-wrap 保留原始排版，break-word 保证长 URL / 长 id 也能断行不撑破布局 */
+.msgerr span { flex: 1; min-width: 0; white-space: pre-wrap; }
+
+/* 对话流末尾的中性提示（自动换模型等说明）：与失败提示同结构但弱化，不标红不抢注意力 */
 .msgnotice {
   display: flex; align-items: flex-start; gap: 8px;
   color: var(--fg2); padding: 2px 0 2px 10px; margin: 4px 0;
@@ -740,7 +743,7 @@ html[data-bg-content='on'] .cbox {
   font-size: 13px; line-height: 1.6; word-break: break-word;
 }
 .msgnotice svg { flex-shrink: 0; margin-top: 3px; }
-.msgnotice span { flex: 1; min-width: 0; }
+.msgnotice span { flex: 1; min-width: 0; white-space: pre-wrap; }
 
 .umsg { display: flex; justify-content: flex-end; margin: 10px 0; position: relative; }
 /* 用户气泡：气泡 + 折叠按钮纵向排列，按钮与气泡同侧对齐 */

@@ -808,15 +808,6 @@ export function ChatView(p: Props) {
   // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
   // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
   const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
-  const lastMsg = lastAid ? msgs.find((x) => x.info.id === lastAid) : undefined
-  // 末条 AI 消息内联的错误文案：全局错误条与它相同就不再渲染（同一错误出现两遍很傻）
-  //
-  // **本轮已有真实上游错误原文时直接用原文**，盖掉内核 abort 写进消息的 MessageAbortedError——
-  // 否则用户会同时看到「AI_APICallError: Rate limit exceeded…」和「任务被中止」两条，
-  // 后者是我们自己 abort 造成的收尾痕迹，对用户毫无意义（见 streamErrText）。
-  const inlineErr = !busy && lastMsg
-    ? streamErrText.current[lastMsg.info.sessionID] || msgErrorText(lastMsg)
-    : ''
   // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
   // 新消息发送将中止当前轮并接管
   let terminalBlocked = false
@@ -1394,25 +1385,30 @@ const text = humanizeError(pr.message)
         streamFailed.current.delete(idleSid)
         const isCurrent = idleSid === sidRef.current
     oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
-       .then((list) => {
-   // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
-      const turnErr = turnErrorOf(list)
-       if (turnErr?.message) {
-        // 有明确的失败原因（含 MessageAbortedError → 上游断流）：当前会话显示红色错误条。
-   // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
-      //
-          // **但本轮已拿到真实上游错误原文时一律让路**（streamErrText）：
-          // 那条原文是我们主动 abort 换来的（内核随后盖的 MessageAbortedError 只是收尾痕迹），
-              // 覆盖它等于把「Rate limit exceeded」这类真信息换成一句废话。
-   if (isCurrent && !userStopped.current.has(idleSid)) {
-            const real = streamErrText.current[idleSid]
-    // 用完即清：这张表只保护「本轮」，下一轮必须重新判定
-            if (real) delete streamErrText.current[idleSid]
-    setError(real || turnErr.message)
-          }
+          .then((list) => {
+            // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
+        const turnErr = turnErrorOf(list)
+   if (turnErr?.message) {
+              // 有明确的失败原因（含 MessageAbortedError → 上游断流）。
+              // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
+       //
+    // **但本轮已拿到上游错误原文时一律让路**（streamErrText）：
+    // 那条原文是我们主动 abort 换来的（内核随后盖的 MessageAbortedError 只是收尾痕迹），
+              // 覆盖它等于把 `AI_APICallError: Unauthorized` 这种真信息换成一句废话。
+       if (isCurrent && !userStopped.current.has(idleSid)) {
+      const real = streamErrText.current[idleSid]
+            // 用完即清：这张表只保护「本轮」，下一轮必须重新判定
+                if (real) delete streamErrText.current[idleSid]
+                setError(real || turnErr.message)
+        }
    } else if (isCurrent && !turnErr?.aborted) {
-          // 正常完成的助手回合，清一下可能残留的旧错误提示
-       setError('')
+         // 正常完成的助手回合，清一下可能残留的旧错误提示。
+              //
+      // **但本会话刚显示过上游错误时不清**（2026-10-14 用户实测「错误显示后又消失」）：
+              // 时序是 stream error 先到（立刻 setError 显示原文）→ 内核重试完才推 session.idle，
+         // 而那一刻 `turnErrorOf` 可能还判不出错误（消息里 error 尚未落盘），
+   // 于是这个 else 分支把**刚显示给用户的真实错误**清掉了。
+   if (!streamErrText.current[idleSid] && !streamFailed.current.has(idleSid)) setError('')
         }
             if (!isCurrent) return
             setTodos([])
@@ -1774,21 +1770,24 @@ if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
         markBusy(sid, false)
             streamFailed.current.delete(sid)
             streamFailStreak = 0
-          } else if (streamFailed.current.has(sid)) {
-            // **本轮已收到内核的流式失败，但消息里还没有 error**（这正是 stream error 的特征：
-            // 失败只写日志，内核要重试到耗尽才写进消息）。此时绝不能继续等 session.idle——
+} else if (streamFailed.current.has(sid)) {
+         // **本轮已收到内核的流式失败，但消息里还没有 error**（这正是 stream error 的特征：
+  // 失败只写日志，内核要重试到耗尽才写进消息）。此时绝不能继续等 session.idle——
             // 内核重试最多 6 次、累计 1 分 39 秒，而它在这期间**既不推事件也不写消息**，
-            // 界面上就只剩一个永远转圈的「处理中」。
-            //
-            // 给 3 轮（≥3.6s）宽限让正常收尾先发生：万一内核其实恢复了呢（它有重试机制）。
-            // 超过 3 轮还 busy → 判定这轮已经废了，收口 + 提示，不再让用户干等。
-            streamFailStreak++
-            if (streamFailStreak >= 3) {
-              streamFailStreak = 0
-              streamFailed.current.delete(sid)
-              markBusy(sid, false)
-            }
-          } else {
+        // 界面上就只剩一个永远转圈的「处理中」。
+        //
+     // **只清 busy，保留 streamFailed 标记**（2026-10-14 修正）：
+      // 早先收口时顺手 delete 了标记，于是内核**后续几次重试**产生的 stream error
+            // 到达时 busy 已是 false → 既不收口也不提示，界面就此静默卡住。
+// 标记必须留到内核真正结束（session.idle / 回合对账 / 新一轮发送）再清。
+      //
+    // 宽限 3 轮（≥3.6s）让「内核其实恢复了」的情形先发生——它确实有重试机制。
+     streamFailStreak++
+  if (streamFailStreak >= 3) {
+   streamFailStreak = 0
+   markBusy(sid, false)
+        }
+      } else {
             // 本轮没有流式失败（走上面 else 分支说明失败标记不在）——复位计数
             streamFailStreak = 0
             streamFailed.current.delete(sid)
@@ -1800,21 +1799,27 @@ if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
         //   ① 最后一条消息是 assistant 且 info.time.completed 已盖戳（内核只在消息结束时写）；
         //   ② 整个会话没有任何 running/pending 的工具 part；
         //   ③ 连续 5 轮轮询（≥6s）都满足——两步衔接空档实测 3.7s+，2 轮会被误判提前收口。
-        // 三条同时成立说明内核那边回合已经落幕，本端补一次 markBusy(false) 对账。
+// 三条同时成立说明内核那边回合已经落幕，本端补一次 markBusy(false) 对账。
+        //
+      // **2026-10-14 补一条 deadTurn**：末条助手消息**既无 error 又无 completed** 也是落幕信号。
+        // 实测（tokenrhythm 401/429）：内核在重试期间先建了一条助手消息占位，
+        // 它既不会被写成 error（要等 6 次重试耗尽）、也不会有 completed（还在跑），
+// 于是 `finished` 永远不成立、而 streamFailed 已在上一段被 delete——
+        // **两个判据互斥，busy 永远清不掉，界面就一直「处理中」**。
+        // 放宽：末条助手消息没有 error、没有 completed、也没有 running 工具时，
+        // 连续 8 轮（≥10s）不变即认定这轮废了（正常生成的回合 completed 早就盖上了）。
         if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
           const last = list[list.length - 1]
           const hasRunning = list.some((m) => m.parts.some((x) => x.state?.status === 'running' || x.state?.status === 'pending'))
-          const finished =
-            !!last &&
-            last.info.role === 'assistant' &&
-            typeof last.info.time?.completed === 'number' &&
-            !hasRunning
-          if (finished) {
+          const lastDone = !!last && last.info.role === 'assistant'
+          const finished = lastDone && typeof last.info.time?.completed === 'number' && !hasRunning
+          const deadTurn = lastDone && typeof last.info.time?.completed !== 'number' && !msgErrorText(last) && !hasRunning
+if (finished || deadTurn) {
             finishedStreak++
-            if (finishedStreak >= 5) {
-              finishedStreak = 0
+            if (finishedStreak >= (finished ? 5 : 8)) {
+   finishedStreak = 0
               streamFailed.current.delete(sid)
-              markBusy(sid, false)
+        markBusy(sid, false)
             }
           } else {
             finishedStreak = 0
@@ -1831,6 +1836,53 @@ if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
       clearInterval(t)
     }
   }, [busy, p.sessionId])
+
+  /**
+   * 内核重试耗尽后的收尾对账（**不依赖 busy**）。
+   *
+   * 背景（2026-10-14 实测，tokenrhythm 401/429）：
+   * 收到 stream error 后我们**主动 abort 收口**、busy 置 false，上面那个轮询 effect
+   * （依赖 busy）随之停止。但**内核那边可能还在重试队列里**（abort 不一定立刻打断它），
+   * 等它最终把 error 写进消息时，本端已经没有轮询在跑，历史拉不到、状态也没人收。
+   *
+   * 这里补一条短窗口对账：本会话收到过 stream error 的，每 2 秒拉一次历史，
+   * 拿到内核写的最终 error 就落到末尾提示条；60 秒（30 轮）仍拿不到就放弃自愈，
+   * 清掉标记以免它把后续轮次都误判成「失败中」。
+   */
+  useEffect(() => {
+    let alive = true
+    let miss = 0
+    const t = window.setInterval(() => {
+      if (!alive) return
+    const sid = sidRef.current
+    if (!sid || !streamFailed.current.has(sid)) {
+        miss = 0
+        return
+      }
+      oc.messages(sid, dirRef.current)
+     .then((list) => {
+    if (!alive || sid !== sidRef.current) return
+          const em = list.length ? msgErrorText(list[list.length - 1]) : ''
+if (!em) {
+        // 内核还没写最终 error：继续等，但设上限防永久空转
+            if (++miss >= 30) {
+   streamFailed.current.delete(sid)
+              delete streamErrText.current[sid]
+         }
+            return
+        }
+          miss = 0
+   // 已有上游原文就让路，别用内核包装过的 `Unauthorized: 未认证…` 覆盖
+    const real = streamErrText.current[sid]
+          if (real) delete streamErrText.current[sid]
+          streamFailed.current.delete(sid)
+          setMsgs(hydrate(list, shown.current, texts.current))
+          if (!real) setError(em)
+        })
+        .catch(() => { /* 内核瞬时不可达，下一轮再试 */ })
+    }, 2000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
 
   // 整轮文件差量：内核把差量算在「用户消息」的 summary 上、回合结束才产出，
   // 拉到空结果就隔 3 秒重试几次，保证写入/编辑行最终能显示 +N/-M
@@ -2083,6 +2135,9 @@ if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
       userStopped.current.delete(sid)
       // 上一轮的流式失败标记同样作废：新回合不该继承上一轮的"已废"判定
       streamFailed.current.delete(sid)
+      // **streamErrText 也要清**（2026-10-14 补）：留着上一轮的原文会让下一轮正常完成时
+      // session.idle 误判「本轮已显示过上游错误」→ 错误条永远清不掉。
+      delete streamErrText.current[sid]
     }
     if (!sid) {
       // 草稿：首次发送才真正创建会话；标题直接用用户这句话（纯附件发送时用占位标题）
@@ -2533,14 +2588,11 @@ const turnErr = turnErrorOf(list)
                     <PartView key={last.id} part={last} projectPath={p.project?.path} preview={running ? previews[running.id] : previews[last.id]} previewParts={row.parts} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} count={row.parts.length} />
                   )
                 })}
-{/* 末条 AI 消息内联的错误：真实上游错误原文优先（streamErrText），
-                    否则用内核写进消息的 error。两者都没有就不渲染。 */}
-    {!busy && m.info.id === lastAid && inlineErr && (
-          <div className="msgerr">
-<AlertCircle size={13} /> <span>{inlineErr}</span>
-                  </div>
-                )}
-                {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账。
+   {/* 错误**不内联**在 AI 消息里（2026-10-14 用户定版）：
+  内核写进消息 `info.error` 的是包装过的 `Unauthorized: 未认证或登录已过期`，
+   与上游原文（`AI_APICallError: Unauthorized`）语义重复，
+   两个都显示就是同一失败说两遍、还各说各话。统一只在对话流末尾显示一条。 */}
+   {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账。
                     与下面的模型尾注同规矩：busy 期间也要常驻，只藏正在流式的那条。 */}
                 {(!busy || m.info.id !== lastAid) && !!usedByMsg[m.info.id]?.length && (
                   <div className="cu-models" title={usedByMsg[m.info.id].map((u) => `${u.label || u.id}（${u.provider || u.id}）`).join('\n')}>
@@ -2570,10 +2622,10 @@ const turnErr = turnErrorOf(list)
               </div>
             )
           })}
-          {/* 失败反馈走对话流：作为一条 AI 消息落在消息末尾，而非顶部弹条。
-              末条 AI 消息已内联展示同一错误（msgErrorText）时不再重复——否则
-              回合对账 setError 与消息自带 error 会一字不差地出现两遍（实测）。 */}
-          {error && error !== inlineErr && (
+          {/* 失败反馈：作为一条消息落在对话流末尾，**只在末尾显示这一处**（错误样式，红边红字）。
+   不内联在 AI 消息里——内核写进 info.error 的是包装过的 `Unauthorized: 未认证或登录已过期`，
+   而这里显示的是上游原文 `AI_APICallError: Unauthorized`，同一失败两条会各说各话。 */}
+          {error && (
             <div className="amsg">
               <div className="msgerr">
                 <AlertCircle size={13} /> <span>{error}</span>
