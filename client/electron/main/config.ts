@@ -507,6 +507,11 @@ let dataMcp: { path: string } | undefined
 export function setDataMcp(v: { path: string }): void {
   dataMcp = v
 }
+/** 邮件 MCP（mail_* 收发查 Agent Mail）脚本路径 */
+let mailMcp: { path: string } | undefined
+export function setMailMcp(v: { path: string }): void {
+  mailMcp = v
+}
 
 /**
  * 思考档位 → 内核 variants（档位名 → 请求选项覆盖）。
@@ -694,6 +699,17 @@ export function writeOpencodeConfig(s: Settings): void {
       enabled: true
     }
   }
+  // 邮件 MCP：经 agently-cli（随包分发在 resources/node_modules）收发查 Agent Mail。
+  // 不调模型；授权态在系统钥匙串，未授权时工具会自报指引（设置 → 邮箱），照常挂载。
+  if (mailMcp) {
+    mcp.mail = {
+      type: 'local',
+      command: [...nodeExec(), mailMcp.path],
+      environment: nodeEnv(),
+      timeout: 120000,
+      enabled: true
+    }
+  }
   // 生成类模型（生图 / 生视频 / 语音）都不走对话接口，逐个角色挑出目标挂成工具，对话模型靠它们出片出声
   // 生成角色由用户在模型配置里显式选（ModelCfg.gen），没选过的按模型名判——见 types.ts genRoleOf
   //
@@ -870,7 +886,12 @@ export function writeOpencodeConfig(s: Settings): void {
         '- **全局记忆**：用户明确说「记住…」「以后都…」「写进全局记忆」时，调 `memory_append` 追加**一条**；' +
         '写成**规则本身**（如「包管理统一用 pnpm」），不要写成「用户希望…」的转述，也不要一次塞多条内容。' +
         '想看现有记忆调 `memory_read`。**严禁**把闲聊、一次性任务细节、单个项目的临时上下文写进全局记忆' +
-        '——那会污染用户之后所有项目、所有会话（含手机端），用户要求删除前它一直在。'
+        '——那会污染用户之后所有项目、所有会话（含手机端），用户要求删除前它一直在。' +
+      // 邮件（Agent Mail）：发送有上游两段式确认，确认动作必须由真人做，模型不得代跳
+      '- **邮件（`mail_*` 工具）**：收邮件 / 搜邮件 / 读邮件直接做；**发邮件（`mail_send` / `mail_reply`）' +
+        '首次调用不带 `confirm`，等服务端返回确认要求后，先把收件人、主题、正文完整复述给用户，' +
+        '得到用户明确同意（如「可以发」「发吧」）才带 `confirm=true` 重调。**用户没同意就绝不能重调带 confirm 的发送**；' +
+        '用户只是改了内容也要按新内容重新确认。地址拿不准先调 `mail_me` 看账号。'
   )
   instructions.push(routing)
   // 文件系统边界（2026-09-24 用户要求）：青鸟自身数据只放 ~/.qingniaoai，项目操作不越界。

@@ -147,6 +147,9 @@ extraResources:
   # 数据处理 MCP 脚本（json_query / regex_find：JSON 接口一步取值、正则批量提取）
   - from: resources/mcp/data-mcp.mjs
     to: data-mcp.mjs
+  # 邮件 MCP 脚本（mail_* 收发查 Agent Mail；依赖的 agently-cli 包在下面的 node_modules 拷贝里）
+  - from: resources/mcp/mail-mcp.mjs
+    to: mail-mcp.mjs
   # 办公 MCP 的依赖包：与脚本平铺到 resources/node_modules，脚本就近 import（xlsx/docx/pptxgenjs/
   # pdfjs-dist 等，见 office-mcp.mjs 头部 workerSrc 注释）；dev 态则从 resources/mcp/node_modules 解析
   - from: resources/mcp/node_modules

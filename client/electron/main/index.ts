@@ -5,7 +5,8 @@ import { createServer } from 'node:http'
 import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { appendGlobalMemory, loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDataMcp, setMediaMcp, setMemoryMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, usableProviders, writeOpencodeConfig, type Settings } from './config.ts'
+import { appendGlobalMemory, loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDataMcp, setMailMcp, setMediaMcp, setMemoryMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, usableProviders, writeOpencodeConfig, type Settings } from './config.ts'
+import { mailLogin, mailLogout, mailStatus, setMailWindow } from './mail.ts'
 import { fetchZenModels } from './zen.ts'
 import { refreshRouterFreeModels } from './freemodels.ts'
 import type { AccessLevel, DepItem } from './types.ts'
@@ -82,6 +83,7 @@ function createWindow(): void {
       webviewTag: true
     }
   })
+  setMailWindow(mainWin) // 邮件授权流程的进度事件走这个窗口广播
   mainWin.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }
@@ -978,7 +980,17 @@ function dataMcpPath(): string {
   return app.isPackaged ? join(process.resourcesPath, 'data-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'data-mcp.mjs')
 }
 
+/** 邮件 MCP（mail_* 收发查 Agent Mail）脚本位置（随安装包分发） */
+function mailMcpPath(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'mail-mcp.mjs') : join(app.getAppPath(), 'resources', 'mcp', 'mail-mcp.mjs')
+}
+
 ipcMain.handle('settings:get', () => loadSettings())
+
+// 邮件（Agent Mail）：状态查询 / 设备授权 / 退出登录（见 mail.ts）
+ipcMain.handle('mail:status', () => mailStatus())
+ipcMain.handle('mail:login', () => mailLogin())
+ipcMain.handle('mail:logout', () => mailLogout())
 
 /** 渲染层停止兜底用：内核健康探测（主进程 isHealthy，不经内核REST） */
 ipcMain.handle('kernel:health', () => adapter.isHealthy())
@@ -1550,6 +1562,7 @@ app.whenReady().then(async () => {
   setOfficeMcp({ path: officeMcpPath() })
   setMemoryMcp({ path: memoryMcpPath() })
   setDataMcp({ path: dataMcpPath() })
+  setMailMcp({ path: mailMcpPath() })
   // 平台服务端（青鸟平台，Go 单二进制）：探测 health，不通时在本机扫顺延端口并落盘修正地址。
   // 必须在 writeOpencodeConfig 之前——发现出的新端口要写进内核的平台网关地址；
   // 也必须在 relay.apply() 之前——远程开关是 apply 的前提，否则服务端起来了也不会注册设备。

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, BarChart3, Brain, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Settings, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
+import { AlertCircle, BarChart3, Brain, Check, CircleUser, Cpu, Eye, EyeOff, FolderOpen, GripVertical, Globe, ImagePlus, Layers, Link2, LoaderCircle, Mail, Monitor, Palette, Pencil, Plus, RefreshCw, Rocket, Settings, Sparkles, Terminal, Trash2, type LucideIcon } from 'lucide-react'
 import { Modal } from './Modal'
 import { moveItem, useDragSort } from './useDragSort'
 import { Switch } from './Switch'
 import { UsagePanel } from './UsagePanel'
+import MailPanel from './MailPanel'
 import { AccountPanel } from './AccountPanel'
 import { UpdatePanel } from './UpdatePanel'
 import { getThemeList, CUSTOM_ID, type ThemeBgCfg, type ThemeBgMode, type ThemeBgSlot } from '../theme'
@@ -153,6 +154,8 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'mcp', label: 'MCP', icon: Globe },
   // 记忆排在「使用量」上面：它是往里配的东西（AI 该知道什么），使用量是往外看的账
   { id: 'memory', label: '记忆', icon: Brain },
+  // 邮箱紧跟记忆：同为「给 AI 配能力」的页（授权后 AI 才能收发邮件），不是往外看的信息
+  { id: 'mail', label: '邮箱', icon: Mail },
   // 使用量紧跟 MCP：两者都是"往外看"的信息（连了什么、花了多少）
   { id: 'usage', label: '使用量', icon: BarChart3 },
   // 关于排最末：它是「这个软件本身」的信息（版本、条款），不是要配置的东西，
@@ -1477,6 +1480,8 @@ export function SettingsView(p: Props) {
             </div>
           </section>
         )}
+
+        {tab === 'mail' && <MailPanel />}
 
         {tab === 'usage' && <UsagePanel />}
 

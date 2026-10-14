@@ -240,7 +240,16 @@ const TW_CHAT: Record<string, string> = {
   语音合成: '語音合成',
   生成音乐: '生成音樂',
   语音识别: '語音辨識',
-  内置模型: '內建模型'
+  内置模型: '內建模型',
+  邮箱账号: '郵箱帳號',
+  收件箱: '收件匣',
+  读邮件: '讀郵件',
+  搜邮件: '搜郵件',
+  发邮件: '發郵件',
+  回邮件: '回郵件',
+  转发邮件: '轉發郵件',
+  删邮件: '刪郵件',
+  下载附件: '下載附件'
 }
 
 const TW_COMPONENTS: Record<string, string> = {
@@ -1017,7 +1026,16 @@ const EN_CHAT: Record<string, string> = {
   语音合成: 'Speech synthesis',
   生成音乐: 'Music generation',
   语音识别: 'Speech recognition',
-  内置模型: 'Built-in Models'
+  内置模型: 'Built-in Models',
+  邮箱账号: 'Mail account',
+  收件箱: 'Inbox',
+  读邮件: 'Read mail',
+  搜邮件: 'Search mail',
+  发邮件: 'Send mail',
+  回邮件: 'Reply',
+  转发邮件: 'Forward',
+  删邮件: 'Trash mail',
+  下载附件: 'Download attachment'
 }
 
 const EN_COMPONENTS: Record<string, string> = {

@@ -4,7 +4,7 @@ import type { WebviewTag } from 'electron'
 import hljs from 'highlight.js/lib/common'
 import {
   AlertCircle, ArrowDown, ArrowLeft, ArrowRight, Brain, Bot, Check, ChevronDown, ChevronRight, Copy, Cpu, FileDiff as FileDiffIcon, FilePlus, FileText,
-  Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
+  Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, Mail, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
 import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isGoEndpoint, isKernelTransportError, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
@@ -246,6 +246,26 @@ function sessionErrorText(err: unknown): string {
 }
 
 /**
+ * 取「当前轮」的最后一条**有内容**的助手消息（parts 为空的空壳占位不算）。
+ *
+ * 为什么必须限定在当前轮内（2026-10-14 踩过两次，这是本项目最深的坑之一）：
+ * 内核会在收到 prompt 的同一刻建好一条 `parts=0` 的助手占位消息，首个 part 可能几十秒后才落
+ * （实测 72 秒），而且**每轮末尾也会留一条空壳**。于是「取整个列表里最后一条有内容的助手消息」
+ * 在本轮还是空壳时，会**跨轮回退到上一轮已完成的那条**——拿上一轮的 completed 去判本轮，
+ * 结果是本轮刚开始就被判成「已结束」，busy 被立刻清掉，界面表现为
+ * 「发出去什么都没发生：没有处理中、没有回复」和「已用时冻结后重新计时」。
+ *
+ * 所以口径固定为：**最后一条 user 消息之后**、且有内容的最后一条助手消息。没有就是 null（真在起头）。
+ */
+function currentTurnLast(list: MessageView[]): MessageView | null {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].info.role !== 'assistant') break // 已越过当前轮的起点（落在 user 消息上）
+    if (list[i].parts.length > 0) return list[i]
+  }
+  return null
+}
+
+/**
  * 回合收尾对账：拉一次 /message，把「只写进内核日志、没走事件」的失败补到界面上。
  *
  * 背景（2026-09-27 实测）：内核把大量断流/上游错误只写进 opencode.log 的
@@ -261,7 +281,12 @@ function sessionErrorText(err: unknown): string {
 function turnErrorOf(list: MessageView[]): { message?: string; aborted?: 'retry' } | null {
   const last = list[list.length - 1]
   if (!last) return null
-  if (last.info.role !== 'assistant') {
+  // **末位仍是空壳占位 = 本轮正在等第一个 part**，内核没死，绝不能在这里收口
+  // （否则 isEmptyTurn 判成「空轮已结束」→ markBusy(false) → 界面完全没反应，见 currentTurnLast 注释）
+  if (last.info.role === 'assistant' && last.parts.length === 0) return null
+  const target = currentTurnLast(list)
+  if (!target) return null
+  if (target.info.role !== 'assistant') {
     // **末条是用户消息 = 这一轮压根没开始**（2026-10-14 实测）：
     // provider 写错 / 模型 id 不存在这类失败，内核**连助手消息都不建**，
     // 只在 session.error 事件里带一句 `Model not found: xxx/nope.`。
@@ -269,12 +294,12 @@ function turnErrorOf(list: MessageView[]): { message?: string; aborted?: 'retry'
     // 界面表现是「发出去一句话，然后永远安静」（没有错误、没有重试入口）。
     // 返回 aborted 让上层走「本轮已结束」的收口，不再让用户干等；
     // 具体文案由 session.error 事件 / streamErrText 提供，这里不猜。
-    if (last.info.role === 'user') return { aborted: 'retry' }
+    if (target.info.role === 'user') return { aborted: 'retry' }
     return null
   }
-  const em = msgErrorText(last)
+  const em = msgErrorText(target)
   if (em) return { message: em }
-  if (isAbortedAssistant(last) || isEmptyTurn(last)) return { aborted: 'retry' }
+  if (isAbortedAssistant(target) || isEmptyTurn(target)) return { aborted: 'retry' }
   return null
 }
 
@@ -428,6 +453,8 @@ export function ChatView(p: Props) {
   const busyDir = useRef<Record<string, string | undefined>>({})
   // 各 busy 会话本轮开始时间：「已用时」按它起算，切走再切回不会从头计
   const busySince = useRef<Record<string, number>>({})
+  /** 清 busy 时暂存的起算点：同一轮被短暂误清又重认领（≤15s）时，「已用时」接原计时而不是归零 */
+  const prevBusySince = useRef<Record<string, { since: number; at: number }>>({})
   // 已拉到的整轮文件差量：用户消息 id → 差量列表（工具行据此显示 +N/-M，展开显示差量代码）
   const [diffs, setDiffs] = useState<Record<string, FileDiff[]>>({})
   const diffsBusy = useRef<Set<string>>(new Set())
@@ -805,9 +832,13 @@ export function ChatView(p: Props) {
   const autoContinueIds = useRef<Set<string>>(new Set())
   /** 助手消息 → 所属用户消息 id（差量按用户消息拉，这里做渲染期的映射） */
   const turnOwner = turnOwners(msgs)
-  // 最新一条助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
-  // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起
-  const lastAid = [...msgs].reverse().find((m) => m.info.role === 'assistant')?.info.id
+  // 最新一条**有内容**的助手消息：只有它身上的 running 工具是"真在跑"；更早轮次的残留 running 按中断展示，
+  // 否则发新消息后旧轮还挂着加载动画、新轮又在思考，两轮状态混在一起。
+  //
+  // 限定在当前轮（最后一条 user 之后）+ 排除空壳（`parts.length === 0`）：内核收到 prompt 的
+  // 同一刻就建 parts=0 的占位消息，本轮出字前它就是列表末位；不排除会让 lastAid 指向空壳，
+  // 于是本轮的 running 工具判不出来（工具行不转圈）、流式高亮也落空。见 currentTurnLast 注释。
+  const lastAid = currentTurnLast(msgs)?.info.id
   // 终端长跑：本轮最新运行中的工具是终端且持续 30s 以上 → 任务卡在终端上，不再算「处理中」，
   // 新消息发送将中止当前轮并接管
   let terminalBlocked = false
@@ -840,9 +871,18 @@ export function ChatView(p: Props) {
     if (!sid) return
     const next = { ...busySetRef.current }
     if (running) {
+      const wasBusy = next[sid] === true
       next[sid] = true
-      // 本轮开始时间：已用时的起算点（新一轮 prompt 覆盖旧值，同轮内切会话不受影响）
-      busySince.current[sid] = Date.now()
+      // 本轮开始时间：已用时的起算点。
+      // **只在首次进入 busy 时打点**（2026-10-14 用户实测）：同一轮里 busy 会被多条路径反复重认领
+      // （手机回合的 session.busy 事件、delta 兜底、running 工具快照续命…），
+      // 原来每次都无条件覆盖 busySince，于是「处理中 已用时」先冻结在 0，隔一段又从 0 重来——
+      // 表现为计时反复归零。同一轮内切会话不受影响（起算点本来就存在）。
+      if (!wasBusy && !busySince.current[sid]) {
+        // 15s 内刚清过 busy 视为同一轮被短暂误清后的重认领：恢复原起算点，已用时连续不归零
+        const prev = prevBusySince.current[sid]
+        busySince.current[sid] = prev && Date.now() - prev.at < 15_000 ? prev.since : Date.now()
+      }
       if (foreign) foreignSids.current.add(sid)
       else foreignSids.current.delete(sid)
       // 记录会话所属项目：多项目并行时停止/重试必须带同一 directory，否则内核找不到该会话。
@@ -852,6 +892,8 @@ export function ChatView(p: Props) {
       if (d) busyDir.current[sid] = d
     } else {
       delete next[sid]
+      const since = busySince.current[sid]
+      if (since) prevBusySince.current[sid] = { since, at: Date.now() }
       delete busySince.current[sid]
     }
     busySetRef.current = next
@@ -888,6 +930,66 @@ export function ChatView(p: Props) {
   /** onRefreshSessions 的最新引用（事件回调只注册一次，闭包里的 props 会过期） */
   const onRefreshRef = useRef(p.onRefreshSessions)
   onRefreshRef.current = p.onRefreshSessions
+
+  /** session.idle 宽限收口计时器：sid → timer id。期间任何活动事件都会取消它（见 idle 分支） */
+  const idleClearTimers = useRef<Record<string, number>>({})
+
+  /** 回合是否仍在进行：存在未 completed 的有内容助手消息，或有 running/pending 的工具 part */
+  function turnStillOn(list: MessageView[]): boolean {
+    return (
+      list.some((m) => m.info.role === 'assistant' && m.parts.length > 0 && typeof m.info.time?.completed !== 'number' && !msgErrorText(m)) ||
+      list.some((m) => m.parts.some((x) => x.state?.status === 'running' || x.state?.status === 'pending'))
+    )
+  }
+
+  /** 取消某会话待执行的宽限收口（收到活动事件 / 新一轮发起时调用） */
+  function cancelIdleClear(sid: string) {
+    const t = idleClearTimers.current[sid]
+    if (t) {
+      window.clearTimeout(t)
+      delete idleClearTimers.current[sid]
+    }
+  }
+
+  /** 回合收尾对账：清流式失败标记、补报只落日志的失败、刷新界面与侧栏、挂「本轮另调用」 */
+  function finalizeTurn(sid: string, list: MessageView[]) {
+    const isCurrent = sid === sidRef.current
+    // 回合正常收尾：流式失败标记作废（这一轮既然走完了，之前那次失败不影响下一轮判定）
+    streamFailed.current.delete(sid)
+    // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
+    const turnErr = turnErrorOf(list)
+    if (turnErr?.message) {
+      // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
+      // 本轮已拿到上游错误原文时一律让路（streamErrText）：那条原文是我们主动 abort 换来的，
+      // 内核随后盖的 MessageAbortedError 只是收尾痕迹，覆盖它等于把真信息换成一句废话。
+      if (isCurrent && !userStopped.current.has(sid)) {
+        const real = streamErrText.current[sid]
+        // 用完即清：这张表只保护「本轮」，下一轮必须重新判定
+        if (real) delete streamErrText.current[sid]
+        setError(real || turnErr.message)
+      }
+    } else if (isCurrent && !turnErr?.aborted) {
+      // 正常完成的助手回合，清一下可能残留的旧错误提示。
+      // **但本会话刚显示过上游错误时不清**（2026-10-14 用户实测「错误显示后又消失」）：
+      // stream error 先到（立刻 setError 显示原文）→ 内核收尾才推 idle，那一刻
+      // turnErrorOf 可能还判不出错误，否则这个分支会把刚显示的真实错误清掉。
+      if (!streamErrText.current[sid] && !streamFailed.current.has(sid)) setError('')
+    }
+    if (!isCurrent) return
+    setTodos([])
+    setMsgs(hydrate(list, shown.current, texts.current))
+    p.onRefreshSessions()
+    // 本轮用过的额外模型（识图 / 生图 / 配音…）挂到本轮最后一条 AI 回复下方。
+    // 一轮没额外调用过就不挂——每轮都挂一行「未使用其他模型」纯属噪音。
+    const usedNow = turnModels.current
+    turnModels.current = []
+    if (usedNow.length) {
+      // 挂到本轮**最后一条有内容的**助手消息上：内核每轮末尾会追加一条 parts=0 的空壳占位，
+      // 挂到它上面就等于挂到空 div 上（那一行永远不显示），必须用 currentTurnLast
+      const lastAsstOfTurn = currentTurnLast(list)
+      if (lastAsstOfTurn) setUsedByMsg((prev) => ({ ...prev, [lastAsstOfTurn.info.id]: usedNow }))
+    }
+  }
 
   /**
    * 硬失败特征：与请求内容无关、重试必然再失败的错误。
@@ -1263,11 +1365,15 @@ const text = humanizeError(pr.message)
         const pr = e.properties as { sessionID?: string; busy?: boolean }
         const sid = pr.sessionID
         if (!sid) return
+        // 内核重新宣告 busy = 这一轮还活着：取消待执行的宽限收口
+        if (pr.busy === true) cancelIdleClear(sid)
         markBusy(sid, pr.busy === true, undefined, true)
       } else if (e.type === 'message.updated') {
         const info = e.properties.info as MessageView['info'] | undefined
         if (!info) return
         roles.current.set(info.id, info.role)
+        // 有新消息/消息更新 = 有活动：取消待执行的宽限收口（内核建下一步助手消息时走这里）
+        if (info.sessionID) cancelIdleClear(info.sessionID)
         // 续跑的「继续」：真实用户消息到达即记为隐藏，并消费一次待认领标记
         if (info.role === 'user' && info.sessionID === sidRef.current && autoContinuePending.current) {
           autoContinuePending.current = false
@@ -1278,7 +1384,15 @@ const text = humanizeError(pr.message)
         // 手机扫码发起的回合：本端不是发起者，busy 只能从事件里认领。
         // 认领了才会显示「处理中」、才会跑流式兜底轮询、session.idle 才不会被跳过。
         // delta 只属于助手消息（用户消息是整段快照），所以不会把「我刚发的话」误判成在跑。
-        if (pr.sessionID && !busySetRef.current[pr.sessionID]) markBusy(pr.sessionID, true, undefined, true)
+        if (pr.sessionID && !busySetRef.current[pr.sessionID]) {
+          // 与下方 part.updated 的重认领同口径：本端自己发起的轮（busyDir 有记录/正看着）不标
+          // foreign——否则误清后的重认领会把本地轮当「手机回合」，熔断/自动续跑对它全部失灵
+          const fs = pr.sessionID
+          const foreign = fs !== sidRef.current && !busyDir.current[fs]
+          markBusy(fs, true, busyDir.current[fs] ?? (fs === sidRef.current ? dirRef.current : undefined), foreign)
+        }
+        // delta = 还在出字：取消待执行的宽限收口
+        if (pr.sessionID) cancelIdleClear(pr.sessionID)
         if (pr.sessionID !== sidRef.current) return
         if (pr.field === 'text' || pr.field === 'reasoning')
           setMsgs((prev) => appendDelta(prev, pr, texts.current, roles.current, shown.current, startTicker))
@@ -1291,6 +1405,8 @@ const text = humanizeError(pr.message)
         }
       } else if (e.type === 'message.part.updated') {
         const part = e.properties.part as Part
+        // 有 part 快照流进来 = 有活动：取消待执行的宽限收口
+        if (part.sessionID) cancelIdleClear(part.sessionID)
         // 失败熔断放在会话过滤**之前**：别的会话在跑（切走之后）同样要能被刹住
         if (part.type === 'tool' && part.state && part.state.status !== 'running' && part.state.status !== 'pending') {
           if (noteToolOutcome(part.sessionID, part)) return
@@ -1379,49 +1495,49 @@ const text = humanizeError(pr.message)
         // 所以「本端正在看的会话」即使不是自己发起的，也要在 idle 时拉一次完整历史；
         // 与己无关的会话照旧直接跳过（不然每个任务跑完都要多拉一份历史）。
         if (!owned && idleSid !== sidRef.current) return
-        // 处理中的会话空闲：无论用户是否切走都要清该会话的 busy（防切回时残留"正在思考"）
-        markBusy(idleSid, false)
-// 回合正常收尾：流式失败标记作废（这一轮既然走完了，之前那次失败不影响下一轮判定）
-        streamFailed.current.delete(idleSid)
         const isCurrent = idleSid === sidRef.current
-    oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
+        // **一轮之内内核会推多次 session.idle**（2026-10-14 实测）：内核按 step 切分整轮，
+        // 每完成一步（skill → bash → 正文）就推一次 idle。实测一轮 33 秒内推了 3 次：
+        // 16:00:03 skill 完成、16:00:36 bash 完成、16:01:01 正文完成。
+        // 原实现收到 idle 就 `markBusy(false)` → busy 被清 3 次 → 界面「处理中」闪三下，
+        // 每次再靠后续 session.busy / delta 兜底点亮回来（用户观感：忽有忽无、思考标志闪烁、
+        // 计时反复重来）。
+        //
+        // 正确判据：**当前轮还有没有没拿到 completed 的助手消息**——有就说明这轮还没走完，
+        // 这次 idle 只是内核在两条 assistant 消息之间的换气，不该收口。
+        // 先拉一次历史再决定（顺带把内容刷进界面），避免「先清 busy 再刷」的中间态。
+        oc.messages(idleSid, isCurrent ? dirRef.current : undefined)
           .then((list) => {
-            // 回合结束对账：把「只写日志、没走事件」的失败（certificate/限流/Aborted/空壳截断）补到界面。
-        const turnErr = turnErrorOf(list)
-   if (turnErr?.message) {
-              // 有明确的失败原因（含 MessageAbortedError → 上游断流）。
-              // 用户手动停止的会话不再提示——停止按钮本身就是反馈。
-       //
-    // **但本轮已拿到上游错误原文时一律让路**（streamErrText）：
-    // 那条原文是我们主动 abort 换来的（内核随后盖的 MessageAbortedError 只是收尾痕迹），
-              // 覆盖它等于把 `AI_APICallError: Unauthorized` 这种真信息换成一句废话。
-       if (isCurrent && !userStopped.current.has(idleSid)) {
-      const real = streamErrText.current[idleSid]
-            // 用完即清：这张表只保护「本轮」，下一轮必须重新判定
-                if (real) delete streamErrText.current[idleSid]
-                setError(real || turnErr.message)
-        }
-   } else if (isCurrent && !turnErr?.aborted) {
-         // 正常完成的助手回合，清一下可能残留的旧错误提示。
-              //
-      // **但本会话刚显示过上游错误时不清**（2026-10-14 用户实测「错误显示后又消失」）：
-              // 时序是 stream error 先到（立刻 setError 显示原文）→ 内核重试完才推 session.idle，
-         // 而那一刻 `turnErrorOf` 可能还判不出错误（消息里 error 尚未落盘），
-   // 于是这个 else 分支把**刚显示给用户的真实错误**清掉了。
-   if (!streamErrText.current[idleSid] && !streamFailed.current.has(idleSid)) setError('')
-        }
-            if (!isCurrent) return
-            setTodos([])
-            setMsgs(hydrate(list, shown.current, texts.current))
-            p.onRefreshSessions()
-            // 本轮用过的额外模型（识图 / 生图 / 配音…）挂到本轮最后一条 AI 回复下方。
-            // 一轮没额外调用过就不挂——每轮都挂一行「未使用其他模型」纯属噪音。
-            const usedNow = turnModels.current
-            turnModels.current = []
-            if (usedNow.length) {
-              const lastAsstOfTurn = [...list].reverse().find((m) => m.info.role === 'assistant')
-              if (lastAsstOfTurn) setUsedByMsg((prev) => ({ ...prev, [lastAsstOfTurn.info.id]: usedNow }))
+            if (owned && turnStillOn(list)) {
+              // 本轮仍在进行：保持 busy，「处理中」连贯显示，内容照常刷新
+              streamFailed.current.delete(idleSid)
+              cancelIdleClear(idleSid)
+              if (isCurrent) {
+                setTodos([])
+                setMsgs(hydrate(list, shown.current, texts.current))
+                p.onRefreshSessions()
+              }
+              return
             }
+            // **宽限收口**（2026-10-14 用户实测「处理中消失又闪回」）：idle 后**不立刻**清 busy——
+            // 内核每步结束都推 idle，而下一步的助手消息要数秒后才建出来，此刻「没有未完成消息」
+            // 不代表整轮落幕；立刻收口就是「处理中」消失、等下一步 delta 再点亮回来。
+            // 宽限 5s 后复核一次：仍无进行中迹象才真正收口；期间任何活动事件
+            // （delta / running 工具 / 新消息 / session.busy）都会取消它（见各分支的 cancelIdleClear）。
+            if (!idleClearTimers.current[idleSid]) {
+              idleClearTimers.current[idleSid] = window.setTimeout(() => {
+                delete idleClearTimers.current[idleSid]
+                oc.messages(idleSid, idleSid === sidRef.current ? dirRef.current : undefined)
+                  .then((list2) => {
+                    if (turnStillOn(list2)) return
+                    if (busySetRef.current[idleSid]) markBusy(idleSid, false)
+                    finalizeTurn(idleSid, list2)
+                  })
+                  .catch(() => { /* 内核瞬时不可达：下一轮 idle / 轮询兜底再收 */ })
+              }, 5000)
+            }
+            // 界面内容照常先刷进来，不等宽限期
+            if (isCurrent) setMsgs(hydrate(list, shown.current, texts.current))
           })
           .catch(() => { /* 事件流已展示内容 */ })
       } else if (e.type === 'qingniao.sse.reconnected') {
@@ -1430,9 +1546,10 @@ const text = humanizeError(pr.message)
           if (!s) continue
           oc.messages(s, s === sidRef.current ? dirRef.current : undefined)
             .then((list) => {
-              // 该会话最后一条助手消息已有完整文本 → 视为已完成，清 busy
+              // 该会话最后一条助手消息有完整文本且**回合确实没有进行中迹象**才清 busy——
+              // 多步回合中间步骤的消息也有完整文本，光看「有文本」会把跑了一半的轮误收口
               const last = [...list].reverse().find((m) => m.info.role === 'assistant' && (m.parts.some((x) => x.type === 'text' && x.text)))
-              if (last) markBusy(s, false)
+              if (last && !turnStillOn(list)) markBusy(s, false)
               // 重连前任务被中断且带明确错误（certificate/限流/Aborted）→ 当前会话补一条红色错误条。
               const turnErr = turnErrorOf(list)
 if (turnErr?.message) {
@@ -1503,7 +1620,12 @@ if (turnErr?.message) {
  .catch(() => { if (isCurrent && !stopped && shownErr) setError(shownErr) })
       }
     })
-    return off
+    return () => {
+      off()
+      // 卸载时清掉所有待执行的宽限收口，防对已卸载组件 setState
+      for (const t of Object.values(idleClearTimers.current)) window.clearTimeout(t)
+      idleClearTimers.current = {}
+    }
   }, [])
 
   /**
@@ -1627,7 +1749,12 @@ if (turnErr?.message) {
   useEffect(() => {
     if (busy && !prevBusyRef.current) turnStartRef.current = Date.now()
     if (!busy && prevBusyRef.current && turnStartRef.current) {
-      const owner = [...msgs].reverse().find((m) => m.info.role === 'user')?.info.id
+      // 轮首必须是**本轮真正那条**用户消息，不能取「最后一条 user 消息」
+      // （2026-10-14 用户实测）：连发两条时内核会依次处理，收尾那一刻最后一条 user 是第二条，
+      // 「已工作 N秒」于是挂到了还没开始的轮次上，看起来凭空冒出来一个徽标。
+      // turnOwners 按「assistant 归属到它前面那条 user」的规则算出真实轮首，取最后一个即可。
+      const owners = turnOwners(msgs)
+      const owner = [...owners.values()].pop()
       const sec = Math.round((Date.now() - turnStartRef.current) / 1000)
       // 一轮工作不该超过一天：超限（起算点丢失等异常）宁可不记，别让「已工作」显示天文数字
       if (owner && sec > 0 && sec <= 86400)
@@ -1735,6 +1862,8 @@ if (turnErr?.message) {
      * 把还在跑的回合提前清成空闲（实测 thinkphp 查询轮就踩了）。
      */
     let finishedStreak = 0
+    /** 上一轮轮询的指纹：收口连计只在「内容真的静止」时累计，见下方 finished/deadTurn 分支 */
+    let prevPollFp = ''
     /** 流式失败后仍 busy 的连续轮数：≥3 轮（≥3.6s）判定这轮废了，见下方收口兜底 */
     let streamFailStreak = 0
     const sync = async () => {
@@ -1809,21 +1938,43 @@ if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
         // 放宽：末条助手消息没有 error、没有 completed、也没有 running 工具时，
         // 连续 8 轮（≥10s）不变即认定这轮废了（正常生成的回合 completed 早就盖上了）。
         if (busySetRef.current[sid] && !userStopped.current.has(sid)) {
-          const last = list[list.length - 1]
-          const hasRunning = list.some((m) => m.parts.some((x) => x.state?.status === 'running' || x.state?.status === 'pending'))
-          const lastDone = !!last && last.info.role === 'assistant'
+          // **只看当前轮**（最后一条 user 之后）最后一条有内容的助手消息，见 currentTurnLast 注释。
+          // 这里绝不能「取整个列表最后一条有内容的」——本轮还是空壳占位时会跨轮回退到
+          // 上一轮已完成的那条，拿它的 completed 判本轮 → 本轮刚开始就被收口，
+          // 表现为「发出去什么都没有：没有处理中、没有回复」（2026-10-14 用户实测回归）。
+          const last = currentTurnLast(list)
+    const hasRunning = list.some((m) => m.parts.some((x) => x.state?.status === 'running' || x.state?.status === 'pending'))
+          const lastDone = !!last
           const finished = lastDone && typeof last.info.time?.completed === 'number' && !hasRunning
-          const deadTurn = lastDone && typeof last.info.time?.completed !== 'number' && !msgErrorText(last) && !hasRunning
-if (finished || deadTurn) {
-            finishedStreak++
-            if (finishedStreak >= (finished ? 5 : 8)) {
-   finishedStreak = 0
-              streamFailed.current.delete(sid)
-        markBusy(sid, false)
-            }
-          } else {
-            finishedStreak = 0
-          }
+   const deadTurn = lastDone && typeof last.info.time?.completed !== 'number' && !msgErrorText(last) && !hasRunning
+      // **别把「内核刚建助手消息、还没开始吐 part」当成死轮**（2026-10-14 用户实测）：
+          // 内核会在收到 prompt 的同一刻就建好助手消息占位，首个 part 可能几十秒后才落
+       // （实测 MiMo-V2.6-Flash Free：15:29:16 建消息 → 15:30:28 才出第一个 part）。
+    // 这段空窗期里上面三个判据全部成立（无 completed、无 error、无 running 工具），
+        // deadTurn 连满 8 轮就把 busy 误清掉 —— 表现为「处理中」闪一下消失、
+    // 已用时冻结、随后又重新开始计时。
+          // 起算保护：助手消息创建后 20s 内一律不判死（重试本身最长约 1 分 39 秒，
+    // 但那种情况有 stream error 走另一条分支，不需要靠 deadTurn 收口）。
+          const lastAgeMs = last ? Date.now() - (last.info.time?.created ?? Date.now()) : Infinity
+   // 末位只剩空壳（内核刚建占位、还没出字）→ 本轮在起头，两个判据都不成立，等它
+          const booting = list[list.length - 1]?.parts.length === 0 && list[list.length - 1]?.info.role === 'assistant'
+     const deadTurnReady = deadTurn && lastAgeMs > 20_000 && !booting
+if (finished || deadTurnReady) {
+          // **收口只认「真的静止」**（2026-10-14 用户实测回归「处理中消失又闪回」）：
+          // deadTurn 的判据（无 completed、无 error、无 running 工具）对「纯文本长回复」整段
+          // 都成立——正文还在流式增长时它也是 true，连计 8 轮就把 busy 误清（下一条 delta
+          // 再点亮回来 = 消失又闪回，已用时归零重来；不推 delta 的 provider 更是整轮失去状态行）。
+          // 内容有变化（指纹变了）说明这轮活着：一律重新计数。
+          finishedStreak = fp === prevPollFp ? finishedStreak + 1 : 1
+          if (finishedStreak >= (finished ? 5 : 8)) {
+      finishedStreak = 0
+    streamFailed.current.delete(sid)
+   markBusy(sid, false)
+        }
+      } else {
+    finishedStreak = 0
+   }
+        prevPollFp = fp
         }
       } catch {
         /* 内核瞬时不可达，下一轮再试 */
@@ -1862,7 +2013,9 @@ if (finished || deadTurn) {
       oc.messages(sid, dirRef.current)
      .then((list) => {
     if (!alive || sid !== sidRef.current) return
-          const em = list.length ? msgErrorText(list[list.length - 1]) : ''
+          // 只看当前轮（见 currentTurnLast 注释），不能跨轮回退到上一轮
+    const meaningful = currentTurnLast(list)
+        const em = meaningful ? msgErrorText(meaningful) : ''
 if (!em) {
         // 内核还没写最终 error：继续等，但设上限防永久空转
             if (++miss >= 30) {
@@ -2269,6 +2422,8 @@ await oc.injectContext(sid, dir, memText).catch(() => { /* 记忆注入失败不
     }
 
     markBusy(sid, true, dir)
+    // 新一轮发起：上一轮残留的宽限收口一律作废（它若定时触发会把新轮误清掉）
+    cancelIdleClear(sid)
     userStopMarks.current.delete(sid)
     const files = attsOverride ?? []
     inflight.current = { sid, text, atts: files.length ? files : undefined }
@@ -2441,19 +2596,57 @@ const turnErr = turnErrorOf(list)
   // 本轮已用时：从本轮开始时间起算（busySince），显示靠 tick 每秒触发重渲染刷新
   const turnElapsed = fmtElapsed(Math.floor((Date.now() - (busySince.current[p.sessionId] ?? Date.now())) / 1000))
 
-  // 每条 assistant 消息是否轮首（owner 变化处）：轮结束后「已工作」徽标只挂轮首一条
+  // 每条 assistant 消息是否轮首（owner 变化处）：「已工作」徽标只挂轮首一条
   let prevTurnOwner: string | undefined
   const turnStarts = new Map<string, boolean>()
   // 每个回合「最后一条」AI 消息：模型名 / 速率 / 耗时尾注只挂它。
   // 工具多的回合内核会拆出多条 assistant 消息，逐条挂尾注就会一回合重复好几行
   // （2026-10-13 用户明确要求：模型 token 耗时这些绝不能重复生成多行）。
   const turnTail = new Map<string, string>()
+  /**
+   * 该条 assistant 所属回合**是否已结束**，以及轮尾秒数。
+   *
+   * 判据只用内核盖的 `time.completed`（+ 消息自带 error 算失败收场），**不再看全局 busy**。
+   * 早先的 `(!busy || m.info.id !== lastAid)` 有三个致命毛病（2026-10-14 用户实测）：
+   *   ① 发消息瞬间 busy 立刻为真、而内核的助手占位消息还没到，`lastAid` 仍指着**上一轮**轮尾
+   *      → 上一轮尾注被当成「正在流式的那条」瞬间藏掉，表现为模型行闪一下消失；
+   *   ② busy 在一轮内被反复置位/清空（认领、idle、轮询兜底），尾注跟着反复横跳；
+   *   ③ 它回答的是「是不是最后一条」而不是「这轮结束了没有」——用户要的是后者：
+   *      处理中就只显示处理中，结束了才显示模型行。
+   */
+  const turnSettled = new Map<string, boolean>()
+  const turnTailSec = new Map<string, number>()
   for (const m of msgs) {
     const owner = turnOwner.get(m.info.id)
-    turnStarts.set(m.info.id, m.info.role === 'assistant' && owner !== undefined && owner !== prevTurnOwner)
-    if (m.info.role === 'assistant' && owner !== undefined) turnTail.set(owner, m.info.id)
-    if (owner !== undefined) prevTurnOwner = owner
+    if (owner === undefined) continue
+    // **空壳占位直接剔出轮结构**（实测每轮末尾都有一条 parts=0 的 assistant 消息）：
+    // 它既没正文也没工具，渲染出来是个空 div，却因为「是最后一条 assistant」而顶掉
+    // 真正的轮尾——结果模型行挂到空壳上、已工作时长也算错。空壳不参与任何轮计算。
+    if (m.info.role === 'assistant' && m.parts.length === 0) continue
+    turnStarts.set(m.info.id, m.info.role === 'assistant' && owner !== prevTurnOwner)
+    if (m.info.role !== 'assistant') {
+      prevTurnOwner = owner
+      continue
+    }
+    turnTail.set(owner, m.info.id)
+    // 有 error 也算结束：上游失败时内核可能只写 error 不写 completed，
+    // 但用户那边看到的确实是「这一轮已经出结果了」（错误条），该给模型行与时长。
+    const done = typeof m.info.time?.completed === 'number' || !!msgErrorText(m)
+    turnSettled.set(m.info.id, done)
+    if (done) {
+      const own = turnSpent[owner]
+      turnTailSec.set(
+        owner,
+        own ||
+          (m.info.time?.completed && m.info.time?.created
+            ? Math.max(1, Math.round((m.info.time.completed - m.info.time.created) / 1000))
+            : 0)
+      )
+    }
+    prevTurnOwner = owner
   }
+  /** 有内容但还没拿到 completed 的助手消息 → 说明真在生成，该显示「处理中」而不是「正在思考」 */
+  const hasStreaming = msgs.some((m) => m.info.role === 'assistant' && m.parts.length > 0 && !turnSettled.get(m.info.id))
 
   /**
    * 会话标题：用户发的第一条信息（过长在标题栏截断），计划会话再带上执行日期。
@@ -2558,27 +2751,28 @@ const turnErr = turnErrorOf(list)
             }
             // 生成速率（见 genRateOf 注释）：拿不到就只显示模型名
             const rate = genRateOf(m)
+            // **空壳助手消息整条跳过**：内核每轮末尾都会留一条 parts=0 的占位消息，
+            // 既没正文也没工具，渲染出来是个纯空 div（有 margin/间距），
+            // 在界面上表现为「回复下面莫名其妙多出一块空白」。
+            if (m.parts.length === 0) return null
             // 尾注（模型/速率/耗时）只挂回合**最后一条** AI 消息，其余一律不渲染——防重复多行。
-            // 耗时与顶部「已工作」同口径（turnSpent，回合总时长）；老会话没有这份记录时
-            // 退回消息自带的起止时间差（completed-created），再没有就不显示。
+            // 显隐只看「这一轮结束了没有」（内核盖 completed / 带 error），不看全局 busy：
+            // 处理中就只显示处理中，结束后才显示模型行——用户 2026-10-14 明确要求这个次序。
             const isTail = turnTail.get(owner ?? '') === m.info.id
-            const spent = isTail
-              ? (owner != null ? turnSpent[owner] : 0) ||
-                (m.info.time?.completed && m.info.time?.created
-                  ? Math.max(1, Math.round((m.info.time.completed - m.info.time.created) / 1000))
-                  : 0)
-              : 0
+            const settled = isTail && !!turnSettled.get(m.info.id)
+            const spent = settled ? (owner != null ? turnTailSec.get(owner) ?? turnSpent[owner] ?? 0 : 0) : 0
             return (
               <div key={m.info.id} className="amsg">
-                {/* 轮首的「已工作」徽标：轮结束后固定显示该轮总耗时（处理中的实时时长看尾部状态条） */}
-                {turnStarts.get(m.info.id) && owner != null && turnSpent[owner] ? (
-                  <div className="turn-badge">{t('已工作 {v}', { v: fmtElapsed(turnSpent[owner]) })}</div>
+                {/* 轮首的「已工作」徽标：同样是「本轮已结束」才出现，
+                    处理中绝不提前显示（否则用户会看到徽标先闪出来、模型行后跟上）。 */}
+                {turnStarts.get(m.info.id) && owner != null && settled && !!turnTailSec.get(owner) ? (
+                  <div className="turn-badge">{t('已工作 {v}', { v: fmtElapsed(turnTailSec.get(owner)!) })}</div>
                 ) : null}
                 {partRows(m.parts, p.project?.path).map((row) => {
                   if (row.kind === 'part') {
                     const part = row.part
                     return (
-                      <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
+                      <PartView key={part.id} part={part} projectPath={p.project?.path} preview={previews[part.id]} live={busy && m.info.id === lastAid} tailPart={m.parts[m.parts.length - 1]?.id === part.id} diffs={diffs[turnOwner.get(m.info.id) ?? '']} />
                     )
                   }
                   // 相邻重复工具归组：组内最后一个 part 代表渲染，挂 ×N 角标
@@ -2593,8 +2787,8 @@ const turnErr = turnErrorOf(list)
    与上游原文（`AI_APICallError: Unauthorized`）语义重复，
    两个都显示就是同一失败说两遍、还各说各话。统一只在对话流末尾显示一条。 */}
    {/* 本轮额外调用过的模型：只在真调过时出现，挂在回复末尾让用户对得上账。
-                    与下面的模型尾注同规矩：busy 期间也要常驻，只藏正在流式的那条。 */}
-                {(!busy || m.info.id !== lastAid) && !!usedByMsg[m.info.id]?.length && (
+                    与下面的模型尾注同规矩：本轮结束（settled）才显示。 */}
+                {settled && !!usedByMsg[m.info.id]?.length && (
                   <div className="cu-models" title={usedByMsg[m.info.id].map((u) => `${u.label || u.id}（${u.provider || u.id}）`).join('\n')}>
                     <Cpu size={12} />
                     <span>{t('本轮另调用：')}{summarizeModels(usedByMsg[m.info.id])}</span>
@@ -2603,9 +2797,11 @@ const turnErr = turnErrorOf(list)
                 {/* 本次回复使用的模型：modelID/providerID 是内核持久化在消息里的，
                     重启后历史消息照样能显示。只挂回合最后一条（isTail）防多行重复；
                     后面依次追加生成速率与耗时。
-                    **旧尾注要常驻**：不能整体被 !busy 门住——发新消息（busy）期间历史回合的
-                    尾注必须还在，只藏正在流式生成的那条（lastAid），它落定后自然出现。 */}
-                {(!busy || m.info.id !== lastAid) && m.info.modelID && isTail && (
+                    **显隐只由「本轮是否结束」决定**（settled）：内核给最后一条盖上 completed
+                    才显示，处理中绝不提前露出来。旧判据 `!busy || id !== lastAid` 会在发消息
+                    瞬间出错——busy 立刻为真而内核助手占位消息还没到，lastAid 仍指着上一轮轮尾，
+                    上一轮尾注被当成「正在流式」误藏，表现为模型行闪一下又消失。 */}
+                {settled && m.info.modelID && (
                   <div
                     className="amsg-model"
                     title={
@@ -2676,7 +2872,7 @@ const turnErr = turnErrorOf(list)
                   <LoaderCircle size={13} className="spin" />
                   {asks.length > 0
                     ? t('等待你回答')
-                    : msgs.some((m) => m.info.role === 'assistant' && !turnBase.current.has(m.info.id))
+              : hasStreaming
                       ? t('处理中，已用时 {v}', { v: turnElapsed })
                       : t('正在思考，已用时 {v}', { v: turnElapsed })}
                 </>
@@ -3468,8 +3664,13 @@ function applySnapshot(
     texts.set(part.id, full)
     ensureTicker()
     // 还没进入流式状态的一部分（用户消息整段快照、或整段快照先于增量抵达）：
-    // 直接显示整段，避免先蹦一个空的底色气泡再逐字补全
-    if (shown.get(part.id) == null) shown.set(part.id, full.length)
+    // 直接显示整段，避免先蹦一个空的底色气泡再逐字补全。
+    // **空快照不消耗「首次」标记**（2026-10-14 实测）：部分 provider 对 reasoning 走
+    // 「先推一个空 text 的 part.updated、再推带全量 text 的快照」两拍（无逐字 delta）。
+    // 若第一拍空串就 `shown.set(id, 0)`，第二拍全量到达时 shown 仍是 0 → full.slice(0,0)=''
+    // 把 thinking 截回空 → 思考行永远渲染不出来，只能等回合结束全量 hydrate 才出现
+    //（用户实测「思考最后才出来」）。空文本放过去，等非空快照再整段打点显示。
+    if (shown.get(part.id) == null && full.length > 0) shown.set(part.id, full.length)
     const n = shown.get(part.id) ?? full.length
     patched = n < full.length ? { ...part, text: full.slice(0, n) } : part
   }
@@ -3745,6 +3946,15 @@ const TOOL_META: Record<string, { name: string; icon: ReactNode }> = {
   vision_describe_image: { name: '识图', icon: <Search size={13} /> },
   data_json_query: { name: 'JSON 取值', icon: <Braces size={13} /> },
   data_regex_find: { name: '正则提取', icon: <Regex size={13} /> },
+  mail_me: { name: '邮箱账号', icon: <Mail size={13} /> },
+  mail_list: { name: '收件箱', icon: <Mail size={13} /> },
+  mail_read: { name: '读邮件', icon: <Mail size={13} /> },
+  mail_search: { name: '搜邮件', icon: <Mail size={13} /> },
+  mail_send: { name: '发邮件', icon: <Mail size={13} /> },
+  mail_reply: { name: '回邮件', icon: <Mail size={13} /> },
+  mail_forward: { name: '转发邮件', icon: <Mail size={13} /> },
+  mail_trash: { name: '删邮件', icon: <Mail size={13} /> },
+  mail_attachment_download: { name: '下载附件', icon: <Mail size={13} /> },
   panel_navigate: { name: '浏览器导航', icon: <Globe size={13} /> },
   panel_snapshot: { name: '页面快照', icon: <Globe size={13} /> },
   panel_click: { name: '点击元素', icon: <MousePointerClick size={13} /> },
@@ -4261,8 +4471,13 @@ function partRows(parts: Part[], projectPath?: string): PartRow[] {
     }
     const last = tools[tools.length - 1]
     if (tools.length >= 2 && (last.state?.status ?? 'pending') !== 'error') {
-      // 归组：工具行合成一条（思考块被吞），last 代表渲染
+      // 归组：工具行合成一条（中间的思考块被吞），last 代表渲染
       rows.push({ kind: 'group', parts: tools, last })
+      // ⚠️ 收尾思考块不能吞：span 收集允许「思考块夹在工具之间」，循环对 reasoning 无条件吞进 span，
+      // 但**最后一个工具之后**的思考是模型对工具结果的复盘，渲染成组就永远看不见了
+      //（实测：发邮件失败后模型复盘的那段思考直接消失）。组渲染后把尾段思考按原样补回。
+      const lastToolIdx = span.reduce((acc, x, idx) => (x.type === 'tool' ? idx : acc), 0)
+      for (let k = lastToolIdx + 1; k < span.length; k++) rows.push({ kind: 'part', part: span[k] })
     } else {
       // 不归组：整段按原顺序逐行渲染
       for (const x of span) rows.push({ kind: 'part', part: x })
@@ -4281,7 +4496,7 @@ function relTarget(s: string, projPath?: string): string {
   return s
 }
 
-function PartView({ part, projectPath, preview, live, diffs, count, previewParts }: {
+function PartView({ part, projectPath, preview, live, diffs, count, previewParts, tailPart }: {
   part: Part
   projectPath?: string
   /** 该工具组正在流式写入的入参预览：普通行是自己；重复归组时组内最后一个正在写就显示它的 */
@@ -4292,6 +4507,8 @@ function PartView({ part, projectPath, preview, live, diffs, count, previewParts
   count?: number
   /** 重复归组里整组正在运行的 part（多个并行跑时同时转圈） */
   previewParts?: Part[]
+  /** 这个 part 是所在消息的最后一个（配合 live 判断「正在产出的思考」） */
+  tailPart?: boolean
 }) {
   // 内核自己塞的过程说明文本（synthetic）不渲染：read 工具会先吐一条
   //   Called the Read tool with the following input: {"filePath":"D:\...\xxx.mp3"}
@@ -4320,7 +4537,24 @@ function PartView({ part, projectPath, preview, live, diffs, count, previewParts
   if (part.type === 'reasoning') {
     // 空 reasoning（被中断/未产出内容）不渲染：避免残留出多个空「正在思考」、展开无内容
     if (!part.text?.trim()) return null
-    return <StepLine icon={<Brain size={13} />} name="思考" status="completed" body={<CodeBlock text={part.text} />} />
+    // 正在产出的思考要**过程可见**：转圈 + 自动展开流式文本，不能画成静态「已完成」——
+    // 用户 2026-10-14 明确要求思考在过程中就要显示，而不是结束才出现。
+    // **只在链路成立时给「运行中」**：live 代表整个回合还在忙（内核还在出字）。
+    // 不再要求 `tailPart`——推理 part 落地时内核几乎总会在它后面再补一个 text 占位 part
+    //（或者正文 part 跟着上来），使得它常常不是「消息最后一个 part」，若按 tailPart 判定，
+    // 思考块在流式中就永远是 completed + 折叠，视觉上等于「过程没有思考、结束才蹦出来」。
+    // 凡活回合里的思考块都当作「正在想」，给到——回合结束 live 转 false 后它自然变 completed。
+    // **默认收起**（2026-10-14 用户要求）：思考块只显示一行「思考」标题，想看内容再点开。
+    // 不再套 defaultOpen——running 也是收起态（转圈提示"正在想"，不自动展开正文）。
+    const running = !!live
+    return (
+      <StepLine
+        icon={<Brain size={13} />}
+        name="思考"
+        status={running ? 'running' : 'completed'}
+        body={<CodeBlock text={part.text} />}
+      />
+    )
   }
   if (part.type === 'tool') {
     const meta = TOOL_META[(part.tool ?? '').toLowerCase()] ?? { name: part.tool ?? '工具', icon: <Wrench size={13} /> }
@@ -4447,7 +4681,8 @@ function StepLine({
   hideErr,
   stats,
   spin = true,
-  count
+  count,
+  defaultOpen = false
 }: {
   icon: ReactNode
   name: string
@@ -4463,8 +4698,10 @@ function StepLine({
   spin?: boolean
   /** 相邻重复调用的归组次数：显示 ×N 角标（组内最后一次的代表行） */
   count?: number
+  /** 初始就展开（正在流式产出的思考块要过程可见，不能等用户手点） */
+  defaultOpen?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const expandable = !!body
   const running = status === 'running'
   const previewRef = useRef<HTMLPreElement>(null)

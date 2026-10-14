@@ -4,6 +4,7 @@
   "type": "module",
   "description": "办公文件 MCP（resources/mcp/office-mcp.mjs）的依赖清单。脚本就近 import 本目录下 node_modules，dev 与打包（extraResources 拷到 resources/node_modules）都能解析到。",
   "dependencies": {
+    "@tencent-qqmail/agently-cli": "^1.0.18",
     "docx": "^9.5.1",
     "jszip": "^3.10.1",
     "mammoth": "^1.11.0",

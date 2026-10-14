@@ -103,6 +103,22 @@ const api = {
   /** 把一段内容追加到项目当日记忆文件（<项目>/.qingniao/memory/YYYY-MM-DD.md） */
   appendMemory: (projectPath: string, content: string): Promise<void> =>
     ipcRenderer.invoke('memory:append', { projectPath, content }),
+  /** 邮件（Agent Mail）授权状态：authorized + 邮箱地址 / 失败原因（设置 → 邮箱） */
+  mailStatus: (): Promise<{ authorized: boolean; email?: string; error?: string }> =>
+    ipcRenderer.invoke('mail:status'),
+  /** 开始设备授权（CLI 自动拉浏览器；进度与结果由 onMailEvent 推送）。返回 { error } 表示没启动起来 */
+  mailLogin: (): Promise<{ error?: string }> => ipcRenderer.invoke('mail:login'),
+  /** 退出登录：清系统钥匙串凭据，返回刷新后的状态 */
+  mailLogout: (): Promise<{ authorized: boolean; email?: string; error?: string }> =>
+    ipcRenderer.invoke('mail:logout'),
+  /** 邮件授权流程进度：拿到的授权链接 / 完成（带最新状态）/ 失败原因 */
+  onMailEvent: (
+    cb: (e: { type: 'login_started' | 'login_url' | 'login_done' | 'login_failed'; url?: string; status?: { authorized: boolean; email?: string; error?: string }; message?: string }) => void
+  ): (() => void) => {
+    const handler = (_: unknown, e: unknown): void => cb(e as never)
+    ipcRenderer.on('qingniao.mail', handler)
+    return () => ipcRenderer.removeListener('qingniao.mail', handler)
+  },
   /** 技能列表：全局（~/.qingniaoai/opencode/skills）+ 当前项目（<项目>/.opencode/skills），含 frontmatter 校验结果 */
   listSkills: (projectPath?: string | null): Promise<SkillItem[]> => ipcRenderer.invoke('skills:list', { projectPath }),
   /** 读单条技能，返回拆分后的 frontmatter 与正文（编辑弹窗回填用） */

@@ -20,7 +20,7 @@ import { CODE_STYLES, type CodeStyle } from './codeStyle'
 type View = 'chat' | 'settings' | 'schedules'
 
 /** 设置页当前的标签页：由 App 持有，左栏「账号」入口才能直接跳到账号那一页 */
-export type SettingsTab = 'general' | 'theme' | 'providers' | 'skills' | 'mcp' | 'memory' | 'usage' | 'account' | 'about'
+export type SettingsTab = 'general' | 'theme' | 'providers' | 'skills' | 'mcp' | 'memory' | 'mail' | 'usage' | 'account' | 'about'
 export type ProjectSortMode = 'activity' | 'fixed'
 
 /**
