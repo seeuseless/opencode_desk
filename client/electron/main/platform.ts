@@ -33,7 +33,7 @@ interface ModelsResponse {
     name?: string
     /** 平台官方提供（后台模型列表那一列「内置」）；false = 第三方接入的同名模型 */
     builtin?: boolean
-    /** 平台扩展字段：限免 / 折扣 / 倍率，选择器里展示用 */
+    /** 平台扩展字段：限免 / 折扣 / 倍率。限免（free）只用于识别并剔除，不展示，见 types.ts 的 dropFreeModels */
     free?: boolean
     discount?: number | null
     ratio?: number
@@ -178,7 +178,7 @@ class Platform {
             context: MODEL_DEFAULTS.context,
             output: MODEL_DEFAULTS.output,
             input: looksVision ? (['text', 'image', 'vision'] as Modality[]) : (['text'] as Modality[]),
-            // 计价信息一起落盘：选择器要打「限免/折扣」标签并把倍率写在最右边，不必再单独请求一次
+            // 计价信息一起落盘：限免那批由 dropFreeModels 剔除，折扣/倍率则要打标签并写在最右边，不必再单独请求一次
             free: m.free === true,
             discount: typeof m.discount === 'number' ? m.discount : null,
             ratio: typeof m.ratio === 'number' ? m.ratio : undefined,

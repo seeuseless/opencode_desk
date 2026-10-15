@@ -335,8 +335,8 @@ const PROVIDER_PRESETS: {
      * 内核就落到匿名通道。**匿名走的是全站共享的免费配额，限流很紧**（会报
      * `Rate limit exceeded. Please try again later.`）——想换成自己的配额就在下面填 Key，
      * 免费模型照样免费（官方标价就是 Free），只是不再跟所有人抢 anon 池。
-     * 初始只给 deepseek-v4.1-flash（用户定版）：内核同步来的限免清单会在读取侧并入这个分组，
-     * 不需要在这里罗列。
+     * 初始只给 deepseek-v4.1-flash（用户定版）：模型一律手填，
+     * 限免/免费清单不再自动并入（2026-10-15 起限免模型一律不要）。
      */
     id: 'qn-zen',
     name: 'opencodeZen',
@@ -353,9 +353,9 @@ const PROVIDER_PRESETS: {
      *
      * **不会自动并入 Zen 的免费模型清单**（2026-10-13 修）：两个池子的模型 id 大量同名不同后缀
      * （Zen 的免费模型带 `-free`，Go 那边不带），交叉并入会造出一批一选就报
-     * `Model is unavailable.` 的死条目。Go 自己的免费模型（`longcat-2.5-preview-free` /
-     * `step-5-preview-free` / `cat-jam-free`，额度用完后仍可用）请按需在这里手填。
-     * 判定口径见 electron/main/types.ts 的 mergeFreeModels / isGoEndpoint。
+     * `Model is unavailable.` 的死条目；2026-10-15 起限免模型一律不要，这条自动并入已整体下线。
+     * Go 自己那几个模型（`longcat-2.5-preview-free` / `step-5-preview-free` / `cat-jam-free`，
+     * 额度用完后仍可用）请按需在这里手填。
      */
     id: 'qn-go',
     name: 'opencodeGo',
@@ -380,9 +380,8 @@ const PROVIDER_PRESETS: {
   {
     /**
      * unorouter（聚合网关，OpenAI 兼容 https://api.unorouter.com/v1）。要 KEY（unorouter.com/token 生成）。
-     * 模型不用手填：主进程在窗口显示 / 点开选择器时自动拉免费清单（/v1/models 里带
-     * `:free` 后缀、走 openai 端点的那批，见 electron/main/freemodels.ts），并入这个提供商的分组；
-     * 付费模型仍可在下面手动添加。
+     * 模型要手填：曾经会自动拉 `:free` 免费清单并入分组，2026-10-15 起限免模型一律不要，
+     * 自动同步已下线，所以这里给的是空清单，按自己实际要用的模型逐个添加即可。
      */
     id: 'unorouter',
     name: 'unorouter',
@@ -392,9 +391,8 @@ const PROVIDER_PRESETS: {
   {
     /**
      * openrouter（聚合网关，OpenAI 兼容 https://openrouter.ai/api/v1）。要 KEY（openrouter.ai/keys 生成）。
-     * 模型不用手填：主进程在窗口显示 / 点开选择器时自动拉公开清单（/api/v1/models 无需鉴权，
-     * 四项计价全 0 的那批 = 官网 max_price=0 同口径，见 electron/main/freemodels.ts），
-     * 并入这个提供商的分组；付费模型仍可在下面手动添加。
+     * 模型要手填：曾会自动拉公开清单里四项计价全 0 的免费模型，2026-10-15 起限免模型一律不要，
+     * 自动同步已下线，所以这里给的是空清单，按自己实际要用的模型逐个添加即可。
      */
     id: 'openrouter',
     name: 'openrouter',

@@ -7,7 +7,7 @@ import {
   Film, Folder, Globe, Braces, Regex, HelpCircle, Info, Keyboard, ListChecks, LoaderCircle, Mail, MessageCircle, MessageCircleOff, Minus, Monitor, MousePointerClick, Music, Paperclip, Pencil, RotateCw, Search, Send, Sparkles,
   Square, Star, Terminal, Trash2, Wrench, X
 } from 'lucide-react'
-import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, hasFreeSource, isGoEndpoint, isKernelTransportError, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
+import { oc, ATTACH_CTX_PREFIX, BROWSER_CTX_PREFIX, MEMORY_PREFIX, MODEL_DEFAULTS, MODEL_ROLE_LABEL, PLATFORM_PROVIDER_ID, SERVICE_CTX_PREFIX, SERVICE_RULES, isKernelTransportError, isScheduleSession, defaultThinkingValue, fmtYmd, genRoleOf, hasGenModel, isGenIntent, thinkingKindOf, type Attachment, type FileDiff, type MessageView, type ModelSel, type Part, type PermissionAsk, type PtySession, type QnProc, type QuestionAsk, type Session, type SettingsCfg, type ThinkingMode } from '../oc'
 import { load, save } from '../store'
 import { t } from '../i18n'
 import type { Modality, ModelAuthAsk, ModelAuthScope, ModelCfg, ModelUsed, ProviderCfg } from '../../../electron/main/types'
@@ -30,12 +30,7 @@ interface Props {
   settings: ProviderCfg[]
   /** 设置已加载完成（区分"提供商还没加载"与"真的没有提供商"，防止启动时清掉存档模型） */
   settingsReady: boolean
-  /**
-   * 主进程那边把设置改过了（同步了 opencode 限免清单），回读刷新模型列表。
-   * 与「保存设置」不同：那边已经写过盘、必要时也重启过内核，这里只更新内存态。
-   */
-  onSettings?: (s: SettingsCfg) => void
-  /** 草稿首发：内核会话此刻才创建 */
+/** 草稿首发：内核会话此刻才创建 */
   onDraftCreated: (s: Session) => void
   onRefreshSessions: () => void
   /** 上报某会话的处理中状态（多任务并行互不覆盖），侧栏任务行据此显示/移除加载图标 */
@@ -1110,7 +1105,8 @@ oc.abort(sid, dir).catch((e) => {
   }
 
   // 模型级联菜单：仅用户自建（启用）且配有模型的提供商，一级=提供商、二级=模型。
-  // 平台「内置模型」的计价信息（限免/折扣/倍率）一并带过去，二级列表里要打标签、写倍率。
+  // 平台「内置模型」的折扣/倍率一并带过去，二级列表里要打标签、写倍率。
+  // 限免模型在 chatProviders → dropFreeModels 那一步已经剔掉了，这里看不到。
   //
   // 这里**只列能当对话用的模型**（生成角色为「对话」且输入含文本）：生图 / 生视频 / 语音
   // 三类模型不走对话接口，选了这轮必被端点拒绝，它们由工具在对话中按需触发——
@@ -1120,16 +1116,11 @@ oc.abort(sid, dir).catch((e) => {
     .map((c) => ({
       id: c.id,
       label: c.name || c.id,
-      // opencodeGo 是 $10/月订阅池，额度用完还能继续用它自己那几个免费模型——
-      // 但那是订阅额度的一部分，不是「限免」，挂标签会让人以为是白嫖的（2026-10-13 用户定版）。
-      hideFreeTag: isGoEndpoint(c.baseURL),
       models: c.models
         .filter((m) => genRoleOf(m) === 'none' && (m.input ?? MODEL_DEFAULTS.input).includes('text'))
         .map((m) => ({
           mid: m.id,
           name: m.name,
-          free: m.free,
-          zenFree: m.zenFree,
           discount: m.discount,
           ratio: m.ratio,
           effRatio: m.effRatio
@@ -1156,7 +1147,7 @@ oc.abort(sid, dir).catch((e) => {
   /**
    * 正在后台刷新计价的分组 id。
    *
-   * 平台「内置模型」的限免/折扣随时会被后台改，登录那一刻的快照不足信——所以用户点开这个分组时
+   * 平台「内置模型」的折扣/倍率随时会被后台改，登录那一刻的快照不足信——所以用户点开这个分组时
    * 顺手对一次。刷新是静默的：列表照旧显示旧值，回来的新值原地替换（不清空、不转整屏 loading）。
    */
   const [refreshingGroup, setRefreshingGroup] = useState('')
@@ -1172,25 +1163,6 @@ oc.abort(sid, dir).catch((e) => {
       setRefreshingGroup('')
     }
   }
-
-  /**
-   * 用户点开模型选择器时，顺手把免费模型清单（Zen + 网关）同步一次。
-   *
-   * App 层已改为「每次窗口显示时自动同步」（见 App.tsx），这里是同一件事的按需补刀：
-   * 窗口一直开着但清单在期间变了，点开选择器时也能拿到最新值。
-   * 没同步到（网络不可达 / 上游没有免费模型）时不显示，符合「没有就不显示」。
-   */
-  const syncFree = useCallback(async () => {
-    // 一家免费源都没配就不用发请求：各组里本来就不会有免费模型，白等一次往返
-    if (!hasFreeSource(p.settings)) return
-    try {
-      const s = await window.qingniao.freeRefresh()
-      // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
-      p.onSettings?.(s)
-    } catch {
-      /* 同步失败：沿用上次快照，不打扰用户 */
-    }
-  }, [p.onSettings, p.settings])
 
   // 校正当前选中的模型，**任何情况下都不允许停在空值**。
   //
@@ -3123,7 +3095,6 @@ if (e.key === 'Enter' && !e.shiftKey) {
               onOpenSettings={p.onOpenSettings}
               onExpandGroup={(id) => void refreshGroupPrices(id)}
               refreshingGroup={refreshingGroup}
-              onOpen={() => void syncFree()}
             />
             {/* 全屏浏览时不显示思考档位：浏览器场景直接回答，不需调思考深度 */}
             {!p.codeMode && !browserMax && <ThinkingPicker value={thinkVal} onChange={setThinkSel} kind={thinkKind} />}

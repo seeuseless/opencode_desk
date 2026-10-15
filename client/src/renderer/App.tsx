@@ -9,7 +9,7 @@ import { SettingsView } from './components/SettingsView'
 import { Titlebar, type CodeTitleInfo, type TitleInfo } from './components/Titlebar'
 import { Modal } from './components/Modal'
 import { UpgradeDialog } from './components/UpgradeDialog'
-import { oc, chatProviders, hasFreeSource, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
+import { oc, chatProviders, type DeskStatus, type PlatformStatus, type ProviderCfg, type Session, type SettingsCfg } from './oc'
 import type { UpdateState } from '../../electron/main/types'
 import { getLang, setLang, t, type Lang } from './i18n'
 import { load, save } from './store'
@@ -144,10 +144,6 @@ export default function App() {
     remote: false,
     mobile: false,
     platform: { baseUrl: '', token: '', user: null, models: [], device: null },
-    // Zen 免费模型缓存：与主进程 DEFAULT_SETTINGS 一致（空清单 = 该分组不显示）
-    zen: { models: [] },
-    // 聚合网关（openrouter / unorouter）免费模型快照：键 = baseURL，默认全空
-    freeModels: {},
     // 全局记忆：与主进程 DEFAULT_SETTINGS 一致（空 = 不带额外指令）
     memory: '',
     // access 'default' = 写操作要确认（与主进程 DEFAULT_SETTINGS 一致）
@@ -543,35 +539,6 @@ export default function App() {
       setSettingsReady(true)
     })()
   }, [])
-
-  /**
-   * 每次 App 窗口「显示」时自动同步一次免费模型清单
-   * （OpenCode Zen 内核池 + openrouter / unorouter 网关，主进程一次性全同步）。
-   *
-   * 覆盖三类时机：启动首显（settingsReady 后补跑一次，首次挂载时页面本就是 visible、
-   * 不会触发 visibilitychange）、从最小化恢复、托盘唤起——后两者都是窗口翻回 visible 的时刻。
-   * 设置 → 模型 里没有手动刷新入口，这里是唯一的定时同步（模型选择器点开时会再补一次）。
-   * 一家免费源都没配的用户不去发请求，零开销。
-   */
-  const settingsRef = useRef(settings)
-  settingsRef.current = settings
-  useEffect(() => {
-    if (!settingsReady) return
-    const sync = () => {
-      if (!hasFreeSource(settingsRef.current.providers)) return
-      // 主进程已落盘、并在清单有增删时重启过内核，这里只更新内存态
-      void window.qingniao
-        .freeRefresh()
-        .then(setSettings)
-        .catch(() => undefined)
-    }
-    sync()
-    const onVis = () => {
-      if (document.visibilityState === 'visible') sync()
-    }
-    document.addEventListener('visibilitychange', onVis)
-    return () => document.removeEventListener('visibilitychange', onVis)
-  }, [settingsReady])
 
   async function loadProjectSessions(proj: Project): Promise<void> {
     try {
@@ -1226,7 +1193,6 @@ export default function App() {
                 onModelChange={setModel}
                 settings={chatProviders(settings)}
                 settingsReady={settingsReady}
-                onSettings={setSettings}
                 onDraftCreated={onDraftCreated}
                 onRefreshSessions={refreshSessions}
                 onBusy={(sid, running) =>

@@ -7,39 +7,24 @@ export interface ModelGroupModel {
   /** 展示名（一般与 mid 相同；平台模型的 mid 就是模型名） */
   name?: string
   /**
-   * 以下四个只有平台的「内置模型」有：第三方 provider 的模型没有计价信息，
+   * 以下几个只有平台的「内置模型」有：第三方 provider 的模型没有计价信息，
    * 遂不显示标签与倍率（栏目留白，不硬塞一个假倍率）。
+   *
+   * 限免相关（free / effRatio===0）的模型**根本不会出现在这里**——它们在
+   * electron/main/types.ts 的 dropFreeModels 就被剔掉了（2026-10-15 用户定版）。
    */
-  /** 限免：活动期内不扣积分 */
-  free?: boolean
   /** 折扣倍率（0.01–0.99）；null = 不打折 */
   discount?: number | null
   /** 原价倍率 */
   ratio?: number
-  /** 实际扣费倍率：限免为 0，打折已乘折扣 */
+  /** 实际扣费倍率（打折已乘折扣） */
   effRatio?: number
-  /**
-   * Zen 免 KEY 免费模型。
-   *
-   * 与 `free` 分开：`free` 是平台计费口径的「限免」（要登录、要算积分），
-   * 这个是「压根不需要 Key、不过平台」。所以标签文案也不同，见 Tag()。
-   */
-  zenFree?: boolean
 }
 
 export interface ModelGroup {
   id: string
   label: string
   models: ModelGroupModel[]
-  /**
-   * 这个分组**不显示「限免」标签**。
-   *
-   * 只给 opencodeGo（$10/月订阅池）用：它走的是订阅额度而不是免 KEY 免费池，
-   * 挂「限免」会让人以为是白嫖的。真正的限免标签只该出现在 Zen 分组里——
-   * 见 electron/main/types.ts 的 mergeFreeModels（Go 端点根本不并入 Zen 清单）。
-   * 这里再挡一道是防漏：万一某个分支把 zenFree 带进来了，界面上也不该出现限免二字。
-   */
-  hideFreeTag?: boolean
 }
 
 function shortModelName(name: string): string {
@@ -58,25 +43,18 @@ interface Props {
   codeMode?: boolean
   /**
    * 展开某个分组时触发（只在「从收起到展开」那一下调）。
-   * 平台「内置模型」靠它按需刷新计价——限免/折扣是平台随时会改的，不能拿旧快照当事实。
+   * 平台「内置模型」靠它按需刷新计价——折扣/倍率是平台随时会改的，不能拿旧快照当事实。
    */
   onExpandGroup?: (id: string) => void
   /** 正在后台刷新的分组 id：行尾转个圈，列表照旧显示旧值（无感，不清空、不阻塞） */
   refreshingGroup?: string
-  /**
-   * 面板被点开的那一刻触发（只在「从收起变展开」那一下）。
-   *
-   * 给 opencode 限免分组用：它的清单要向内核问，所以推迟到用户真的要用模型时才同步，
-   * 免得每次启动都为一批可能用不上的模型多问一次、多等一会儿。
-   */
-  onOpen?: () => void
 }
 
 /** 二级列从这么多条模型起出现搜索框：三五条肉眼就能扫完，搜是多余的一步 */
 const SEARCH_MIN = 8
 
 /** 二级级联模型菜单：默认只显示一级提供商，点击后展开二级模型列 */
-export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup, onOpen }: Props) {
+export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode, onExpandGroup, refreshingGroup }: Props) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState('')
   /** 二级模型列的搜索词：只在展开的分组内过滤（一级分组少，没必要搜） */
@@ -90,17 +68,12 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
   const [subShift, setSubShift] = useState(0)
   const [panelShift, setPanelShift] = useState(0)
   /**
-   * 面板展开的「瞬时动作」快照：只在面板从收起变展开的那一下做（点开面板 / 收起再点开），
-   * 用 ref 存、与渲染解耦，避免父组件因 settings 刷新产生的新回调引用把面板状态反复复位。
+   * 面板刚展开的那一瞬：把展开态、二级列定位全部复位。
    *
-   * 背景（2026-10-09）：打开面板会同步 opencode 限免清单（onOpen），清单异步回来后
-   * p.onSettings 触顶重渲染，父组件每轮都传新的 `onOpen` 引用；若把它放进 deps，
-   * useEffect 会跟着重跑，里面的 setExpanded('')/setSubTop(0) 等无条件复位把用户已展开的
-   * 二级列顶回收起 → 面板「闪一下」。所以这里只在 open 由 false→true 的瞬间做，其余渲染一律不碰。
+   * 只在 open 由 false→true 的瞬间做一次，其余渲染一律不碰——这些 setState 都是无条件复位，
+   * 放进 deps 会被父组件每轮的新引用带着重跑，用户刚展开的二级列会被收回起（面板「闪一下」）。
    */
   const prevOpen = useRef(false)
-  const lastOnOpen = useRef(onOpen)
-  lastOnOpen.current = onOpen // 每次渲染都更新，回调里取的就是最新版
 
   // 搜索词与展开的分组绑定：换组 / 关面板一律清空，否则下次展开还停在上一轮的过滤结果里
   useEffect(() => {
@@ -116,7 +89,6 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
       setSubTop(0)
       setSubShift(0)
       setPanelShift(0)
-      lastOnOpen.current?.()
     }
     const onDown = (e: MouseEvent) => {
       if (!wrap.current?.contains(e.target as Node)) setOpen(false)
@@ -275,7 +247,7 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
                   >
                     <span className="mi-check">{on && <Check size={13} />}</span>
                     <span className="mp-name">{shortModelName(m.name || m.mid)}</span>
-                    <Tag m={m} hide={active.hideFreeTag} />
+                    <Tag m={m} />
                     <Rate m={m} />
                   </button>
                 )
@@ -290,18 +262,12 @@ export function ModelPicker({ groups, value, onChange, onOpenSettings, codeMode,
 }
 
 /**
- * 计价标签：限免 / 折扣。
+ * 计价标签：现在只剩「折扣」一种。
  *
- * `zenFree`（opencodeZen 免 KEY 免费模型）与平台 `free`（限免）都渲染成「限免」——
- * 用户视角都是"这段时间不花钱"。但字段仍要分开存：前者不经过平台计费、也没有倍率，
- * 后者要登录且受平台计费口径约束，混成一个字段迟早会在某个分支上判错。
- *
- * `hideFreeTag`（opencodeGo 订阅分组）一律不打标签：订阅额度不是"限免"。
+ * 「限免」标签已随限免模型一起下线（2026-10-15 用户定版）——那批模型在
+ * dropFreeModels 就被剔除，根本到不了这一层，所以 Tag 里不必再判 free / zenFree。
  */
-function Tag({ m, hide }: { m: ModelGroupModel; hide?: boolean }) {
-  if (hide) return null
-  if (m.zenFree) return <span className="mp-tag free">{t('限免')}</span>
-  if (isFree(m)) return <span className="mp-tag free">{t('限免')}</span>
+function Tag({ m }: { m: ModelGroupModel }) {
   if (m.discount) return <span className="mp-tag off">{t('折扣')}</span>
 
   return null
@@ -310,8 +276,8 @@ function Tag({ m, hide }: { m: ModelGroupModel; hide?: boolean }) {
 /**
  * 最右侧的倍率。
  *
- * 现在是活动价时把两个数都摆出来：前面是**实价**（限免即 0x），后面那个**原价划掉**——
- * 一句话告诉用户「本来要花钱，现在免费」，比只写一个 0x 更让人敢用。
+ * 现在是活动价时把两个数都摆出来：前面是**实价**，后面那个**原价划掉**——
+ * 一句话告诉用户「本来要花钱，现在打折」，比只写一个实价倍率更容易看懂。
  */
 function Rate({ m }: { m: ModelGroupModel }) {
   const eff = effective(m)
@@ -324,8 +290,7 @@ function Rate({ m }: { m: ModelGroupModel }) {
     <span className="mp-rate">
       {cut ? (
         <>
-          {/* 免费用绿色点一下，比单写一个 0x 更让人敢点 */}
-          <b className={'mp-rate-now' + (eff === 0 ? ' free' : '')}>{fmtRate(eff!)}</b>
+          <b className="mp-rate-now">{fmtRate(eff!)}</b>
           <span className="mp-rate-old">{fmtRate(list)}</span>
         </>
       ) : (
@@ -335,15 +300,9 @@ function Rate({ m }: { m: ModelGroupModel }) {
   )
 }
 
-/** 限免与「实际倍率 0」是一回事：平台两种写法都认 */
-function isFree(m: ModelGroupModel): boolean {
-  return m.free === true || m.effRatio === 0
-}
-
-/** 实际扣费倍率：优先用它，缺了再按限免/折扣自己算一遍 */
+/** 实际扣费倍率：优先用它，缺了再按折扣自己算一遍 */
 function effective(m: ModelGroupModel): number | undefined {
   if (m.effRatio !== undefined) return m.effRatio
-  if (isFree(m)) return 0
   if (m.ratio === undefined) return undefined
 
   return m.discount ? m.ratio * m.discount : m.ratio

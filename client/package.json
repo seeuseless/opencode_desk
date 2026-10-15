@@ -1,7 +1,7 @@
 {
   "name": "qingniao",
   "desktopName": "com.qingniao.desktop",
-  "version": "1.7.29",
+  "version": "1.7.30",
   "description": "QingNiao — open-source work assistant (Electron desktop shell + OpenCode agent kernel)",
   "homepage": "https://github.com/seeuseless/opencode_desk",
   "repository": {

@@ -124,16 +124,17 @@ export interface ModelCfg {
   /** 思考形态（见 ThinkingMode）；undefined = 默认「关闭/开启」 */
   thinking?: ThinkingMode
   /**
-   * 以下四个只有「平台内置模型」有（登录时随模型清单下发），第三方 provider 的模型恒为 undefined。
-   * 它们只影响展示：选择器里在模型名后打「限免 / 折扣」标签，最右侧写明倍率。
+   * 以下几个只有「平台内置模型」有（登录时随模型清单下发），第三方 provider 的模型恒为 undefined。
+   * 它们只影响展示：选择器里在模型名后打「折扣」标签，最右侧写明倍率。
+   * 其中 `free` / `effRatio === 0` 代表的限免模型**已被 dropFreeModels 剔除**，不会出现在界面上。
    */
-  /** 限免：活动期内这个模型不扣积分（倍率按 0 算） */
+  /** 限免：活动期内这个模型不扣积分（倍率按 0 算）。只用于识别并剔除，不参与展示 */
   free?: boolean
   /** 折扣倍率（0.01–0.99，显示成 0.2x）；null = 不打折 */
   discount?: number | null
   /** 原价倍率（常见是 1） */
   ratio?: number
-  /** 实际扣费倍率：限免为 0，打折已乘折扣 */
+  /** 实际扣费倍率：打折已乘折扣；限免为 0（那批模型已被剔除） */
   effRatio?: number
   /**
    * 平台官方提供（后台模型列表里那一列「内置」）。
@@ -143,11 +144,10 @@ export interface ModelCfg {
    */
   builtin?: boolean
   /**
-   * OpenCode Zen 的免 KEY 免费模型（不需要 API Key 就能用，见 docs/内核Zen免费模型机制.md）。
+   * 老存档里 Zen / openrouter / unorouter 免费清单同步下来的标记 —— **已废弃**。
    *
-   * **与上面的 `free` 是两回事，别混用**：`free` 说的是「平台计费口径下不扣积分」，
-   * 界面渲染成绿色「限免」+ 0x 倍率；`zenFree` 说的是「压根不需要 Key、不走平台计费」。
-   * 免费模型随时可能被官方下线，标签是「免费」而不是「限免」，免得用户以为有保障。
+   * 2026-10-15 起限免模型一律不要，自动同步已下线；这个字段只由 normalize 读取，
+   * 用于把历史存档里那批模型识别出来并剔除（见 dropFreeModels），新数据不会再写它。
    */
   zenFree?: boolean
 }
@@ -244,28 +244,14 @@ export interface PlatformCfg {
 export type AccessLevel = 'default' | 'full'
 
 /**
- * OpenCode Zen 免费模型的本地缓存。
+ * 免费模型清单的本地快照 —— **已废弃**（2026-10-15 用户定版「限免模型一律不要」）。
  *
- * 只存一份快照：清单由内核持有（`GET /config/providers`），启动时同步一次落盘，
- * 之后离线也能显示。**不要把它当事实来源**——官方随时会增删模型，下次启动自然刷新。
+ * 原本 Zen 免 KEY 池与 openrouter / unorouter 的免费清单会自动拉取、落盘并并入对应端点的
+ * 提供商分组。现已整条下线：类型留着是为了让老存档里残留的 `zen` / `freeModels` 键被
+ * normalize 当普通字段丢弃（不报错、不迁移），不再有任何地方读它们。
+ *
+ * 需要手填的模型一律走 `providers`（设置页「添加提供商」）。
  */
-export interface ZenCfg {
-  /** 同步到的免费模型清单 */
-  models: ModelCfg[]
-  /** 上次同步时间戳 */
-  syncedAt?: number
-}
-
-/**
- * 一家「免费模型源」的缓存快照（openrouter / unorouter 这类聚合网关）。
- * 形状与 ZenCfg 一致：models 是免费清单，syncedAt 是上次同步时刻。
- */
-export interface FreeModelsCfg {
-  models: ModelCfg[]
-  syncedAt?: number
-}
-
-/* ===== 免费模型源（主进程拉取、两侧共用合并口径） ===== */
 
 /** baseURL 归一化：去空白 + 去尾部斜杠（settings 里手填的地址尾巴五花八门） */
 export function normBaseURL(u: string): string {
@@ -273,141 +259,50 @@ export function normBaseURL(u: string): string {
 }
 
 /**
- * OpenCode 官方的两个端点：**Zen**（付费按量 + 一批免 KEY 免费模型）与
- * **Go**（$10/月订阅，额度用完后仍可用极少数免费模型）。两个池子模型 id 大量同名不同后缀
- * （Zen 的免费模型带 `-free`，Go 那边多数不带），**清单绝不能交叉**。
+ * OpenCode 官方的两个端点：**Zen**（付费按量，另有需登录的免 KEY 免费池）与
+ * **Go**（$10/月订阅，额度用完后仍可用极少数免费模型）。两个池子模型 id 大量同名不同后缀，
+ * 模型只能由用户自己在设置页手填。
  */
 export const OPENCODE_ENDPOINTS = ['https://opencode.ai/zen/v1', 'https://opencode.ai/zen/go/v1']
 
-/**
- * Zen 端点（精确地址）。
- *
- * 内核免费模型清单（settings.zen）只对这一个端点成立——它是内核内置 `opencode` provider
- * 指向的那个地址，清单也是从那儿同步来的。Go 是另一个地址、另一套模型 id，
- * 吃这份清单会造出「界面上能选、点下去必报 `Model is unavailable.`」的死组合
- * （2026-10-13 实测：`space-bunny-free` 在 Go 的 /models 里根本不存在，Go 那边叫 `space-bunny`）。
- */
-export const ZEN_ENDPOINT = 'https://opencode.ai/zen/v1'
-
-/** 是不是 OpenCode 官方端点（Zen / Go 任一）。只用于「排最后」这类展示排序，不用于清单归属。 */
+/** 是不是 OpenCode 官方端点（Zen / Go 任一）。只用于「排最后」这类展示排序。 */
 export function isOpencodeEndpoint(baseURL: string): boolean {
   return OPENCODE_ENDPOINTS.includes(normBaseURL(baseURL))
 }
 
-/** 是不是 Zen 端点（精确相等）。**只有它才并入内核免费模型清单** —— 见 ZEN_ENDPOINT 的说明。 */
-export function isZenEndpoint(baseURL: string): boolean {
-  return normBaseURL(baseURL) === ZEN_ENDPOINT
+/**
+ * 这个模型是不是「限免」。
+ *
+ * 两种口径都认：平台后台的 `free` 开关，与 `effRatio === 0`（限免后算出来的实价倍率）。
+ * 与 ModelPicker 的 isFree() 同一份判定，两处不能各写一套。
+ */
+export function isFreeModel(m: Pick<ModelCfg, 'free' | 'effRatio'>): boolean {
+  return m.free === true || m.effRatio === 0
 }
 
 /**
- * Go 端点（精确地址，$10/月订阅池）。
+ * 剔除限免模型（2026-10-15 用户定版：「限免模型一律不要」）。
  *
- * 与 Zen 的区别要在**界面上也体现出来**：Go 走订阅额度，不该挂「限免」标签
- * （额度用完后它仍能继续用自己那几个免费模型，但那是订阅的一部分，不是白嫖）。
+ * 口径分两层，缺一不可：
+ *   1. **模型级**：任一模型 `isFreeModel()` 为真就整条去掉（平台后台标的限免 / 折扣后倍率 0）；
+ *   2. **快照级**：老存档里 Zen / openrouter / unorouter 的免费清单曾以 `zenFree: true`
+ *      落进 `providers[].models`，这些一并剔除——否则关了自动同步也会继续显示上一次同步的清单。
+ *
+ * 剔除后一个模型都不剩的提供商直接消失：它剩下的唯一内容就是那批限免模型，
+ * 留着就是个空分组（内核配置里 models 为空的 provider 也会被 usableProviders 滤掉）。
+ *
+ * 与旧的 mergeFreeModels() 同一件事的两面：**以前是把免费清单并进来，现在是把它剔掉**。
+ * 仍然是 writeOpencodeConfig（主进程写内核配置）与渲染层 chatProviders 的**唯一口径**——
+ * 内核不该认识这些模型 id，选择器也不该列出它们，两处各写一份迟早漂移。
  */
-export const GO_ENDPOINT = 'https://opencode.ai/zen/go/v1'
-
-/** 是不是 Go 端点（精确相等）。选择器靠它给该分组关掉「限免」标签。 */
-export function isGoEndpoint(baseURL: string): boolean {
-  return normBaseURL(baseURL) === GO_ENDPOINT
-}
-
-/**
- * 用户是否配置过 OpenCode 官方端点（Zen / Go 任一）。
- *
- * 认 baseURL 而不是认提供商 id：用户可能改名、可能从模板之外自己填，但地址是他真实在用 OpenCode 的证据。
- * 免费清单本身是内核给的（不看用户配置），没接过 OpenCode 的人不该被塞进一组他压根没打算用的模型。
- */
-export function opencodeConfigured(list: ProviderCfg[]): boolean {
-  return list.some((p) => p.enabled && isOpencodeEndpoint(p.baseURL))
-}
-
-/**
- * 已知提供免费模型清单的聚合网关（key = 来源名，值 = 该来源的 baseURL 归一化形式）。
- *
- * 清单获取方式（electron/main/freemodels.ts）：
- *   - openrouter：公开 API `https://openrouter.ai/api/v1/models`，无需 Key，按 pricing 全 0 过滤；
- *   - unorouter：OpenAI 兼容 `/v1/models`（要 Bearer Key，用用户在该提供商里填的），免费模型带 `:free` 后缀。
- *
- * 拉到的清单按 **baseURL** 存进 settings.freeModels（认地址不认 id：用户可能改名，
- * 但地址是他真实在用哪家的证据，与 opencodeConfigured 同一哲学）。
- */
-export const FREE_MODEL_SOURCES: Record<string, string> = {
-  openrouter: 'https://openrouter.ai/api/v1',
-  // 注意是 api.unorouter.com：unorouter.com 是官网网页，/v1/* 全 404
-  unorouter: 'https://api.unorouter.com/v1'
-}
-
-/** 该 baseURL 属于哪个免费模型源（'openrouter' | 'unorouter' | undefined） */
-export function freeSourceOf(baseURL: string): string | undefined {
-  const u = normBaseURL(baseURL)
-  for (const [src, url] of Object.entries(FREE_MODEL_SOURCES)) {
-    if (u === url) return src
+export function dropFreeModels(providers: ProviderCfg[]): ProviderCfg[] {
+  const out: ProviderCfg[] = []
+  for (const p of providers) {
+    const models = p.models.filter((m) => !isFreeModel(m) && !m.zenFree)
+    if (!models.length) continue
+    out.push(models.length === p.models.length ? p : { ...p, models })
   }
-  return undefined
-}
-
-/** 有没有任何一家免费模型源被配置过（App 层决定要不要发起同步的护栏） */
-export function hasFreeSource(list: ProviderCfg[]): boolean {
-  return list.some(
-    (p) => p.enabled && (isOpencodeEndpoint(p.baseURL) || !!freeSourceOf(p.baseURL))
-  )
-}
-
-/**
- * 限免模型的展示排序权重：deepseek / glm / qwen 三家优先（用户最常用），
- * 其余模型保持上游清单原顺序跟在后面（JS sort 稳定，同权重不乱序）。
- */
-function freeModelRank(m: ModelCfg): number {
-  const hay = `${m.id} ${m.name ?? ''}`.toLowerCase()
-  if (hay.includes('deepseek')) return 0
-  if (hay.includes('glm')) return 1
-  if (hay.includes('qwen')) return 2
-  return 9
-}
-
-/**
- * 把免费模型快照并入启用的提供商（**不改用户配置本身**，只在内存里拼出"可调用"的完整清单）：
- *   - **Zen 端点**（精确等于 https://opencode.ai/zen/v1）→ 并入内核同步来的 zen 快照；
- *   - openrouter / unorouter 端点 → 并入 settings.freeModels 里对应 baseURL 的快照；
- *   - **Go 端点（https://opencode.ai/zen/go/v1）一律不并入任何东西**。
- *
- * Go 为什么必须排除（2026-10-13 用户实际踩到）：它是 $10/月订阅池，跟 Zen 的免 KEY 免费池
- * **是两套独立的模型 id**。Zen 清单里的 `space-bunny-free`、`mimo-v2.6-flash-free` 等在
- * Go 的 /models 里压根不存在（Go 那边叫 `space-bunny`、`mimo-v2.6-flash`，无 `-free` 后缀），
- * 交叉并入等于往选择器里塞一批一选就报 `Model is unavailable.` 的死条目，
- * 而用户看到的分组名还是「opencodeGo」，完全猜不到是自己订阅端点缺模型还是 App 配错了。
- * Go 自己那批免费模型（longcat-2.5-preview-free / step-5-preview-free / cat-jam-free）
- * 由用户在设置里按需手填，不走这条自动并入。
- *
- * 并入的模型标 `zenFree`（选择器渲染「限免」标签），并按 freeModelRank 排序。
- * id 已存在的不重复加——用户手配过同名模型时以他自己的配置为准（也排最前，不参与排序）。
- *
- * 这个函数是 writeOpencodeConfig（主进程写内核配置）与渲染层 chatProviders 的**唯一合并口径**：
- * 内核要认识这些模型 id 才能路由请求，选择器要显示它们才能被选中，两处各写一份迟早漂移。
- */
-export function mergeFreeModels(
-  providers: ProviderCfg[],
-  s: Pick<Settings, 'zen' | 'freeModels'>
-): ProviderCfg[] {
-  return providers.map((p) => {
-    if (!p.enabled) return p
-    let extra: ModelCfg[] = []
-    if (isZenEndpoint(p.baseURL)) {
-      extra = s.zen?.models ?? []
-    } else if (!isOpencodeEndpoint(p.baseURL)) {
-      // Go 端点故意落到这里：不并入任何快照（见上方说明）
-      const cached = s.freeModels?.[normBaseURL(p.baseURL)]
-      extra = cached?.models ?? []
-    }
-    if (!extra.length) return p
-    const have = new Set(p.models.map((m) => m.id))
-    const add = extra
-      .filter((m) => m.id && !have.has(m.id))
-      .sort((a, b) => freeModelRank(a) - freeModelRank(b))
-      .map((m) => ({ ...m, zenFree: true }))
-    return add.length ? { ...p, models: [...p.models, ...add] } : p
-  })
+  return out
 }
 
 export interface Settings {
@@ -425,21 +320,6 @@ export interface Settings {
   mobile: boolean
   /** 平台登录态（第三方 provider 与它并存，不互相影响） */
   platform: PlatformCfg
-  /**
-   * OpenCode Zen 免费模型缓存（免 KEY，详见 docs/内核Zen免费模型机制.md）。
-   *
-   * 与 platform 分开存：它是内核自带的、不需要登录也不需要联网，
-   * 混进 platform 会让「未登录用户也有模型可选」这件事在数据层就表达不出来。
-   */
-  zen: ZenCfg
-  /**
-   * 聚合网关（openrouter / unorouter）的免费模型快照，键 = 归一化 baseURL。
-   *
-   * 与 providers 分开存的理由同 zen：providers 是用户手配的（设置页整体写回），
-   * 免费清单是机器同步的快照，混进去会被用户的下一次保存覆盖掉。
-   * 显示与内核配置由 mergeFreeModels() 在读取侧统一并入（见 types.ts）。
-   */
-  freeModels: Record<string, FreeModelsCfg>
   /**
    * 全局记忆（设置 → 记忆）：用户写下的一段长期背景/偏好，**对所有项目、所有会话生效**，
    * 手机端发起的对话同样带上它。
@@ -478,8 +358,6 @@ export const DEFAULT_SETTINGS: Settings = {
   remote: false,
   mobile: false,
   platform: { baseUrl: DEFAULT_PLATFORM_URL, token: '', user: null, models: [], device: null },
-  zen: { models: [] },
-  freeModels: {},
   memory: '',
   access: 'default',
   modelAuth: []

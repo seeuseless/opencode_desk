@@ -5,10 +5,8 @@ import { createServer } from 'node:http'
 import { join, relative, resolve, basename, isAbsolute, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { adapter } from './adapter.ts'
-import { appendGlobalMemory, loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDataMcp, setMailMcp, setMediaMcp, setMemoryMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, setZen, usableProviders, writeOpencodeConfig, type Settings } from './config.ts'
+import { appendGlobalMemory, loadSettings, opencodeConfigDir, qingniaoHome, saveSettings, setAccess, setDataMcp, setMailMcp, setMediaMcp, setMemoryMcp, setMobileEnabled, setOfficeMcp, setPanelMcp, setTtsMcp, setMusicMcp, setAsrMcp, setVisionMcp, usableProviders, writeOpencodeConfig, type Settings } from './config.ts'
 import { mailLogin, mailLogout, mailStatus, setMailWindow } from './mail.ts'
-import { fetchZenModels } from './zen.ts'
-import { refreshRouterFreeModels } from './freemodels.ts'
 import type { AccessLevel, DepItem } from './types.ts'
 import { relay } from './relay.ts'
 import { server } from './server.ts'
@@ -629,33 +627,10 @@ ipcMain.handle('platform:sync', async () => {
 // 与上面那条的区别是「模型增删才重启内核」，界面列表原地替换，不闪不空。
 ipcMain.handle('platform:refresh', () => platform.refresh())
 
-// ---------- 免费模型快照（OpenCode Zen 免 KEY + openrouter / unorouter 聚合网关）----------
-// Zen 清单由内核持有（GET /config/providers）；网关清单由 freemodels.ts 向各家公开 API 拉。
-// 拉到的快照都**不以独立分组出现**，由 mergeFreeModels() 并入用户配置的对应端点提供商
-// （**只有 Zen 端点**吃 Zen 快照，Go 端点与 openrouter / unorouter 各自吃各的快照，见 types.ts）。
-//
-// 同步时机：**每次 App 窗口显示时**（渲染层 App 的 visibilitychange 监听，启动首显 / 最小化恢复 /
-// 托盘唤起都会跑一次）+ 模型选择器点开时（ModelPicker 的 onOpen）。设置页的手动刷新已删。
-// 没配过任何一家免费源的渲染层会直接跳过，不会白发请求。
-ipcMain.handle('zen:refresh', async () => {
-  // 内核侧配置（provider+models 集合）在同步前后各算一次指纹：任一家清单有增删才重启内核。
-  // 官方/网关清单基本不动，绝大多数情况下（甚至永远）不会触发重启。
-  const fingerprint = (s: Settings): string =>
-    JSON.stringify(usableProviders(s).map((p) => [p.id, p.models.map((m) => m.id)]))
-  const before = fingerprint(loadSettings())
-
-  // 1) Zen：内核给不出（没起/超时）时 models 为空数组，**刻意不落盘**，避免把已有清单清空。
-  //    「没有免费的就不显示」由 mergeFreeModels 判空负责，这里只管如实同步。
-  const models = await fetchZenModels(adapter.baseUrl)
-  if (models.length) setZen({ models, syncedAt: Date.now() })
-
-  // 2) openrouter / unorouter：内部自带「空清单不落盘」的护栏
-  await refreshRouterFreeModels(loadSettings())
-
-  const after = fingerprint(loadSettings())
-  if (after !== before) await adapter.restart()
-  return loadSettings()
-})
+// ---------- 限免模型自动同步：已下线 ----------
+// 原来这里有 `zen:refresh`，每次窗口显示 / 点开模型选择器时向内核（Zen）与 openrouter /
+// unorouter 拉免费清单、落盘并并入对应提供商分组。2026-10-15 用户定版「限免模型一律不要」，
+// 该 IPC 与它的两个数据源（zen.ts / freemodels.ts）一并删除，限免模型改由 dropFreeModels 剔除。
 
 // ---------- 账号与用量（设置 → 账号 / 使用量）----------
 // 都是「会员自己看自己的账」：token 从设置里取，未登录一律返回 null，由界面渲染成未登录态。
@@ -1623,7 +1598,7 @@ app.whenReady().then(async () => {
   // 服务端可用性探测已提前到写内核配置之前（见上方 server.ensure()）。
   relay.apply()
 
-  // 平台模型清单静默对一遍（限免/折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
+  // 平台模型清单静默对一遍（折扣/倍率会变），跟登录态无关地跑一次：没登录时它什么也不做
   void platform.refreshOnBoot()
 
   app.on('activate', () => {

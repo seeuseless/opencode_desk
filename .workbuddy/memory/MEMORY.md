@@ -22,6 +22,11 @@
 - 中断容错：turnErrorOf 收尾对账四处接入（session.idle / SSE 重连 / session.error / runPrompt finally）。
 - 权限档位在 设置→通用（全局）；底部工具行无权限按钮、无浏览器图标（浏览器只有标题栏入口）。
 
+## 限免模型已整条下线（2026-10-15 用户定版）
+- **不要再实现任何「自动加载免费/限免模型」**。原 Zen 免 KEY 池 + openrouter/unorouter `:free` 清单的自动同步链路（ipc `zen:refresh`、`zen.ts`、`freemodels.ts`、preload `freeRefresh`、App visibilitychange effect、ModelPicker `onOpen`）已整体删除；Zen / openrouter / unorouter 的模型一律在设置页手填。
+- **剔除口径只有一处**：`types.ts` 的 `isFreeModel(m)`（`free===true || effRatio===0`）+ `dropFreeModels(providers)`（老存档里的 `zenFree:true` 也一并剔；剔完一个不剩的整个 provider 消失）。消费点必须成对：`config.ts` 的 `usableProviders()`（内核配置 + resolveModel）与 `oc.ts` 的 `chatProviders()`（界面）。平台标限免的内置模型在 `platformProvider()` 与 `chatProviders()` 两处各加一道 `!isFreeModel(m)`。
+- **服务端计费口径没动**（后台限免仍按 0 倍率计），只是客户端不再把限免模型提供给用户；`docs/内核Zen免费模型机制.md` 保留作机制记录（顶部有「已下线」标注），要恢复免 KEY 模型时不必重踩坑。
+
 ## 主题/样式
 - 主题 `:root[data-theme='...']`；浅色浮层 UI 用灰调（--fg2），不要扎眼色。
 - 设置页不要胶囊底色（裸行 + 缩略图可点 + 悬停显形动作钮）；右列 `.rightcol` 贴满窗口边缘无圆角缝隙（勿回退）。
@@ -44,7 +49,7 @@
   | `Model is unavailable.`（Go 端点） | **也是没填 Key**（存在的 id 匿名调也报这个/报 credential） |
   | `Model is unavailable.`（Zen 端点） | 模型 id 真不存在 |
   | `Rate limit exceeded. ...` | 免 KEY 共享池限流，等一会 |
-- **Zen 与 Go 是两个独立池子绝不交叉**：`mergeFreeModels()` 只在 `isZenEndpoint()`（精确等于 `https://opencode.ai/zen/v1`）并入 settings.zen.models。Go 免费模型仅 3 个：`longcat-2.5-preview-free`/`step-5-preview-free`/`cat-jam-free`。Go 是 $10/月订阅池必须 Key，选择器不打「限免」标签（hideFreeTag）。Zen 填不填 Key 免费模型都免费（区别只是 anon 共享池 vs 自有配额）；providerEnv() 刻意不给 qn-zen 注入 QN_KEY_QN_ZEN。
+- **Zen 与 Go 是两个独立池子绝不交叉**：Go 是 $10/月订阅池必须 Key，`Go requires a credential` 就是没填 Key。Go 侧仅 3 个免费模型 `longcat-2.5-preview-free`/`step-5-preview-free`/`cat-jam-free`（2026-10-15 起限免模型下线，这几个要用手填）。Zen 填不填 Key 都能用（区别只是 anon 共享池 vs 自有配额，anon 限流会报 `Rate limit exceeded.`）；providerEnv() 刻意不给 qn-zen 注入 QN_KEY_QN_ZEN。**Zen 清单的自动同步与 mergeFreeModels 已删除，见上面「限免模型已整条下线」一节。**
 - **手写 curl 验 provider** 必须带 `x-opencode-session: <任意串>` 头，否则误报 MissingSessionID。先 GET {baseURL}/models 查 id。
 - **`logtail.ts` 的 `field()` 键名只能是字面量**（内部 indexOf 字面查找，传 `session\\.id` 找不到 `session.id=` → 全部 stream error 被丢弃）。已加反转义兜底，新代码仍写字面量。日志值含转义引号（`"All providers for model \"x\" ..."`），正则 `"[^"]*"` 会截半句——field() 逐字符扫识别 `\X`。
 - **失败只落日志**：`message="stream error"` 才是流错误；`message=failed` 是压根没开始（provider/模型 id 错），logtail 抓不到，靠 session.error 事件。`server unavailable key=office` 是无害噪音。

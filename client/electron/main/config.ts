@@ -1,8 +1,8 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import type { AccessLevel, DeviceCfg, FreeModelsCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode, ZenCfg } from './types.ts'
-import { DEFAULT_PLATFORM_URL, FREE_MODEL_SOURCES, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, genRoleOf, isBuiltinModel, mergeFreeModels, normBaseURL } from './types.ts'
+import type { AccessLevel, DeviceCfg, GenKind, McpCfg, ModelCfg, Modality, PlatformCfg, ProviderCfg, Settings, ThinkingMode } from './types.ts'
+import { DEFAULT_PLATFORM_URL, INPUT_OPTIONS, MODEL_DEFAULTS, MODALITIES, VISION_MODEL_RE, dropFreeModels, genRoleOf, isBuiltinModel, isFreeModel, normBaseURL } from './types.ts'
 
 export type { McpCfg, ProviderCfg, Settings } from './types.ts'
 export { DEFAULT_SETTINGS } from './types.ts'
@@ -50,14 +50,14 @@ function normalizeModel(m: unknown): ModelCfg | null {
     // 生成角色 / 思考形态：只透传合法值，非法或没选过的不落盘（两者缺省各自按 'auto' / 'toggle' 处理）
     ...(GEN_KINDS.includes(r.gen as GenKind) ? { gen: r.gen } : {}),
     ...(THINKING_MODES.includes(r.thinking as ThinkingMode) ? { thinking: r.thinking } : {}),
-    // 计价信息（限免/折扣/倍率）只做展示用，原样透传；没有的键不落盘，省得第三方模型也带一堆 null
+    // 计价信息（折扣/倍率）只做展示用，原样透传；没有的键不落盘，省得第三方模型也带一堆 null
     ...(typeof r.free === 'boolean' ? { free: r.free } : {}),
     ...(r.discount === null || typeof r.discount === 'number' ? { discount: (r.discount ?? null) as number | null } : {}),
     ...(ratio === undefined ? {} : { ratio }),
     ...(effRatio === undefined ? {} : { effRatio }),
     // 平台后台那一列「内置」：对话区「内置模型」分组按它过滤，只留平台官方提供的
     ...(typeof r.builtin === 'boolean' ? { builtin: r.builtin } : {}),
-    // Zen 免费模型标记（只影响展示，缺失按 false）
+    // Zen 免费模型标记（**已废弃**：只用于识别老存档里那批自动同步来的模型并剔除，见 dropFreeModels）
     ...(typeof r.zenFree === 'boolean' ? { zenFree: r.zenFree } : {})
   }
 }
@@ -120,26 +120,8 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     syncedAt: Number(rawPlatform.syncedAt) > 0 ? Number(rawPlatform.syncedAt) : undefined,
     device
   }
-  // Zen 免费模型缓存：同样只当快照，缺字段落空清单（不显示该分组，但不影响其他模型）
-  const rawZen = (raw?.zen ?? {}) as Partial<ZenCfg>
-  const zen: ZenCfg = {
-    models: Array.isArray(rawZen.models) ? rawZen.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : [],
-    syncedAt: Number(rawZen.syncedAt) > 0 ? Number(rawZen.syncedAt) : undefined
-  }
-  // 聚合网关免费模型快照（openrouter / unorouter）：键 = 归一化 baseURL（mergeFreeModels 读取侧
-  // 就是按 baseURL 查的），兼容来源名（'unorouter'）做键的旧写法。手改文件塞进未知键直接丢弃。
-  const freeModels: Record<string, FreeModelsCfg> = {}
-  const knownFreeKeys = Object.values(FREE_MODEL_SOURCES)
-  if (raw?.freeModels && typeof raw.freeModels === 'object') {
-    for (const [key, val] of Object.entries(raw.freeModels as Record<string, unknown>)) {
-      const known = !!FREE_MODEL_SOURCES[key] || knownFreeKeys.includes(normBaseURL(key))
-      if (!known || !val || typeof val !== 'object') continue
-      const v = val as Partial<FreeModelsCfg>
-      const models = Array.isArray(v.models) ? v.models.map(normalizeModel).filter((m): m is ModelCfg => !!m) : []
-      if (!models.length) continue
-      freeModels[key] = { models, syncedAt: Number(v.syncedAt) > 0 ? Number(v.syncedAt) : undefined }
-    }
-  }
+  // 老存档里的 zen / freeModels（限免模型快照）**刻意不读**：限免模型已整条下线，
+  // 读进来也只是让那批模型被 dropFreeModels 剔除再丢掉，直接当未知键忽略即可。
   return {
     providers,
     mcps,
@@ -148,8 +130,6 @@ export function normalize(raw: Partial<Settings> | null | undefined): Settings {
     remote: raw?.remote === true,
     mobile: raw?.mobile === true,
     platform,
-    zen,
-    freeModels,
     // 全局记忆：老存档没有这个键，落空串（= 不生成指令文件）
     memory: typeof raw?.memory === 'string' ? raw.memory : '',
     // 访问权限（全局一档）：只认 'full'，其余（含老存档的按目录表、手改错值）一律落默认
@@ -327,12 +307,15 @@ export function platformLoginUrl(s?: Settings): string {
  *   1. 关了「远程服务」（全局总开关，见 Settings.remote）；
  *   2. 未登录，或平台没下发任何「内置」模型。
  *
- * 只收内置模型：平台后台为了适配各家上游会挂一批同名第三方模型
- * （builtin=false），那是给后台运维看的，不该混进用户的「内置模型」里。
+ * 两个过滤条件缺一不可：
+ *   - **只收内置模型**：平台后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
+ *     那是给后台运维看的，不该混进用户的「内置模型」里；
+ *   - **剔除限免模型**（2026-10-15 用户定版）：后台活动期标了限免 / 折扣后倍率算成 0 的那批，
+ *     一律不进清单——同一个判定见 types.ts 的 isFreeModel，与 dropFreeModels 共用一份。
  */
 export function platformProvider(s: Settings): ProviderCfg | null {
   if (!s.remote) return null
-  const models = s.platform.models.filter(isBuiltinModel)
+  const models = s.platform.models.filter((m) => isBuiltinModel(m) && !isFreeModel(m))
   if (!s.platform.token || !models.length) return null
 
   return {
@@ -346,10 +329,9 @@ export function platformProvider(s: Settings): ProviderCfg | null {
 }
 
 /**
- * 免费模型快照（Zen / 聚合网关）不再以虚拟 provider 出现：
- * 它们由 mergeFreeModels() 并入用户自己配置的对应端点提供商（OpenCode zen/go、openrouter、unorouter），
- * 不再单独占一个一级分组——见 types.ts 与 docs/内核Zen免费模型机制.md。
- * 旧版虚拟 provider 的 id（qnx-free）一并废弃：用户若还选着它，resolveModel 会自然回落默认档。
+ * 限免模型在数据层就没有了：自动同步（Zen / openrouter / unorouter 免费清单）与并入口径
+ * 都已下线（2026-10-15 用户定版），模型一律由用户在设置页手填。
+ * 旧版虚拟 provider 的 id（qnx-free）也一并废弃：用户若还选着它，resolveModel 会自然回落默认档。
  */
 
 /** 只改平台登录态并落盘（是否重启内核交给调用方决定） */
@@ -366,38 +348,6 @@ export function clearPlatform(): Settings {
   return setPlatform({ token: '', user: null, models: [], syncedAt: undefined, device: null })
 }
 
-/**
- * 只改 Zen 免费模型清单并落盘（是否重启内核交给调用方决定）。
- *
- * 清单变了要重启内核（provider 是启动时读的），但**只有真的变了才重启**——
- * 官方清单基本不动，模型增删要落进 opencode.json 与默认档，用户不该被无谓地打断。
- */
-export function setZen(patch: Partial<ZenCfg>): { settings: Settings; changed: boolean } {
-  const cur = loadSettings()
-  const next = normalize({ ...cur, zen: { ...cur.zen, ...patch } })
-  const changed = JSON.stringify(next.zen.models) !== JSON.stringify(cur.zen.models)
-  mkdirSync(storeDir(), { recursive: true })
-  writeFileSync(settingsPath(), JSON.stringify(next, null, 2))
-  if (changed) writeOpencodeConfig(next)
-  return { settings: next, changed }
-}
-
-/**
- * 只改聚合网关（openrouter / unorouter）的免费模型快照并落盘（键 = 归一化 baseURL）。
- *
- * 与 setZen 同一套纪律：清单真的变了才重写 opencode.json（模型增删要内核重启才能选），
- * 空清单/拉取失败由调用方负责过滤——这里只管如实写入传入的补丁。
- */
-export function setFreeModels(patch: Record<string, FreeModelsCfg>): { settings: Settings; changed: boolean } {
-  const cur = loadSettings()
-  const next = normalize({ ...cur, freeModels: { ...cur.freeModels, ...patch } })
-  const changed = JSON.stringify(next.freeModels) !== JSON.stringify(cur.freeModels)
-  mkdirSync(storeDir(), { recursive: true })
-  writeFileSync(settingsPath(), JSON.stringify(next, null, 2))
-  if (changed) writeOpencodeConfig(next)
-  return { settings: next, changed }
-}
-
 export function providerEnv(s: Settings): Record<string, string> {
   const env: Record<string, string> = {}
   const platform = platformProvider(s)
@@ -412,13 +362,13 @@ export function providerEnv(s: Settings): Record<string, string> {
  * 真正会写入 opencode.json 的 provider（writeOpencodeConfig 与 defaultModel 的唯一判定源）。
  * 平台 provider 固定排在最前：平台登录后它就是默认首选，第三方配置照旧并排列在后面。
  *
- * 免费模型快照在这里统一并入（mergeFreeModels）：内核要认识这些模型 id 才能路由请求。
- * 合并发生在 models 过滤**之前**，所以「只配了 Key、一个模型都没手填」的 unorouter
- * 也能凭自动加载的免费清单成为可用提供商。
+ * 限免模型在这里被剔除（dropFreeModels）：它们既不进内核配置，也不该出现在界面清单里
+ * （渲染层 chatProviders 用的是同一份口径）。剔除发生在 models 过滤之前，
+ * 「只配了 Key、一个模型都没手填」的提供商自然被后面那条 `models.length > 0` 滤掉。
  */
 export function usableProviders(s: Settings): ProviderCfg[] {
   const platform = platformProvider(s)
-  const manual = mergeFreeModels(s.providers, s).filter(
+  const manual = dropFreeModels(s.providers).filter(
     (p) => p.enabled && p.id.trim() && p.baseURL.trim() && p.models.length > 0
   )
   return [...(platform ? [platform] : []), ...manual]

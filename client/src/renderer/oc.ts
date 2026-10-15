@@ -1,10 +1,10 @@
 /** OpenCode 内核 REST API 的渲染层封装（经主进程代理，见 electron/main） */
 import type { McpCfg, Modality, ProviderCfg, Settings, ThinkingMode } from '../../electron/main/types'
-import { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isBuiltinModel, isOpencodeEndpoint, mergeFreeModels } from '../../electron/main/types'
+import { MODEL_DEFAULTS, VISION_MODEL_RE, dropFreeModels, genRoleOf, isBuiltinModel, isFreeModel, isOpencodeEndpoint } from '../../electron/main/types'
 
 export type { McpCfg, Modality, ModelCfg, ProviderCfg, SkillDraft, SkillItem, SkillScope, DeskStatus, GenKind, GenRole, ThinkingMode } from '../../electron/main/types'
 export type { PlatformStatus, UsageBucket, UsageRow, UsageSeries, UsageSummary, UsageLog, UsagePage, UsageRecord, PlatformAccount, LocalUsage, LocalUsageBucket, LocalUsageRow, LocalUsageSeries } from '../../electron/main/types'
-export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, hasFreeSource, isGoEndpoint, opencodeConfigured } from '../../electron/main/types'
+export { MODEL_DEFAULTS, VISION_MODEL_RE, genRoleOf, isFreeModel } from '../../electron/main/types'
 /** 设置聚合（避开与 lucide `Settings` 图标重名） */
 export type SettingsCfg = Settings
 
@@ -13,23 +13,23 @@ export const PLATFORM_PROVIDER_ID = 'qingniao'
 
 /**
  * 对话区的模型清单：平台「内置模型」排最前，用户自建的提供商居中，
- * 配了 OpenCode 官方端点（zen / go）的提供商**排最后**——免费模型是兜底性质的
- * （官方限时提供、可能随时下线），不该抢在用户自己配好的提供商前面。
+ * 配了 OpenCode 官方端点（zen / go）的提供商**排最后**——官方端点得自己手填模型、
+ * 常常只填一两个，不该抢在用户自己配好的提供商前面。
  *
- * 平台那组的两个过滤条件缺一不可：
+ * 平台那组的三个过滤条件缺一不可：
  *   remote —— 全局关了远程服务时，平台这套（登录/内置模型）整个不该出现；
  *   builtin —— 后台为了适配各家上游会挂一批同名第三方模型（builtin=false），
- *              它们不属于「内置」，混进来会让人以为模型比实际多。
+ *              它们不属于「内置」，混进来会让人以为模型比实际多；
+ *   **限免** —— 后台活动期标了限免 / 折扣后倍率算成 0 的那批一律不要（2026-10-15 用户定版）。
  *
- * 免费模型快照（Zen 内核池 / openrouter / unorouter）在这里由 mergeFreeModels 统一
- * 并入对应端点的提供商分组，**不再单独出一个「opencode限免」一级分组**：
- * 选 openrouter 就在 openrouter 组里看到它的免费模型，口径与内核配置完全一致。
+ * 用户自建的提供商在这里由 dropFreeModels 统一剔除限免模型，
+ * **口径与主进程 usableProviders / 内核配置完全一致**：界面上不列的模型，内核也不认识。
  *
  * 设置页绝不能吃这份列表——它保存时会把 providers 整体写回磁盘，
  * 而平台组是虚拟出来的（登录态），混进去会被落成一份假配置。
  */
 export function chatProviders(s: SettingsCfg): ProviderCfg[] {
-  const builtin = s.platform.models.filter(isBuiltinModel)
+  const builtin = s.platform.models.filter((m) => isBuiltinModel(m) && !isFreeModel(m))
   const platform =
     s.remote && s.platform.token && builtin.length
       ? [
@@ -43,7 +43,7 @@ export function chatProviders(s: SettingsCfg): ProviderCfg[] {
           }
         ]
       : []
-  const merged = mergeFreeModels(s.providers, s)
+  const merged = dropFreeModels(s.providers)
   const oc = merged.filter((p) => p.enabled && isOpencodeEndpoint(p.baseURL))
   const rest = merged.filter((p) => !(p.enabled && isOpencodeEndpoint(p.baseURL)))
   return [...platform, ...rest, ...oc]
